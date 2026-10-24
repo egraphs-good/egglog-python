@@ -12,34 +12,21 @@ from egglog.run_report import RuleKey
 
 
 def test_proto_report_projection_preserves_grouping_rounding_and_ownership(monkeypatch):
-    from typing import Literal  # noqa: PLC0415
-
     from egglog_proto.egglog.v1 import egglog_pb as pb  # noqa: PLC0415
-    from protobuf import Oneof  # noqa: PLC0415
 
     from egglog._program import pack  # noqa: PLC0415
-    from egglog.declarations import Ident  # noqa: PLC0415
     from egglog.egraph_state import EGraphState  # noqa: PLC0415
 
     def forbidden(*args, **kwargs):
         pytest.fail("Report projection accessed an engine")
 
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
-    roots = [ruleset(rule(name="same").then())._snapshot({}) for _ in range(2)]
-    request = pack(roots)
-    assert request.rulesets == tuple(roots)
+    roots = [ruleset(rule(name="same").then())._snapshot() for _ in range(2)]
+    request = pack(commands=roots)
     state = object.__new__(EGraphState)
     state.handle = None
     state.definitions = {}
-    state._ruleset_identifiers = dict.fromkeys(roots, Ident("logical"))
-    response = pb.RunProgramResponse(
-        rules=[
-            pb.RuleAttribution(
-                root=pb.RulesetRef(kind=Oneof[Literal["index"], int]("index", index)), position=0, name="same"
-            )
-            for index in range(2)
-        ]
-    )
+    response = pb.RunProgramResponse(rules=request.program.rules)
     native = pb.NativeRunReport(
         updated=False,
         can_stop=True,
@@ -59,10 +46,8 @@ def test_proto_report_projection_preserves_grouping_rounding_and_ownership(monke
             for index in range(2)
         ],
         search_and_apply_time_per_ruleset=[
-            pb.RulesetDurationEntry(
-                ruleset=attribution.root, native_name=str(index), value=pb.ReportDuration(nanos=600)
-            )
-            for index, attribution in enumerate(response.rules)
+            pb.RulesetDurationEntry(groups=["logical"], native_name=str(index), value=pb.ReportDuration(nanos=600))
+            for index, _ in enumerate(response.rules)
         ],
         iterations=[
             pb.NativeIterationReport(
@@ -111,11 +96,9 @@ def test_proto_report_projection_preserves_grouping_rounding_and_ownership(monke
     assert planned.plan is not None
     assert planned.plan.stages == []
     assert "rule(name='same').then()" in repr(result)
-    state._ruleset_identifiers.clear()
-    with pytest.raises(KeyError):
-        RunReport._from_proto(native, response, request, state)
+    state.definitions.clear()
+    assert RunReport._from_proto(native, response, request, state).num_matches_per_rule == result.num_matches_per_rule
     assert repr(key) == "rule(name='same').then()"  # Previously returned owner remains alive.
-    state._ruleset_identifiers = dict.fromkeys(roots, Ident("logical"))
     native.num_matches_per_rule[0] = pb.RuleCountEntry(native_name="0", value=2)
     with pytest.raises(KeyError, match="0"):
         RunReport._from_proto(native, response, request, state)
@@ -169,50 +152,35 @@ def test_proto_report_duration_and_plan_controls_without_engine():
         _plan(native)
 
 
-@pytest.mark.parametrize("mutation", [None, "root", "route", "ordinal", "label", "direction", "missing"])
-def test_proto_report_combined_routes_and_historical_names(mutation):
+@pytest.mark.parametrize("mutation", [None, "ordinal", "direction", "missing"])
+def test_proto_report_owns_canonical_rules_without_request_routes(mutation):
     from egglog_proto.egglog.v1 import egglog_pb as pb  # noqa: PLC0415
-    from protobuf import Oneof  # noqa: PLC0415
 
     from egglog._program import pack  # noqa: PLC0415
     from egglog.egraph_state import EGraphState  # noqa: PLC0415
 
-    combined = (ruleset(rule(name="first").then()) | ruleset(rule(name="selected").then()))._snapshot({})
-    request = pack([combined])
-    root = pb.RulesetRef(kind=Oneof[Literal["index"], int]("index", request.indices[0]))
-    attribution = pb.RuleAttribution(root=root, children=[1], position=0, name="selected")
+    request = pack([rule(name="selected").then().__egg_ref__])
+    response = pb.RunProgramResponse(rules=request.program.rules)
     row = pb.RuleCountEntry(rule=0, direction=pb.NativeRuleDirection.SINGLE, native_name="physical", value=7)
-    response = pb.RunProgramResponse(rules=[attribution])  # No response nodes/sorts stand in for request arenas.
     native = pb.NativeRunReport(num_matches_per_rule=[row])
     state = object.__new__(EGraphState)
     state.handle = None
-    state.definitions = {("ruleset", "retained-version"): combined}
-    if mutation == "root":
-        root.kind = Oneof[Literal["index"], int]("index", len(request.rulesets))
-    elif mutation == "route":
-        attribution.children = [2]
-    elif mutation == "ordinal":
-        attribution.position = 1
-    elif mutation == "label":
-        attribution.name = "wrong"
+    state.definitions = {}
+    if mutation == "ordinal":
+        row.rule = 1
     elif mutation == "direction":
         row.direction = pb.NativeRuleDirection.UNSPECIFIED
     elif mutation == "missing":
-        attribution.root = None
+        native.num_matches_per_rule[0] = pb.RuleCountEntry(native_name="physical", value=7)
     if mutation is not None:
-        with pytest.raises(ValueError, match=r"Report (rule|is)"):
-            RunReport._from_proto(native, response, request, state)
+        with pytest.raises((ValueError, KeyError)):
+            RunReport._from_proto(native, response, pack([]), state)
         return
-    indexed = RunReport._from_proto(native, response, request, state)
-    root.kind = Oneof[Literal["name"], str]("name", "retained-version")
     historical = RunReport._from_proto(native, response, pack([]), state)
-    assert indexed.num_matches_per_rule == historical.num_matches_per_rule
-    (key,) = indexed.num_matches_per_rule
+    (key,) = historical.num_matches_per_rule
     assert key.__egg_ref__.read().name == "selected"
-    assert indexed.num_matches_per_rule[key] == 7
-    state.definitions.clear()
-    with pytest.raises(KeyError, match="retained-version"):
-        RunReport._from_proto(native, response, pack([]), state)
+    assert historical.num_matches_per_rule[key] == 7
+    response.rules.clear()
     assert repr(key) == "rule(name='selected').then()"
 
 
@@ -396,7 +364,6 @@ def _assert_saved_report_replay(egraph: EGraph, report: RunReport) -> None:  # n
             ).to_binary()
         )
     )
-    rulesets = {}
     constructors: dict[str, tuple[pb.Program, pb.Declaration]] = {}
     loops = checks = 0
     try:
@@ -414,12 +381,8 @@ def _assert_saved_report_replay(egraph: EGraph, report: RunReport) -> None:  # n
             assert host_error is None
             response = pb.RunProgramResponse.from_binary(encoded_response)
             assert response.error is None
-            assert response.ruleset_publication is not None
             assert response.profile is not None
             assert response.profile.complete
-            for ruleset in program.rulesets:
-                if ruleset.has_field("name"):
-                    rulesets[ruleset.name] = program, ruleset
             for declaration in program.declarations:
                 if declaration.kind is not None and isinstance(declaration.kind.value, pb.Constructor):
                     constructors[declaration.kind.value.name] = program, declaration
@@ -462,27 +425,12 @@ def _assert_saved_report_replay(egraph: EGraph, report: RunReport) -> None:  # n
                 assert summary.invocations == 1
                 for field in ("search_and_apply_nanos", "merge_nanos", "rebuild_nanos"):
                     assert summary.has_field(field)
-                (attribution,) = response.rules
-                owner = program
-                target = attribution.root
-                for child in [*attribution.children, None]:
-                    assert target is not None
-                    assert target.kind is not None
-                    if target.kind.field == "index":
-                        ruleset = owner.rulesets[target.kind.value]
-                    else:
-                        owner, ruleset = rulesets[target.kind.value]
-                    if child is not None:
-                        assert ruleset.kind is not None
-                        assert ruleset.kind.field == "combined"
-                        target = ruleset.kind.value.rulesets[child]
-                assert ruleset.kind is not None
-                assert ruleset.kind.field == "rules"
-                replayed = owner.rules[ruleset.kind.value.rules[attribution.position]]
+                (replayed,) = response.rules
+                owner = pb.Program(
+                    nodes=response.nodes, sorts=response.sorts, files=response.files, rules=response.rules
+                )
                 assert replayed.kind is not None
                 assert replayed.kind.field == authored.kind.field
-                assert replayed.has_field("name") == attribution.has_field("name")
-                assert replayed.name == attribution.name
                 if authored.has_field("name"):
                     assert replayed.has_field("name")
                     assert replayed.name == authored.name

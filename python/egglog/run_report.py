@@ -120,17 +120,10 @@ class RunReport:
     def _from_proto(  # noqa: C901
         cls, report: pb.NativeRunReport, response: pb.RunProgramResponse, request: Packed, state: EGraphState
     ) -> RunReport:
-        def ruleset(reference: pb.RulesetRef | None) -> Ref:
-            if reference is None or reference.kind is None:
-                msg = "Report is missing canonical ruleset attribution"
-                raise ValueError(msg)
-            if reference.kind.field == "index":
-                index = reference.kind.value
-                if not 0 <= index < len(request.rulesets):
-                    msg = "Report ruleset index is outside its request"
-                    raise ValueError(msg)
-                return request.rulesets[index]
-            return state.definitions["ruleset", reference.kind.value]
+        owner = state._adopt_value_records(
+            pb.Program(nodes=response.nodes, sorts=response.sorts, files=response.files, rules=response.rules),
+            pending=request.definitions,
+        )
 
         def rule(row: pb.RuleDurationEntry | pb.RuleCountEntry | pb.NativeRuleReportsEntry) -> RuleKey:
             if not row.has_field("rule"):
@@ -145,36 +138,7 @@ class RunReport:
             if not 0 <= row.rule < len(response.rules):
                 msg = "Report rule index is outside its response"
                 raise ValueError(msg)
-            attribution = response.rules[row.rule]
-            reference = ruleset(attribution.root)
-            for ordinal in attribution.children:
-                record: pb.Ruleset = reference.read()
-                if (
-                    record.kind is None
-                    or record.kind.field != "combined"
-                    or not 0 <= ordinal < len(record.kind.value.rulesets)
-                ):
-                    msg = "Report rule route is not a valid combined-ruleset path"
-                    raise ValueError(msg)
-                child = record.kind.value.rulesets[ordinal]
-                if child.kind is not None and child.kind.field == "index":
-                    reference = reference.owner.ref("rulesets", child.kind.value)
-                else:
-                    reference = ruleset(child)
-            record = reference.read()
-            if (
-                record.kind is None
-                or record.kind.field != "rules"
-                or not 0 <= attribution.position < len(record.kind.value.rules)
-            ):
-                msg = "Report rule route does not end at a rule membership"
-                raise ValueError(msg)
-            result = reference.owner.ref("rules", record.kind.value.rules[attribution.position])
-            canonical: pb.Rule = result.read()
-            if attribution.has_field("name") != canonical.has_field("name") or attribution.name != canonical.name:
-                msg = "Report rule label disagrees with its canonical occurrence"
-                raise ValueError(msg)
-            return RuleKey(result)
+            return RuleKey(owner.ref("rules", row.rule))
 
         result = cls(None, updated=report.updated, can_stop=report.can_stop)
         for row in report.search_and_apply_time_per_rule:
@@ -192,12 +156,9 @@ class RunReport:
         ):
             exact: dict[str, int] = {}
             for entry in source:
-                if entry.ruleset is None:
-                    raise KeyError(entry.native_name)
-                ident = state._ruleset_identifiers[ruleset(entry.ruleset)]
                 _duration(entry.value)  # Validate every captured duration before combining.
                 assert entry.value is not None
-                name = str(ident)
+                name = entry.groups[0] if len(entry.groups) == 1 else repr(tuple(entry.groups))
                 exact[name] = exact.get(name, 0) + entry.value.seconds * 10**9 + entry.value.nanos
             for name, nanos in exact.items():
                 seconds, subsecond = divmod(nanos, 10**9)

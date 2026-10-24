@@ -123,9 +123,7 @@ def test_schedule_composition_relocates_owned_inline_spans_without_engine(monkey
     index = builder.add(
         "commands",
         pb.Command(
-            kind=Oneof[Literal["run"], pb.Run](
-                "run", pb.Run(ruleset=pb.RulesetRef(kind=Oneof[Literal["name"], str]("name", "")))
-            ),
+            kind=Oneof[Literal["run"], pb.Run]("run", pb.Run(groups=[""])),
             span=pb.Span(file=file, start=0, end=5),
         ),
     )
@@ -173,7 +171,6 @@ def test_direct_rule_option_presence_and_empty_head(monkeypatch, mode, expected)
     program = pack([authored.__egg_ref__]).program
     assert not program.nodes
     assert not program.commands
-    assert not program.rulesets
     assert pb.Program.from_binary(program.to_binary()).rules == [record]
     with pytest.raises(TypeError, match="canonical rule reference"):
         RewriteOrRule(literal(1))
@@ -191,10 +188,10 @@ def test_direct_rule_option_presence_and_empty_head(monkeypatch, mode, expected)
         hash(authored)
     assert authored == rule(eval_mode=mode).then()
     destination = ruleset()
-    initial = destination._snapshot({})
+    initial = destination._snapshot()
     destination.append(authored)
     assert initial.read().kind.value.rules == []
-    assert len(destination._snapshot({}).read().kind.value.rules) == 1
+    assert len(destination._snapshot().read().kind.value.rules) == 1
     calls = []
 
     def deferred():
@@ -207,7 +204,7 @@ def test_direct_rule_option_presence_and_empty_head(monkeypatch, mode, expected)
         _ = destination.__egg_decls__
     assert not calls
     assert tuple(destination.deferred_rule_gens) == pending
-    assert len(destination._snapshot({}).read().kind.value.rules) == 2
+    assert len(destination._snapshot().read().kind.value.rules) == 2
     assert calls == ["called"]
     assert not destination.deferred_rule_gens
 
@@ -1243,10 +1240,6 @@ def test_rules_rulesets_commands_files_and_command_multiplicity():
     )
     builder.add("rules", rule)
     builder.add("rules", rule)
-    builder.add(
-        "rulesets",
-        pb.Ruleset(name="r", kind=Oneof[Literal["rules"], pb.RuleList]("rules", pb.RuleList(rules=[0, 0, 1]))),
-    )
     command = builder.add(
         "commands",
         pb.Command(
@@ -1257,10 +1250,11 @@ def test_rules_rulesets_commands_files_and_command_multiplicity():
                     until=[0],
                     body=[
                         pb.Command(
-                            kind=Oneof[Literal["run"], pb.Run](
-                                "run", pb.Run(ruleset=pb.RulesetRef(kind=Oneof[Literal["name"], str]("name", "r")))
+                            kind=Oneof[Literal["add_rules"], pb.AddRules](
+                                "add_rules", pb.AddRules(group="r", rules=[0, 0, 1])
                             )
-                        )
+                        ),
+                        pb.Command(kind=Oneof[Literal["run"], pb.Run]("run", pb.Run(groups=["r"]))),
                     ],
                 ),
             )
@@ -1271,10 +1265,13 @@ def test_rules_rulesets_commands_files_and_command_multiplicity():
     result = pack(commands=[reference, reference], ambient=AMBIENT)
     assert len(result.program.commands) == 2
     assert len(result.program.rules) == 2
-    ruleset = result.program.rulesets[0]
-    assert ruleset.kind is not None
-    assert ruleset.kind.field == "rules"
-    rules = ruleset.kind.value.rules
+    control = result.program.commands[0].kind
+    assert control is not None
+    assert control.field == "repeat"
+    addition = control.value.body[0].kind
+    assert addition is not None
+    assert addition.field == "add_rules"
+    rules = addition.value.rules
     assert rules[0] == rules[1] != rules[2]
     assert result.program.files[0].name == "source"
     assert result.program.nodes[0].span is not None
@@ -1669,23 +1666,20 @@ def test_late_discovered_definition_conflict_is_not_hidden():
         pack([local.publish().ref("nodes", root)], ambient=AMBIENT)
 
 
-def test_anonymous_rulesets_do_not_define_the_default_ruleset():
+def test_group_selection_needs_no_definition_and_distinguishes_empty_default():
     builder = Builder()
-    builder.add("rulesets", pb.Ruleset(kind=Oneof[Literal["rules"], pb.RuleList]("rules", pb.RuleList())))
-    builder.add("rulesets", pb.Ruleset(kind=Oneof[Literal["rules"], pb.RuleList]("rules", pb.RuleList())))
-    builder.add("rulesets", pb.Ruleset(name="", kind=Oneof[Literal["rules"], pb.RuleList]("rules", pb.RuleList())))
-    command = builder.add(
-        "commands",
-        pb.Command(
-            kind=Oneof[Literal["run"], pb.Run](
-                "run", pb.Run(ruleset=pb.RulesetRef(kind=Oneof[Literal["name"], str]("name", "")))
-            )
-        ),
-    )
+    commands = [
+        builder.add("commands", pb.Command(kind=Oneof[Literal["run"], pb.Run]("run", pb.Run(groups=groups))))
+        for groups in ([], [""], ["unknown", ""])
+    ]
     owner = builder.publish()
-    result = pack(commands=[owner.ref("commands", command)])
-    assert len(result.program.rulesets) == 1
-    assert result.program.rulesets[0].has_field("name")
+    result = pack(commands=[owner.ref("commands", index) for index in commands])
+    selections = []
+    for command in result.program.commands:
+        assert command.kind is not None
+        assert command.kind.field == "run"
+        selections.append(command.kind.value.groups)
+    assert selections == [[], [""], ["unknown", ""]]
 
 
 @pytest.mark.parametrize("index", [True, -1, 2**32, "0"])
@@ -1699,16 +1693,20 @@ def test_rejects_non_string_dependency_names():
         Builder().add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name=5))))  # type: ignore[arg-type]
 
 
-def test_distinct_same_name_ruleset_roots_are_rejected():
+def test_additions_to_the_same_group_remain_ordered_commands():
     refs = []
     for _ in range(2):
         builder = Builder()
         root = builder.add(
-            "rulesets", pb.Ruleset(name="r", kind=Oneof[Literal["rules"], pb.RuleList]("rules", pb.RuleList()))
+            "commands", pb.Command(kind=Oneof[Literal["add_rules"], pb.AddRules]("add_rules", pb.AddRules(group="r")))
         )
-        refs.append(builder.publish().ref("rulesets", root))
-    with pytest.raises(ValueError, match="same-name"):
-        pack(refs)
+        refs.append(builder.publish().ref("commands", root))
+    result = pack(commands=refs)
+    assert len(result.program.commands) == 2
+    for command in result.program.commands:
+        assert command.kind is not None
+        assert command.kind.field == "add_rules"
+        assert command.kind.value.group == "r"
 
 
 def test_structural_view_ignores_addresses_and_preserves_identity():

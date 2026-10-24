@@ -540,7 +540,6 @@ mod tests {
                 .unwrap_or_else(|_| (returned.extract::<Vec<u8>>().unwrap(), None));
             let response = pb::RunProgramResponse::decode(bytes.as_slice()).unwrap();
             assert_eq!(response.encode_to_vec(), bytes);
-            assert!(response.ruleset_publication.is_some());
             assert_eq!(
                 response.error.unwrap().code,
                 pb::ErrorCode::EvaluationFailed as i32
@@ -588,7 +587,6 @@ mod tests {
                         .unwrap();
                         match boundary {
                             "response" => Ok(pb::RunProgramResponse {
-                                ruleset_publication: Some(pb::RulesetPublication::default()),
                                 ..Default::default()
                             }
                             .encode_to_vec()),
@@ -601,8 +599,8 @@ mod tests {
                     assert!(
                         pb::RunProgramResponse::decode(bytes.as_bytes())
                             .unwrap()
-                            .ruleset_publication
-                            .is_some()
+                            .error
+                            .is_none()
                     );
                     assert!(captured.unwrap().bind(py).is(value.bind(py)));
                 } else {
@@ -644,7 +642,7 @@ mod tests {
     }
 
     #[test]
-    fn recorded_host_interruption_preserves_original_exception_without_a_protocol_reply() {
+    fn host_preparation_interruption_preserves_original_exception_and_omits_input() {
         struct InterruptedValue {
             extension: PyObjectExtension,
             errors: PyObjectErrorState,
@@ -723,7 +721,7 @@ mod tests {
                 .unwrap_err();
             assert!(error.value(py).is(value.bind(py)));
             assert!(instance.py_error.lock().unwrap().is_none());
-            let history = pb::GetHistoryResponse::decode(
+            let history = pb::Program::decode(
                 instance
                     .engine
                     .get_history(&pb::GetHistoryRequest { egraph_id: id }.encode_to_vec())
@@ -731,15 +729,7 @@ mod tests {
                     .as_slice(),
             )
             .unwrap();
-            assert_eq!(history.entries.len(), 2);
-            assert_eq!(
-                history.entries[1].request,
-                Some(pb::history_entry::Request::RunProgram(request))
-            );
-            assert!(matches!(
-                history.entries[1].outcome,
-                Some(pb::history_entry::Outcome::Interrupted(_))
-            ));
+            assert!(history.commands.is_empty());
         });
     }
 
@@ -1026,10 +1016,6 @@ mod tests {
         let program = custom_program(payload.clone());
         let result = run(&mut engine, id, program);
         assert_eq!(result.error, None);
-        assert_eq!(
-            result.ruleset_publication.unwrap().names,
-            Vec::<String>::new()
-        );
         let Some(pb::command_output::Kind::Extraction(extract)) = &result.outputs[0].kind else {
             panic!("not an extract")
         };
@@ -1226,7 +1212,6 @@ mod tests {
                     "{operation}/{case}"
                 );
                 assert!(response.outputs.is_empty());
-                assert!(response.ruleset_publication.unwrap().names.is_empty());
                 assert_eq!(
                     run(&mut engine, id, context.clone()).error,
                     None,
@@ -1401,7 +1386,6 @@ mod tests {
         for program in phases {
             let result = run(&mut engine, id, program);
             assert_eq!(result.error, None);
-            assert!(result.ruleset_publication.is_some());
             if !result.outputs.is_empty() {
                 assert_eq!(result.outputs.len(), 1);
                 extracted_program(&result, &payload);
@@ -1429,7 +1413,6 @@ mod tests {
             pb::ErrorCode::InvalidProgram as i32
         );
         assert!(rejected.outputs.is_empty());
-        assert!(rejected.ruleset_publication.unwrap().names.is_empty());
         let result = run(&mut engine, id, original);
         let replay = extracted_program(&result, &payload);
         extracted_program(&run(&mut engine, id, replay), &payload);
@@ -1606,7 +1589,6 @@ mod tests {
                     "configured={configured}, invalid={invalid}"
                 );
                 assert!(response.outputs.is_empty());
-                assert!(response.ruleset_publication.unwrap().names.is_empty());
                 assert_eq!(
                     run(&mut engine, id, phases[2].clone()).error,
                     None,
@@ -1645,14 +1627,6 @@ mod tests {
         for _ in 0..2 {
             let result = run(&mut engine, id, program);
             assert_eq!(result.error, None);
-            assert!(
-                result
-                    .ruleset_publication
-                    .as_ref()
-                    .unwrap()
-                    .names
-                    .is_empty()
-            );
             let Some(pb::command_output::Kind::Extraction(extract)) = &result.outputs[0].kind
             else {
                 unreachable!()
@@ -1694,14 +1668,6 @@ mod tests {
     // owned, re-ingestible arena. This is not an out-of-band result channel.
     fn extracted_program(result: &pb::RunProgramResponse, payload: &[u8]) -> pb::Program {
         assert_eq!(result.error, None);
-        assert!(
-            result
-                .ruleset_publication
-                .as_ref()
-                .unwrap()
-                .names
-                .is_empty()
-        );
         let Some(pb::command_output::Kind::Extraction(extract)) = &result.outputs[0].kind else {
             panic!("not extraction")
         };
@@ -1940,7 +1906,6 @@ impl ProtoEngine {
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
         if !program.nodes.is_empty()
             || !program.declarations.is_empty()
-            || !program.rulesets.is_empty()
             || !program.rules.is_empty()
             || !program.commands.is_empty()
             || !program.files.is_empty()
@@ -2019,14 +1984,6 @@ impl ProtoEngine {
         request: &Bound<'py, PyBytes>,
     ) -> PyResult<Bound<'py, PyBytes>> {
         self.request(py, request, Engine::destroy)
-    }
-
-    fn configure_resources<'py>(
-        &mut self,
-        py: Python<'py>,
-        request: &Bound<'py, PyBytes>,
-    ) -> PyResult<Bound<'py, PyBytes>> {
-        self.request(py, request, Engine::configure_resources)
     }
 
     fn return_to<'py>(

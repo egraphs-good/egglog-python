@@ -1169,21 +1169,18 @@ def test_automatic_threads_reports_actual_count() -> None:
     assert graph.num_threads() >= 1
 
 
-def test_automatic_threads_after_update_reports_actual_count() -> None:
-    graph = EGraph(num_threads=1)
-    graph.set_num_threads(0)
-    assert graph.num_threads() >= 1
+def test_automatic_and_fixed_creation_threads_are_independent() -> None:
+    fixed, automatic = EGraph(num_threads=1), EGraph(num_threads=0)
+    assert fixed.num_threads() == 1
+    assert automatic.num_threads() >= 1
 
 
-def test_thread_update_and_context_restore_actual_count() -> None:
+def test_context_retains_actual_creation_thread_count() -> None:
     graph = EGraph(num_threads=2)
     assert graph.num_threads() == 2
     with graph:
-        graph.set_num_threads(1)
-        assert graph.num_threads() == 1
+        assert graph.num_threads() == 2
     assert graph.num_threads() == 2
-    graph.set_num_threads(1)
-    assert graph.num_threads() == 1
 
 
 def test_ten_thousand_ordinary_calls_are_incremental(monkeypatch: pytest.MonkeyPatch) -> None:

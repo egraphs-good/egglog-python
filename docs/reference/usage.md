@@ -62,15 +62,13 @@ uv run python -c "from egglog import EGraph; EGraph(); print('egglog ok')"
 ## Parallelism and threads
 
 Configure Rust worker threads per e-graph with `num_threads`. The default of `1`
-keeps execution serial; `0` uses the machine's available parallelism. You can
-change the setting later with `set_num_threads` and inspect it with
-`num_threads`.
+keeps execution serial; `0` uses the machine's available parallelism. The setting
+is fixed at creation; `num_threads()` reports the acknowledged worker count.
 
 ```python
 from egglog import EGraph
 
-egraph = EGraph(num_threads=4)
-egraph.set_num_threads(0)
+egraph = EGraph(num_threads=0)
 assert egraph.num_threads() >= 1
 ```
 

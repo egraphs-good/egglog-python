@@ -48,7 +48,6 @@ from ._program import (
     Ref,
     StructuralView,
     _copy_record,
-    _structural_parts,
     action_equal,
     pack,
     rule_equal,
@@ -1454,6 +1453,7 @@ class EGraph:
         record_history: bool = False,
         num_threads: SupportsIndex = 1,
         no_decomp: bool = False,
+        report_level: pb.ReportLevel | None = None,
     ) -> None:
         with _TRACER.start_as_current_span("create"):
             with _TRACER.start_as_current_span("create_bindings"):
@@ -1463,6 +1463,7 @@ class EGraph:
                     record_history=record_history,
                     seminaive=seminaive,
                     no_decomp=no_decomp,
+                    report_level=report_level,
                 )
             self._state_stack = []
             self._token_stack = []
@@ -1470,47 +1471,13 @@ class EGraph:
             if actions:
                 self.register(*actions)
 
-    def set_report_level(self, level: pb.ReportLevel) -> None:
-        """Set native report detail using the generated protocol enum."""
-        if self._cost_model_frames or self._state._native_running:
-            msg = "Cannot execute engine operations during a cost-model callback"
-            raise RuntimeError(msg)
-        if type(level) is not pb.ReportLevel or level == pb.ReportLevel.UNSPECIFIED:
-            msg = "Expected a defined protobuf report level"
-            raise TypeError(msg)
-        if self._state.handle is None:
-            msg = "EGraph handle has been destroyed"
-            raise RuntimeError(msg)
-        request = pb.ConfigureEGraphResourcesRequest(
-            egraph_id=self._state.handle,
-            operation=Oneof[Literal["report_level"], pb.ReportLevel]("report_level", level),
-        )
-        pb.ConfigureEGraphResourcesResponse.from_binary(self._state.transport.configure_resources(request.to_binary()))
-
     def num_threads(self) -> int:
-        """Return the number of worker threads configured for this e-graph."""
-        return self._state.configure_resources().threads
-
-    def set_num_threads(self, num_threads: SupportsIndex) -> None:
-        """
-        Set the number of worker threads used by this e-graph.
-
-        Passing ``1`` keeps execution serial. Passing ``0`` uses available
-        parallelism.
-        """
-        self._state.configure_resources(num_threads)
+        """Return the actual thread count acknowledged at creation."""
+        return self._state.threads
 
     def no_decomp(self) -> bool:
-        """Query whether decomposition is disabled for future rule compilation."""
-        return self._state.configure_resources().no_decomp
-
-    def set_no_decomp(self, no_decomp: bool) -> None:
-        """
-        Configure decomposition for subsequently compiled rules, not installed plans.
-
-        This runtime policy is excluded from logical Egglog transcripts.
-        """
-        self._state.configure_resources(no_decomp=no_decomp)
+        """Return the immutable query-planning setting selected at creation."""
+        return self._state.no_decomp
 
     @property
     def as_egglog_string(self) -> str:
@@ -1523,13 +1490,13 @@ class EGraph:
         """
         return self._state.transport.recorded_source()
 
-    def history(self) -> pb.GetHistoryResponse:
+    def history(self) -> pb.Program:
         """
-        Return owned structured requests and outcomes recorded since creation.
+        Return the accumulated input Program recorded for this graph.
 
-        Create the graph with ``record_history=True``.
-        Failures and observations remain in this audit history; retrieving it does
-        not add an entry. It is distinct from logical state and replayable source.
+        Create with ``record_history=True``. The Program preserves input order
+        and arena sharing; it does not retain replies or promise exact replay
+        after failures. Retrieval itself does not add a command.
         """
         if self._cost_model_frames or self._state._cost_model_active or self._state._native_running:
             msg = "Cannot execute engine operations during a cost-model callback"
@@ -1538,11 +1505,7 @@ class EGraph:
             msg = "EGraph handle has been destroyed"
             raise RuntimeError(msg)
         request = pb.GetHistoryRequest(egraph_id=self._state.handle)
-        response = pb.GetHistoryResponse.from_binary(self._state.transport.get_history(request.to_binary()))
-        if response.initial_resources is None:
-            msg = "Shared adapter omitted initial history resources"
-            raise ValueError(msg)
-        return response
+        return pb.Program.from_binary(self._state.transport.get_history(request.to_binary()))
 
     def close(self) -> None:
         """
@@ -1577,7 +1540,7 @@ class EGraph:
         self._state.run_program(descriptor)
         encoded = self._state.transport.produce_input(descriptor.program.to_binary(), declaration.kind.value.name, path)
         rows = pb.Program.from_binary(encoded)
-        self._state.run_program(Packed(rows, (), descriptor.definitions, descriptor.rulesets))
+        self._state.run_program(Packed(rows, (), descriptor.definitions))
 
     def let(self, name: str, expr: BASE_EXPR) -> BASE_EXPR:
         """
@@ -2223,48 +2186,22 @@ class EGraph:
         self._register_commands(commands)
 
     def _register_commands(self, cmds: list[Command]) -> None:
-        if all(isinstance(command, Action) for command in cmds):
-            self._state.run_program([cast("Action", command).__egg_ref__ for command in cmds])
-            return
-        # Mixed registration preserves each original command's failure prefix.
-        # Splitting is forbidden if direct Action uses bridge a Union identity
-        # across requests. Query facts and invoked code bodies have other units.
-        uses: dict[Ref, int] = {}
-        for position, command in enumerate(cmds):
-            if not isinstance(command, Action):
-                continue
-            pending = [command.__egg_ref__]
-            seen: set[Ref] = set()
-            while pending:
-                reference = pending.pop()
-                if reference in seen:
-                    continue
-                seen.add(reference)
-                record = reference.read()
-                if isinstance(record, pb.Node) and record.kind is not None and record.kind.field == "union":
-                    if reference in uses and uses[reference] != position:
-                        msg = "Mixed registration cannot split a shared allocating Union across Actions"
-                        raise NotImplementedError(msg)
-                    uses[reference] = position
-                _, children = _structural_parts(reference, identity=False)
-                pending.extend(
-                    child for child, path in children if child.role == "nodes" and "/lambda/0/body/" not in path
-                )
+        commands = []
         for command in cmds:
             if isinstance(command, Action):
-                self._state.run_program([command.__egg_ref__])
+                commands.append(command.__egg_ref__)
             else:
                 builder = Builder()
                 index = builder.add(
-                    "rulesets",
-                    pb.Ruleset(
-                        kind=Oneof[Literal["rules"], pb.RuleList](
-                            "rules", pb.RuleList(rules=[builder.import_ref(command.__egg_ref__)])
+                    "commands",
+                    pb.Command(
+                        kind=Oneof[Literal["add_rules"], pb.AddRules](
+                            "add_rules", pb.AddRules(group="", rules=[builder.import_ref(command.__egg_ref__)])
                         )
                     ),
                 )
-                root = builder.publish().ref("rulesets", index)
-                self._state.publish_ruleset(root, {root: Ident("")}, direct=True)
+                commands.append(builder.publish().ref("commands", index))
+        self._state.run_program(commands)
 
     def function_size(self, fn: ExprCallable) -> int:
         """
@@ -2594,14 +2531,15 @@ class Schedule:
         self._schedulers = {} if schedulers is None else schedulers.copy()
 
     def _resolve(self, state: EGraphState | None) -> Ref:  # noqa: C901, PLR0912
-        """Materialize live sources, then relocate this one canonical command."""
+        """Resolve live authoring to ordered additions and group selections."""
         builder = Builder()
         command: pb.Command = _copy_record(
             self._command.read(),
             relocate=lambda role, index: builder.import_ref(self._command.owner.ref(role, index)),
         )
         pending = [command]
-        leaves: list[pb.Run] = []
+        leaves: list[pb.Command] = []
+        additions: list[pb.Command] = []
         local_schedulers: dict[str, BackOff] = {}
         persistent_schedulers: dict[str, BackOff] = {}
         while pending:
@@ -2614,64 +2552,59 @@ class Schedule:
                 if scheduler is not None:
                     selected = persistent_schedulers if scheduler._persistent else local_schedulers
                     selected.setdefault(current.kind.value.scheduler, scheduler)
-                leaves.append(current.kind.value)
+                leaves.append(current)
             elif current.kind.field in {"repeat", "saturate"}:
                 control = current.kind.value
-                if state is not None:
-                    count = (
-                        control.times
-                        if isinstance(control, pb.Repeat)
-                        else (control.max_iterations if control.has_field("max_iterations") else None)
-                    )
-                    if count is not None and not 0 <= count < 2**64:
-                        msg = "can't convert schedule count to unsigned native size"
-                        raise OverflowError(msg)
+                count = (
+                    control.times
+                    if isinstance(control, pb.Repeat)
+                    else (control.max_iterations if control.has_field("max_iterations") else None)
+                )
+                if state is not None and count is not None and not 0 <= count < 2**64:
+                    msg = "can't convert schedule count to unsigned native size"
+                    raise OverflowError(msg)
                 pending.extend(reversed(control.body))
-            elif current.kind.field == "bind_scheduler":
-                continue
-            else:
+            elif current.kind.field not in {"bind_scheduler", "add_rules"}:
                 msg = f"Schedule command is not migrated: {current.kind.field}"
                 raise NotImplementedError(msg)
-        identifiers: dict[Ref, Ident] = {}
-        snapshots: dict[str, Ref] = {}
-        # Source precedence is authored leaf order, not binding-map insertion
-        # order: seq(a, b, a) must select a last even when its token is reused.
         for leaf in leaves:
-            if leaf.ruleset is None or leaf.ruleset.kind is None or leaf.ruleset.kind.field != "name":
-                msg = "Schedule template requires a live named target"
-                raise ValueError(msg)
-            name = leaf.ruleset.kind.value
-            if name:
-                snapshots[name] = self._bindings[name]._snapshot(identifiers)
-        for leaf in leaves:
-            if leaf.ruleset is None or leaf.ruleset.kind is None or leaf.ruleset.kind.field != "name":
-                msg = "Schedule template requires a live named target"
-                raise ValueError(msg)
-            name = leaf.ruleset.kind.value
-            if name:
-                reference = snapshots[name]
-                if state is not None:
-                    reference = state.publish_ruleset(reference, identifiers)
-            elif state is None:
-                continue
-            else:
-                default = Builder()
-                index = default.add(
-                    "rulesets", pb.Ruleset(kind=Oneof[Literal["rules"], pb.RuleList]("rules", pb.RuleList()))
+            assert leaf.kind is not None
+            assert leaf.kind.field == "run"
+            run_command = leaf.kind.value
+            groups: list[str] = []
+            for token in run_command.groups:
+                source = self._bindings.get(token)
+                if source is None:
+                    groups.append(token)
+                    continue
+                reference = source._snapshot()
+                addition: pb.Command = _copy_record(
+                    reference.read(),
+                    # The visitor is synchronous and does not retain this callback.
+                    relocate=lambda role, index: builder.import_ref(reference.owner.ref(role, index)),  # noqa: B023
                 )
-                reference = default.publish().ref("rulesets", index)
-                reference = state.publish_ruleset(reference, {reference: Ident("")})
-            leaf.ruleset = pb.RulesetRef(kind=Oneof[Literal["index"], int]("index", builder.import_ref(reference)))
+                additions.append(addition)
+                todo = [addition]
+                while todo:
+                    item = todo.pop()
+                    if item.kind is not None and item.kind.field == "add_rules":
+                        groups.append(item.kind.value.group)
+                    elif item.kind is not None and item.kind.field == "repeat":
+                        todo.extend(reversed(item.kind.value.body))
+            run_command.groups = groups
         if state is not None:
             for scheduler in persistent_schedulers.values():
                 state.bind_scheduler(scheduler.__egg_ref__)
-        if local_schedulers:
+        # Authoring snapshots are fixed setup, installed once before any loop.
+        # Keep their authored leaf order and the schedule's lexical scopes.
+        if additions or local_schedulers:
             command = pb.Command(
                 kind=Oneof[Literal["repeat"], pb.Repeat](
                     "repeat",
                     pb.Repeat(
                         times=1,
                         body=[
+                            *additions,
                             *(_copy_record(scheduler.__egg_ref__.read()) for scheduler in local_schedulers.values()),
                             command,
                         ],
@@ -2739,28 +2672,25 @@ class Ruleset(Schedule):
         self.deferred_rule_gens: list[Callable[[], Iterable[RewriteOrRule]]] = []
         builder = Builder()
         index = builder.add(
-            "rulesets",
-            pb.Ruleset(
-                name=ident.name if ident is not None else None,
-                kind=Oneof[Literal["rules"], pb.RuleList]("rules", pb.RuleList()),
+            "commands",
+            pb.Command(
+                kind=Oneof[Literal["add_rules"], pb.AddRules]("add_rules", pb.AddRules(group=str(self.__egg_ident__)))
             ),
         )
-        self.__egg_ref__ = builder.publish().ref("rulesets", index)
+        self.__egg_ref__ = builder.publish().ref("commands", index)
 
     @property
     def __egg_decls__(self) -> Never:
         msg = "Canonical rulesets have no legacy declaration projection"
         raise NotImplementedError(msg)
 
-    def _snapshot(self, identifiers: dict[Ref, Ident]) -> Ref:
+    def _snapshot(self) -> Ref:
         while self.deferred_rule_gens:
             generator = self.deferred_rule_gens.pop()
             with set_current_ruleset(self):
                 rules = list(generator())
             for rule in rules:
                 self.append(rule)
-        identifiers.pop(self.__egg_ref__, None)
-        identifiers[self.__egg_ref__] = self.__egg_ident__
         return self.__egg_ref__
 
     def append(self, rule: RewriteOrRule) -> None:
@@ -2770,16 +2700,16 @@ class Ruleset(Schedule):
         if not isinstance(cast("object", rule), RewriteOrRule):
             msg = "Rulesets require canonical rules or rewrites"
             raise TypeError(msg)
-        record: pb.Ruleset = self.__egg_ref__.read()
+        record: pb.Command = self.__egg_ref__.read()
         assert record.kind is not None
-        assert record.kind.field == "rules"
+        assert record.kind.field == "add_rules"
         builder = Builder()
         record.kind.value.rules = [
             builder.import_ref(self.__egg_ref__.owner.ref("rules", index)) for index in record.kind.value.rules
         ]
         record.kind.value.rules.append(builder.import_ref(rule.__egg_ref__))
-        index = builder.add("rulesets", record)
-        self.__egg_ref__ = builder.publish().ref("rulesets", index)
+        index = builder.add("commands", record)
+        self.__egg_ref__ = builder.publish().ref("commands", index)
 
     def register(
         self,
@@ -2807,7 +2737,7 @@ class Ruleset(Schedule):
             self.deferred_rule_gens.append(Thunk.fn(_rewrite_or_rule_generator, rule_or_generator, original_frame))
 
     def __str__(self) -> str:
-        return pretty_ref(self._snapshot({}), custom_literal=_format_pyobject)
+        return pretty_ref(self._snapshot(), custom_literal=_format_pyobject)
 
     def __repr__(self) -> str:
         return str(self)
@@ -2827,7 +2757,6 @@ class UnstableCombinedRuleset(Schedule):
     def __init__(self, ident: Ident | None, rulesets: list[Ruleset | UnstableCombinedRuleset]) -> None:
         self.ident = ident
         self.rulesets = tuple(rulesets)
-        self.__egg_ref__: Ref | None = None
         self._generated_ident: Ident | None = None
         if self.ident is None:
             self._generated_ident = Ident(f"_combined_ruleset_{UnstableCombinedRuleset._next_generated_ident}")
@@ -2845,43 +2774,26 @@ class UnstableCombinedRuleset(Schedule):
         assert self._generated_ident is not None
         return self._generated_ident
 
-    def _snapshot(self, identifiers: dict[Ref, Ident]) -> Ref:
-        children = tuple(child._snapshot(identifiers) for child in self.rulesets)
-        previous: tuple[Ref, ...] | None = None
-        if self.__egg_ref__ is not None:
-            record: pb.Ruleset = self.__egg_ref__.read()
-            assert record.kind is not None
-            assert record.kind.field == "combined"
-            previous = tuple(
-                self.__egg_ref__.owner.ref("rulesets", child.kind.value)
-                for child in record.kind.value.rulesets
-                if child.kind is not None and child.kind.field == "index"
+    def _snapshot(self) -> Ref:
+        builder = Builder()
+        commands = []
+        for source in self.rulesets:
+            reference = source._snapshot()
+            commands.append(
+                _copy_record(
+                    reference.read(),
+                    # The visitor is synchronous and does not retain this callback.
+                    relocate=lambda role, index: builder.import_ref(reference.owner.ref(role, index)),  # noqa: B023
+                )
             )
-        if previous != children:
-            builder = Builder()
-            index = builder.add(
-                "rulesets",
-                pb.Ruleset(
-                    name=self.ident.name if self.ident is not None and self.ident.name else None,
-                    kind=Oneof[Literal["combined"], pb.CombinedRuleset](
-                        "combined",
-                        pb.CombinedRuleset(
-                            rulesets=[
-                                pb.RulesetRef(kind=Oneof[Literal["index"], int]("index", builder.import_ref(child)))
-                                for child in children
-                            ]
-                        ),
-                    ),
-                ),
-            )
-            self.__egg_ref__ = builder.publish().ref("rulesets", index)
-        assert self.__egg_ref__ is not None
-        identifiers.pop(self.__egg_ref__, None)
-        identifiers[self.__egg_ref__] = self.__egg_ident__
-        return self.__egg_ref__
+        index = builder.add(
+            "commands",
+            pb.Command(kind=Oneof[Literal["repeat"], pb.Repeat]("repeat", pb.Repeat(times=1, body=commands))),
+        )
+        return builder.publish().ref("commands", index)
 
     def __str__(self) -> str:
-        return pretty_ref(self._snapshot({}), custom_literal=_format_pyobject)
+        return pretty_ref(self._snapshot(), custom_literal=_format_pyobject)
 
     def __repr__(self) -> str:
         return str(self)
@@ -3557,7 +3469,7 @@ def run(
         kind=Oneof[Literal["run"], pb.Run](
             "run",
             pb.Run(
-                ruleset=pb.RulesetRef(kind=Oneof[Literal["name"], str]("name", name)),
+                groups=[name],
                 scheduler=scheduler_name,
             ),
         )

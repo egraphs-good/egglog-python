@@ -446,11 +446,10 @@ the authored rules' local `eval_mode` metadata.
 
 Egglog normally decomposes rules before execution. `EGraph` defaults to
 `no_decomp=False`; pass `no_decomp=True` to disable decomposition for
-subsequently compiled rules, and use `no_decomp()` or
-`set_no_decomp(...)` to inspect or change that setting. For a single rule,
+rules compiled in that graph, and use `no_decomp()` to inspect that
+creation setting. For a single rule,
 pass `no_decomp=True` to `rule(...)` instead. This is an advanced execution
-control. Updates affect future compilation, not already installed rule plans.
-The getter queries the actual native handle; clone/pop restores its real policy.
+control. Clones retain the same immutable compilation policy.
 
 ### Variables
 

@@ -237,21 +237,22 @@ def pretty_ref(  # noqa: C901, PLR0912
                 raise ValueError(msg_0)
             if record.kind.field == "run":
                 run = record.kind.value
-                selected = run.ruleset
-                if selected is None or selected.kind is None:
-                    msg_0 = "Cannot print a Run without a ruleset"
-                    raise ValueError(msg_0)
+                groups = ", ".join(repr(name) for name in run.groups)
+                if run.groups == [""]:
+                    groups = ""
                 if run.scheduler:
-                    pieces = ["run("]
-                    if selected.kind.field == "index":
-                        pieces.extend([(owner.ref("rulesets", selected.kind.value), False, False), ", "])
-                    elif selected.kind.value:
-                        pieces.append(f"{selected.kind.value!r}, ")
-                    pieces.append(f"scheduler={run.scheduler!r})")
-                elif selected.kind.field == "index":
-                    pieces = [(owner.ref("rulesets", selected.kind.value), False, False)]
-                else:
-                    pieces = [f"run({selected.kind.value})" if selected.kind.value else "run()"]
+                    groups += (", " if groups else "") + f"scheduler={run.scheduler!r}"
+                pieces = [f"run({groups})"]
+            elif record.kind.field == "add_rules":
+                addition = record.kind.value
+                pieces = ["ruleset("]
+                for index, rule_index in enumerate(addition.rules):
+                    if index:
+                        pieces.append(", ")
+                    pieces.append((owner.ref("rules", rule_index), False, False))
+                if addition.group:
+                    pieces.append((", " if addition.rules else "") + f"name={addition.group!r}")
+                pieces.append(")")
             elif record.kind.field == "bind_scheduler":
                 binding = record.kind.value
                 scheduler = binding.scheduler
@@ -887,33 +888,6 @@ def pretty_ref(  # noqa: C901, PLR0912
                 pieces.append(")")
             else:
                 raise NotImplementedError(f"Rule presentation is not migrated: {record.kind.field}")
-        elif isinstance(record, pb.Ruleset):
-            if record.kind is None:
-                msg = "Cannot print a ruleset without a kind"
-                raise ValueError(msg)
-            if record.kind.field == "rules":
-                pieces = ["ruleset("]
-                for index, rule_index in enumerate(record.kind.value.rules):
-                    if index:
-                        pieces.append(", ")
-                    pieces.append((owner.ref("rules", rule_index), False, False))
-            else:
-                pieces = ["unstable_combine_rulesets("]
-                for index, child in enumerate(record.kind.value.rulesets):
-                    if index:
-                        pieces.append(", ")
-                    if child.kind is None:
-                        msg = "Cannot print a ruleset reference without a kind"
-                        raise ValueError(msg)
-                    if child.kind.field == "index":
-                        pieces.append((owner.ref("rulesets", child.kind.value), False, False))
-                    else:
-                        pieces.append(child.kind.value)
-            if record.has_field("name"):
-                if len(pieces) > 1:
-                    pieces.append(", ")
-                pieces.append(f"name={record.name!r}")
-            pieces.append(")")
         elif isinstance(record, pb.Action):
             action = record
             if action.kind is None:

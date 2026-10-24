@@ -68,7 +68,6 @@ from egglog import (
 from egglog._catalog import builtin_catalog
 from egglog._program import Builder, Ref, StructuralView, pack
 from egglog.builtins import ExprValueError, _container_items, _map_entries, _pair_value
-from egglog.declarations import Ident
 from egglog.deconstruct import get_callable_args, get_callable_fn, get_constant_name, get_literal_value
 from egglog.egraph import get_current_ruleset, set_current_ruleset, to_runtime_expr
 from egglog.runtime import (
@@ -499,13 +498,14 @@ def test_canonical_backoff_records_and_persistent_identity_without_engine(monkey
     selected = ruleset(name="persistent-source")
     schedule = run(selected, scheduler=persistent)
     root = schedule._resolve(None)
-    assert root.read().kind.field == "run"  # No deployment or local hoist.
-    assert root.read().kind.value.scheduler == binding.name
+    addition, execution = _required_oneof(root.read().kind, "repeat", pb.Repeat).body
+    assert _required_oneof(addition.kind, "add_rules", pb.AddRules).rules == []
+    assert _required_oneof(execution.kind, "run", pb.Run).scheduler == binding.name
     assert schedule._schedulers[binding.name] is persistent
     program = pack(commands=[persistent.__egg_ref__, root]).program
     deployment, execution = program.commands
     _required_oneof(deployment.kind, "bind_scheduler", pb.BindScheduler)
-    _required_oneof(execution.kind, "run", pb.Run)
+    _required_oneof(execution.kind, "repeat", pb.Repeat)
     assert pb.Program.from_binary(program.to_binary()) == program
     assert ".persistent()" in repr(persistent)
     assert f"scheduler={binding.name!r}" in str(schedule)
@@ -536,31 +536,38 @@ def test_canonical_backoff_hoist_and_scope_topology_without_engine(monkeypatch):
     leaf = run(ruleset(name="scoped-source"), scheduler=scheduler)
     implicit = (leaf * 3)._resolve(None).read().kind.value
     outer = scheduler.scope(leaf * 3)._resolve(None).read().kind.value
-    for block in (implicit, outer):
+    assert implicit.body[0].kind.field == outer.body[0].kind.field == "add_rules"
+    outer_scope = outer.body[1].kind.value
+    for block, body in ((implicit, implicit.body[1:]), (outer_scope, outer_scope.body)):
         assert block.times == 1
-        binding, loop = block.body
+        binding, loop = body
         assert binding.kind.field == "bind_scheduler"
         assert loop.kind.field == "saturate"
         assert loop.kind.value.max_iterations == 3
         assert loop.kind.value.body[0].kind.value.scheduler == binding.kind.value.name
-    assert implicit.body[0].kind.value.name == name
-    assert outer.body[0].kind.value.name != name
-    inner = (scheduler.scope(leaf) * 3)._resolve(None).read()
+    assert implicit.body[1].kind.value.name == name
+    assert outer_scope.body[0].kind.value.name != name
+    inner_prelude = (scheduler.scope(leaf) * 3)._resolve(None).read().kind.value
+    assert inner_prelude.body[0].kind.field == "add_rules"
+    inner = inner_prelude.body[1]
     assert inner.kind.field == "saturate"
     assert inner.kind.value.max_iterations == 3
     inner_binding, inner_run = inner.kind.value.body[0].kind.value.body
     assert inner_run.kind.value.scheduler == inner_binding.kind.value.name
-    assert inner_binding.kind.value.name not in {name, outer.body[0].kind.value.name}
+    assert inner_binding.kind.value.name not in {name, outer_scope.body[0].kind.value.name}
 
     siblings = seq(scheduler.scope(leaf), leaf)
     block = siblings._resolve(None).read().kind.value
-    assert block.body[0].kind.value.name == name  # Default hoist for the sibling only.
-    scoped, unbound = block.body[1].kind.value.body
+    assert [command.kind.field for command in block.body[:2]] == ["add_rules", "add_rules"]
+    assert block.body[2].kind.value.name == name  # Default hoist for the sibling only.
+    scoped, unbound = block.body[3].kind.value.body
     scoped_binding, scoped_run = scoped.kind.value.body
     assert scoped_run.kind.value.scheduler == scoped_binding.kind.value.name != name
     assert unbound.kind.value.scheduler == name
     independent = seq(scheduler.scope(leaf), scheduler.scope(leaf))._resolve(None)
-    scoped_names = [child.kind.value.body[0].kind.value.name for child in independent.read().kind.value.body]
+    independent_prelude = independent.read().kind.value
+    assert [command.kind.field for command in independent_prelude.body[:2]] == ["add_rules", "add_rules"]
+    scoped_names = [child.kind.value.body[0].kind.value.name for child in independent_prelude.body[2].kind.value.body]
     assert len(set(scoped_names)) == 2
     assert name not in scoped_names
     assert "bind_scheduler(" in str(siblings)
@@ -572,7 +579,9 @@ def test_canonical_backoff_hoist_and_scope_topology_without_engine(monkeypatch):
     assert not scoped_persistent._schedulers
     mixed = seq(scoped_persistent, persistent_leaf)
     assert mixed._schedulers[persistent_name] is persistent
-    explicit, retained = mixed._resolve(None).read().kind.value.body
+    mixed_prelude = mixed._resolve(None).read().kind.value
+    assert [command.kind.field for command in mixed_prelude.body[:2]] == ["add_rules", "add_rules"]
+    explicit, retained = mixed_prelude.body[2].kind.value.body
     explicit_binding, explicit_run = explicit.kind.value.body
     assert explicit_run.kind.value.scheduler == explicit_binding.kind.value.name != persistent_name
     assert retained.kind.value.scheduler == persistent_name
@@ -601,7 +610,8 @@ def test_canonical_scheduler_until_queries_and_live_rulesets_without_engine(monk
     assert events == ["first"]
     program = pack(commands=[root]).program
     assert pb.Program.from_binary(program.to_binary()) == program
-    binding, conditional = _required_oneof(program.commands[0].kind, "repeat", pb.Repeat).body
+    addition, binding, conditional = _required_oneof(program.commands[0].kind, "repeat", pb.Repeat).body
+    assert _required_oneof(addition.kind, "add_rules", pb.AddRules).rules == [0]
     binding_data = _required_oneof(binding.kind, "bind_scheduler", pb.BindScheduler)
     conditional_data = _required_oneof(conditional.kind, "repeat", pb.Repeat)
     assert conditional_data.times == 1
@@ -678,15 +688,17 @@ def test_rule_template_comparison_and_live_rulesets_without_engine(monkeypatch):
     with pytest.raises(TypeError):
         hash(one)
     selected = ruleset(one, equivalent, name="selected")
-    identifiers: dict[Ref, Ident] = {}
-    before = selected._snapshot(identifiers)
+    before = selected._snapshot()
     assert len(before.read().kind.value.rules) == 2
     selected.append(rule(fact, name="new").then(set_(target).to(2)))  # type: ignore[arg-type]
-    after = selected._snapshot({})
+    after = selected._snapshot()
     assert len(after.read().kind.value.rules) == 3
     assert len(before.read().kind.value.rules) == 2
     combined = selected | ruleset(name="empty")
-    assert combined._snapshot({}).read().kind.field == "combined"
+    combined_command = combined._snapshot().read()
+    assert combined_command.kind is not None
+    assert combined_command.kind.field == "repeat"
+    assert [command.kind.field for command in combined_command.kind.value.body] == ["add_rules", "add_rules"]
     assert "rule(" in str(selected)
 
 
@@ -996,10 +1008,10 @@ def test_deferred_rulesets_keep_live_scope_order_and_failure_prefix(monkeypatch)
         def __init__(self) -> None: ...
 
     with pytest.raises(ValueError, match="generator marker"):
-        selected._snapshot({})
+        selected._snapshot()
     assert events == [("failing", selected)]
     assert get_current_ruleset() is None
-    snapshot = selected._snapshot({})
+    snapshot = selected._snapshot()
     assert events == [("failing", selected), ("older", selected)]
     assert [snapshot.owner.ref("rules", i).read().name for i in snapshot.read().kind.value.rules] == [
         "side-effect",
@@ -1287,9 +1299,9 @@ def test_direct_birewrite_preserves_conversion_order_and_destination_on_failure(
     assert ambient.__egg_ref__ == original_ambient
     assert get_current_ruleset() is None
     record = destination.__egg_ref__.read()
-    assert isinstance(record, pb.Ruleset)
+    assert isinstance(record, pb.Command)
     assert record.kind is not None
-    assert isinstance(record.kind.value, pb.RuleList)
+    assert isinstance(record.kind.value, pb.AddRules)
     assert [destination.__egg_ref__.owner.ref("rules", index) for index in record.kind.value.rules] == [
         authored.__egg_ref__
     ]
@@ -1317,10 +1329,10 @@ def test_direct_birewrite_keeps_occurrences_but_compares_structural_keys():
     with pytest.raises(TypeError, match="unhashable"):
         hash(first)
     selected = ruleset(first, first, second)
-    packed = pack([selected.__egg_ref__])
-    record = packed.program.rulesets[packed.indices[0]]
+    packed = pack(commands=[selected.__egg_ref__])
+    record = packed.program.commands[0]
     assert record.kind is not None
-    assert isinstance(record.kind.value, pb.RuleList)
+    assert isinstance(record.kind.value, pb.AddRules)
     occurrences = record.kind.value.rules
     assert len(occurrences) == 3
     assert occurrences[0] == occurrences[1] != occurrences[2]
@@ -3893,7 +3905,7 @@ def test_named_eager_eqsort_result_and_ambient_ruleset_isolation():
     assert calls == [None]
     assert isinstance(result, Box)
     assert resolve_callable(body).read().kind.field == "primitive"
-    assert not ambient._snapshot({}).read().kind.value.rules
+    assert not ambient._snapshot().read().kind.value.rules
 
     def empty(value: i64): ...
 
@@ -3928,7 +3940,7 @@ def test_named_eager_result_conversion_has_no_ambient_ruleset():
         resolve_callable(wrapped)
         assert get_current_ruleset() is ambient
     assert calls == [None, None]
-    assert not ambient._snapshot({}).read().kind.value.rules
+    assert not ambient._snapshot().read().kind.value.rules
 
 
 @pytest.mark.parametrize("subsume_body", [False, True])
@@ -3944,7 +3956,7 @@ def test_free_ruleset_body_is_a_deferred_constructor_rewrite(subsume_body):
         calls.append((get_current_ruleset(), str(unused), str(value)))
         return FreeRewriteBox(value)
 
-    assert not destination._snapshot({}).read().kind.value.rules
+    assert not destination._snapshot().read().kind.value.rules
     with set_current_ruleset(ambient):
         expression = body(i64(9))
         assert get_current_ruleset() is ambient
@@ -3955,9 +3967,9 @@ def test_free_ruleset_body_is_a_deferred_constructor_rewrite(subsume_body):
     assert [argument.value for argument in arguments] == [9, 4]
     body(i64(8), i64(5))
     assert len(calls) == 1
-    snapshot = destination._snapshot({})
+    snapshot = destination._snapshot()
     assert len(snapshot.read().kind.value.rules) == 1
-    assert not ambient._snapshot({}).read().kind.value.rules
+    assert not ambient._snapshot().read().kind.value.rules
     reference = snapshot.owner.ref("rules", snapshot.read().kind.value.rules[0])
     record = reference.read().kind.value
     assert record.subsume is subsume_body
@@ -3970,7 +3982,7 @@ def test_free_ruleset_body_is_a_deferred_constructor_rewrite(subsume_body):
     rhs_arguments = get_callable_args(rhs, FreeRewriteBox)
     assert rhs_arguments is not None
     assert rhs_arguments[0].__egg_ref__.read().kind.value == "_1"
-    encoded = pack(roots=[snapshot]).program.to_binary()
+    encoded = pack(commands=[snapshot]).program.to_binary()
     program = pb.Program.from_binary(encoded)
     assert program.to_binary() == encoded
     assert {
@@ -3997,7 +4009,7 @@ def test_free_ruleset_body_preserves_original_positional_variable_relation(name,
         return ExternalRewriteBox(inner(value) + external)
 
     body(i64(2))
-    snapshot = destination._snapshot({})
+    snapshot = destination._snapshot()
     reference = snapshot.owner.ref("rules", snapshot.read().kind.value.rules[0])
     record = reference.read().kind.value
     rhs = RuntimeExpr(reference.owner.ref("nodes", record.rhs))
@@ -4010,7 +4022,7 @@ def test_free_ruleset_body_preserves_original_positional_variable_relation(name,
     assert call_arguments is not None
     assert call_arguments[0].__egg_ref__.read().kind.value == "_0"
     assert free.__egg_ref__.read().kind.value == expected
-    program = pack(roots=[snapshot]).program
+    program = pack(commands=[snapshot]).program
     declaration = next(
         item.kind.value
         for item in program.declarations
@@ -4035,7 +4047,7 @@ def test_free_ruleset_body_lhs_keeps_original_wrapper_binders():
         return ReplacedRewriteBox(value)
 
     body(i64(2))
-    snapshot = destination._snapshot({})
+    snapshot = destination._snapshot()
     reference = snapshot.owner.ref("rules", snapshot.read().kind.value.rules[0])
     record = reference.read().kind.value
     lhs = RuntimeExpr(reference.owner.ref("nodes", record.lhs))
@@ -4074,8 +4086,8 @@ def test_free_ruleset_body_result_conversion_restores_outer_context():
         resolve_callable(wrapped)
         assert get_current_ruleset() is ambient
     assert calls == [destination, ambient]
-    assert len(destination._snapshot({}).read().kind.value.rules) == 1
-    assert not ambient._snapshot({}).read().kind.value.rules
+    assert len(destination._snapshot().read().kind.value.rules) == 1
+    assert not ambient._snapshot().read().kind.value.rules
 
 
 @pytest.mark.parametrize("outcome", ["none", "wrong", "raise", "recursive"])
@@ -4114,8 +4126,8 @@ def test_free_ruleset_body_failure_is_cached_without_default_publication(outcome
     assert calls == [destination]
     assert wrapped.__egg_declaration__ is None
     assert wrapped.__egg_prepare__ is None
-    assert len(destination._snapshot({}).read().kind.value.rules) == 1
-    assert not ambient._snapshot({}).read().kind.value.rules
+    assert len(destination._snapshot().read().kind.value.rules) == 1
+    assert not ambient._snapshot().read().kind.value.rules
 
 
 def test_free_ruleset_body_invalid_destination_precedes_callback():
@@ -4153,7 +4165,7 @@ def test_free_ruleset_body_preserves_constructor_options(options):
     else:
         assert not record.kind.value.has_field("cost")
     assert calls == [destination]
-    assert len(destination._snapshot({}).read().kind.value.rules) == 1
+    assert len(destination._snapshot().read().kind.value.rules) == 1
     expression = body()
     graph = EGraph(expression)
     graph.run(destination)
@@ -4608,7 +4620,7 @@ def test_constant_merges_are_nullary_functions_without_engine(monkeypatch):
         assert str(RuntimeExpr(declaration.owner.ref("nodes", merged.merge))) == expected
     assert set_(maximum_value).to(i64(2)).__egg_ref__.read().kind.value.kind.field == "set"
     assert set_(token).to(MergedToken()).__egg_ref__.read().kind.value.kind.field == "set"
-    assert not ambient._snapshot({}).read().kind.value.rules
+    assert not ambient._snapshot().read().kind.value.rules
 
 
 def test_constant_ruleset_default_is_a_destination_constructor_rewrite(monkeypatch):
@@ -4621,15 +4633,15 @@ def test_constant_ruleset_default_is_a_destination_constructor_rewrite(monkeypat
         def __init__(self, value: i64) -> None: ...
 
     destination, ambient = ruleset(), ruleset()
-    previous = destination._snapshot({})
+    previous = destination._snapshot()
     default = DefaultToken(i64(3))
     with set_current_ruleset(ambient):
         value = constant("token", DefaultToken, default, ruleset=destination)
         assert get_current_ruleset() is ambient
     assert resolve_callable(value).read().kind.field == "constructor"
     assert not previous.read().kind.value.rules
-    assert not ambient._snapshot({}).read().kind.value.rules
-    snapshot = destination._snapshot({})
+    assert not ambient._snapshot().read().kind.value.rules
+    snapshot = destination._snapshot()
     assert len(snapshot.read().kind.value.rules) == 1
     reference = snapshot.owner.ref("rules", snapshot.read().kind.value.rules[0])
     record = reference.read().kind.value
@@ -4638,7 +4650,7 @@ def test_constant_ruleset_default_is_a_destination_constructor_rewrite(monkeypat
     assert not record.subsume
     assert expr_parts(RuntimeExpr(reference.owner.ref("nodes", record.lhs))) == expr_parts(value)
     assert expr_parts(RuntimeExpr(reference.owner.ref("nodes", record.rhs))) == expr_parts(default)
-    encoded = pack([snapshot]).program.to_binary()
+    encoded = pack(commands=[snapshot]).program.to_binary()
     assert pb.Program.from_binary(encoded).to_binary() == encoded
     with pytest.raises(TypeError, match="Rewrite destinations must be Rulesets"):
         constant("invalid", DefaultToken, default, ruleset=object())  # type: ignore[call-overload]
@@ -4655,7 +4667,7 @@ def test_constant_defaults_reject_unbound_query_variables(explicit, spelling):
     with pytest.raises(ValueError, match=r"Free variable.*named eager body"):
         constant("invalid", QueryDefaultToken, default, ruleset=destination)
     if destination is not None:
-        assert not destination._snapshot({}).read().kind.value.rules
+        assert not destination._snapshot().read().kind.value.rules
 
 
 @pytest.mark.parametrize("egg_name", [None, ""])
@@ -5050,7 +5062,7 @@ def test_reverse_args_rewrite_body_receives_python_order(class_authoring_without
 
     ReversedRewrite(i64(1)).select("tag", i64(2))
     assert calls == [("self", "label", "count")]
-    snapshot = destination._snapshot({})
+    snapshot = destination._snapshot()
     assert len(snapshot.read().kind.value.rules) == 1
     reference = snapshot.owner.ref("rules", snapshot.read().kind.value.rules[0])
     rewrite = reference.read().kind.value
@@ -5572,7 +5584,7 @@ def test_eager_member_conversion_is_once_without_ambient_ruleset(class_authoring
         assert isinstance(Converted().value(), i64)
         assert get_current_ruleset() is ambient
     assert calls == [("body", None), ("conversion", None)]
-    assert not ambient._snapshot({}).read().kind.value.rules
+    assert not ambient._snapshot().read().kind.value.rules
 
 
 @pytest.mark.parametrize("late_bad", [False, True])
@@ -5976,7 +5988,7 @@ def test_initializer_cost_waits_for_all_static_headers(class_authoring_without_e
     assert calls == []
     assert invalid_context.catalog is not None
     assert not invalid_context.catalog.members
-    assert not destination._snapshot({}).read().kind.value.rules
+    assert not destination._snapshot().read().kind.value.rules
 
 
 @pytest.mark.parametrize("explicit", [False, True])
@@ -6011,7 +6023,7 @@ def test_member_default_barrier_preserves_explicit_rulesets(class_authoring_with
 
     assert isinstance(Defaults().defaulted(), Result)
     assert calls == (["conversion", "first", "later"] if explicit else ["first", "later", "conversion"])
-    assert len(destination._snapshot({}).read().kind.value.rules) == (2 if explicit else 0)
+    assert len(destination._snapshot().read().kind.value.rules) == (2 if explicit else 0)
     pack([to_runtime_expr(Defaults().defaulted()).__egg_ref__])
 
 
@@ -6052,7 +6064,7 @@ def test_classvar_eager_defaults_are_closed_nullary_primitives(class_authoring_w
     with set_current_ruleset(ambient):
         values = [(Defaults.COUNT, scalar), (Defaults.BOX, box), (Defaults.MISSING, Maybe[i64].none())]
         assert get_current_ruleset() is ambient
-    assert not ambient._snapshot({}).read().kind.value.rules
+    assert not ambient._snapshot().read().kind.value.rules
     for value, expected in values:
         assert value is not None
         declaration = resolve_callable(value)
@@ -6112,7 +6124,7 @@ def test_classvar_eager_default_conversion_keeps_completed_prefix(class_authorin
         with pytest.raises(AttributeError):
             getattr(Partial, name)
     assert events == [None, None]
-    assert not ambient._snapshot({}).read().kind.value.rules
+    assert not ambient._snapshot().read().kind.value.rules
 
 
 @pytest.mark.parametrize("spelling", ["external", "_0"])
@@ -6213,7 +6225,7 @@ def test_class_ruleset_bodyless_members_do_not_create_rewrites():
         def value(self) -> i64: ...
 
     assert isinstance(Bodyless().value(), i64)
-    assert destination._snapshot({}).read().kind.value.rules == []
+    assert destination._snapshot().read().kind.value.rules == []
 
 
 @pytest.fixture
@@ -6806,7 +6818,7 @@ def test_bodyless_named_mutation_defaults_and_errors(class_authoring_without_eng
     declaration = resolve_callable(Accumulator.update)
     assert declaration.read().kind.value.name == "exact mutable member"
     assert Accumulator.update.__doc__ == "A bodyless mutating declaration."
-    assert destination._snapshot({}).read().kind.value.rules == []
+    assert destination._snapshot().read().kind.value.rules == []
     default.__replace_expr__(i64(9))
     original = copy(receiver)
     assert receiver.update() is None
@@ -6852,7 +6864,7 @@ def test_bodyless_named_mutation_defaults_and_errors(class_authoring_without_eng
     assert to_runtime_expr(wrong_receiver).__egg_ref__ is wrong_root
     assert receiver.reset() is None
     assert _required_callable_args(receiver, Accumulator.reset)[0].__egg_ref__ == root
-    assert destination._snapshot({}).read().kind.value.rules == []
+    assert destination._snapshot().read().kind.value.rules == []
 
 
 @pytest.mark.parametrize("name", ["__delitem__", "__setitem__", "update"])
@@ -6948,7 +6960,7 @@ def test_mutating_member_rewrite_keeps_original_binders(class_authoring_without_
     declaration = resolve_callable(Mutable.replace).read()
     view = declaration.bindings.python.views[0]
     assert view.receiver == view.mutates == int(reverse)
-    snapshot = destination._snapshot({})
+    snapshot = destination._snapshot()
     assert len(snapshot.read().kind.value.rules) == 1
     record = snapshot.owner.ref("rules", snapshot.read().kind.value.rules[0])
     rewrite_record = record.read().kind.value
@@ -6960,7 +6972,7 @@ def test_mutating_member_rewrite_keeps_original_binders(class_authoring_without_
     rhs = record.owner.ref("nodes", rewrite_record.rhs)
     assert rhs.read().kind.field == "var"
     assert rhs.read().kind.value == "other"
-    encoded = pack([snapshot, to_runtime_expr(value).__egg_ref__]).program.to_binary()
+    encoded = pack([to_runtime_expr(value).__egg_ref__], commands=[snapshot]).program.to_binary()
     assert pb.Program.from_binary(encoded).to_binary() == encoded
 
 
@@ -6997,7 +7009,7 @@ def test_class_ruleset_bodyless_callable_headers(class_authoring_without_engine)
         function_sort = sort.read().kind.value
         assert function_sort.params == []
         assert StructuralView(sort.owner.ref("sorts", function_sort.result)) == StructuralView(boolean_sort)
-    assert destination._snapshot({}).read().kind.value.rules == []
+    assert destination._snapshot().read().kind.value.rules == []
 
     @function(ruleset=destination)
     def bodyless() -> Boolean: ...
@@ -7044,7 +7056,7 @@ def test_class_late_header_failure_keeps_prefix(class_authoring_without_engine, 
     assert events == expected
     assert isinstance(Partial.FIRST, HeaderResult)
     assert isinstance(Partial().early(), HeaderResult)
-    assert len(destination._snapshot({}).read().kind.value.rules) == 1
+    assert len(destination._snapshot().read().kind.value.rules) == 1
     for name in ("bad", "later"):
         with pytest.raises(AttributeError):
             getattr(Partial, name)
@@ -7095,7 +7107,7 @@ def test_classvar_header_precedes_failing_default_conversion(class_authoring_wit
         _ = Partial.FIRST
     assert events == [Partial.FIRST]
     assert isinstance(Partial.FIRST, ConversionResult)
-    assert destination._snapshot({}).read().kind.value.rules == []
+    assert destination._snapshot().read().kind.value.rules == []
     with pytest.raises(AttributeError):
         Partial()
     assert len(events) == 1
@@ -7114,11 +7126,11 @@ def test_class_default_bodies_see_all_headers_and_keep_failure_prefix(class_auth
         def __init__(self) -> None: ...
 
         def early(self, value: i64) -> BodyResult:
-            events.append(("early", len(destination._snapshot({}).read().kind.value.rules)))
+            events.append(("early", len(destination._snapshot().read().kind.value.rules)))
             return self.later(value)
 
         def later(self, value: i64) -> BodyResult:
-            events.append(("later", len(destination._snapshot({}).read().kind.value.rules)))
+            events.append(("later", len(destination._snapshot().read().kind.value.rules)))
             msg = "body marker"
             raise ValueError(msg)
 
@@ -7133,9 +7145,9 @@ def test_class_default_bodies_see_all_headers_and_keep_failure_prefix(class_auth
     assert isinstance(value.later(3), BodyResult)  # type: ignore[arg-type]
     assert isinstance(value.unvisited(), BodyResult)
     assert events == [("early", 1), ("later", 2)]
-    snapshot = destination._snapshot({})
+    snapshot = destination._snapshot()
     assert len(snapshot.read().kind.value.rules) == 2
-    encoded = pack(roots=[snapshot]).program.to_binary()
+    encoded = pack(commands=[snapshot]).program.to_binary()
     assert pb.Program.from_binary(encoded).to_binary() == encoded
 
 
@@ -7213,7 +7225,7 @@ def test_class_default_views_share_canonical_parameter_binding(class_authoring_w
     assert _required_callable_args(Defaults.named())[0].value == 3
     assert _required_callable_args(expression.wrapped())[1].value == 4
     assert isinstance(expression.own, Defaults)
-    snapshot = destination._snapshot({})
+    snapshot = destination._snapshot()
     records = [snapshot.owner.ref("rules", index) for index in snapshot.read().kind.value.rules]
     assert [record.read().kind.value.subsume for record in records] == [False, False, True]
     for record in records:
@@ -7236,7 +7248,7 @@ def test_class_default_views_share_canonical_parameter_binding(class_authoring_w
             assert [StructuralView(rhs_ref.owner.ref("nodes", arg)) for arg in rhs.kind.value.args] == [
                 StructuralView(lhs_ref.owner.ref("nodes", lhs.args[1]))
             ]
-    assert len(pack(roots=[snapshot]).program.rules) == 3
+    assert len(pack(commands=[snapshot]).program.rules) == 3
 
 
 @pytest.mark.parametrize("replace_receiver", [False, True])
@@ -7257,7 +7269,7 @@ def test_class_default_lhs_keeps_original_binders_after_wrapper_replacement(
 
     expression = Binders(1).body(2)  # type: ignore[arg-type]
     assert _required_callable_args(expression)[1].value == 2
-    snapshot = destination._snapshot({})
+    snapshot = destination._snapshot()
     assert len(snapshot.read().kind.value.rules) == 1
     reference = snapshot.owner.ref("rules", snapshot.read().kind.value.rules[0])
     rewrite_record = reference.read().kind.value
@@ -7267,7 +7279,7 @@ def test_class_default_lhs_keeps_original_binders_after_wrapper_replacement(
     assert [argument.read().kind.value for argument in lhs_args] == ["self", "value"]
     rhs = RuntimeExpr(reference.owner.ref("nodes", rewrite_record.rhs))
     assert _required_callable_args(rhs, Binders)[0].value == (9 if replace_receiver else 7)
-    assert len(pack(roots=[snapshot]).program.rules) == 1
+    assert len(pack(commands=[snapshot]).program.rules) == 1
 
 
 @pytest.mark.parametrize("result", [None, i64(2)])
@@ -7287,7 +7299,7 @@ def test_class_invalid_default_body_result_does_not_poison_headers(class_authori
         InvalidResult()
     assert isinstance(InvalidResult().body(), InvalidResult)
     assert calls == [1]
-    assert destination._snapshot({}).read().kind.value.rules == []
+    assert destination._snapshot().read().kind.value.rules == []
 
 
 @pytest.mark.parametrize("default", [None, i64(1)])
@@ -7302,7 +7314,7 @@ def test_class_primitive_default_with_ruleset_remains_invalid(class_authoring_wi
         _ = InvalidDefault.FIRST
     assert invalid_default_context.catalog is not None
     assert not invalid_default_context.catalog.members
-    assert destination._snapshot({}).read().kind.value.rules == []
+    assert destination._snapshot().read().kind.value.rules == []
     with pytest.raises(AttributeError):
         _ = InvalidDefault.FIRST
 

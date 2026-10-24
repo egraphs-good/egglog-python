@@ -823,7 +823,7 @@ rule generators, and later appended rules remain visible when it is run.
 `EGraph(save_egglog_string=True).as_egglog_string` records the renderable,
 default-option subset using the shared Rust Source renderer. The actual packed
 Program is rendered before execution; its text and renderer state are committed
-only after the engine response and publication acknowledgement are accepted.
+only after the engine response is accepted.
 Unsupported source forms are rejected before live effects, not approximated by
 Python's display printer. Custom objectives, assigned costs and some composite
 controls remain outside that source subset.
@@ -835,7 +835,7 @@ Freeze snapshot is unrecorded read-only introspection, including after close;
 this does not exempt any declaration installation or authored evaluation.
 When an execution/transport failure makes the completed prefix uncertain,
 recording is invalidated and the property raises `RuntimeError`; the original
-error, publication receipts and live partial effects are preserved. Invalidated
+error and live partial effects are preserved. Invalidated
 recording rejects later potential mutations/evaluations; the same pure snapshot
 introspection remains available. Closing a graph whose recording was disabled
 remains a no-op. Nondefault global execution
@@ -889,20 +889,25 @@ It records logical state rather than request history or scheduler progress.
 ### `history`
 
 Create an {class}`egglog.egraph.EGraph` with `record_history=True` to retain
-structured protocol requests and their outcomes, then retrieve an owned
-`GetHistoryResponse` with {meth}`egglog.egraph.EGraph.history`. Recording is off
+accepted input programs, then retrieve one owned accumulated `Program` with
+{meth}`egglog.egraph.EGraph.history`. Recording is off
 by default; requesting disabled history raises `ValueError`. Retrieval itself
-does not append an entry.
+does not append a command.
 
-History preserves each request's own references, configuration, completed
-outputs and failures. It includes observations such as `freeze`, and retains
-scoped operations after `pop` restores logical state. An interrupted operation
-without a protocol reply is identified explicitly. This audit does not promise
-deterministic replay or an engine checkpoint.
+Retrieve history before destroying the graph; destruction releases its retained
+inputs. Other live graphs and clones retain their own histories.
+
+History remaps each accepted program's references into shared arenas while
+preserving command order and node sharing. It includes observations such as
+`freeze` and accepted inputs whose execution later fails. Validation and
+preparation rejects are omitted. `pop` restores the saved history prefix,
+discarding inputs from the consumed branch. History contains inputs rather than
+outputs or outcomes and does not promise deterministic replay or an engine
+checkpoint.
 
 `save_egglog_string=True` separately enables the existing `as_egglog_string`
 successful-source view, with rendering preflight and acknowledgement checks.
-The two flags are independent: saving source does not retain structured replies.
+The two flags are independent: saving source does not enable input history.
 When both are enabled, a failure can invalidate the replayable source view while
 structured history remains available. Structured recording supports
 `seminaive=False` without imposing the source view's replay restriction.

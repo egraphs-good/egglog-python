@@ -1,5 +1,5 @@
 # mypy: allow-empty-bodies
-"""Shared protocol audit history and the optional replayable source view."""
+"""Accumulated protocol inputs and the optional replayable source view."""
 
 from typing import Literal
 
@@ -24,7 +24,7 @@ def test_history_and_source_recording_are_independent_creation_choices(
     class Transport:
         def create(self, encoded: bytes) -> bytes:
             created.append(pb.CreateEGraphRequest.from_binary(encoded))
-            return pb.CreateEGraphResponse(egraph_id=1).to_binary()
+            return pb.CreateEGraphResponse(egraph_id=1, threads=1).to_binary()
 
         def enable_recording(self) -> None:
             source_enabled.append(True)
@@ -54,11 +54,11 @@ def test_history_choice_rejects_nonbooleans_before_creation(monkeypatch: pytest.
 
 def test_history_getter_uses_current_handle_and_preserves_owned_result(monkeypatch: pytest.MonkeyPatch) -> None:
     requests: list[pb.GetHistoryRequest] = []
-    expected = pb.GetHistoryResponse(initial_resources=pb.ConfigureEGraphResourcesResponse(threads=3))
+    expected = pb.Program(files=[pb.SourceFile(name="input.egg")])
 
     class Transport:
         def create(self, encoded: bytes) -> bytes:
-            return pb.CreateEGraphResponse(egraph_id=19).to_binary()
+            return pb.CreateEGraphResponse(egraph_id=19, threads=3).to_binary()
 
         def get_history(self, encoded: bytes) -> bytes:
             requests.append(pb.GetHistoryRequest.from_binary(encoded))
@@ -72,8 +72,7 @@ def test_history_getter_uses_current_handle_and_preserves_owned_result(monkeypat
     result = graph.history()
     assert requests == [pb.GetHistoryRequest(egraph_id=19)]
     assert result == expected
-    assert result.initial_resources is not None
-    result.initial_resources.threads = 9
+    result.files[0].name = "changed.egg"
     assert graph.history() == expected
     graph._state._native_running = True
     try:
@@ -97,33 +96,19 @@ def test_history_default_off_and_getter_does_not_record_itself() -> None:
     graph = EGraph(record_history=True, seminaive=False)
     graph.register(i64(2))
     history = graph.history()
-    assert history.initial_resources is not None
-    assert history.initial_resources.threads == 1
-    assert not history.closed
-    assert history.entries[0].request is not None
-    assert history.entries[0].request.field == "create"
-    assert history.entries[0].request.value.options is not None
-    assert history.entries[0].request.value.options.seminaive is False
+    assert graph.num_threads() == 1
+    assert len(history.commands) == 1
     assert graph.history().to_binary() == history.to_binary()
-
     graph.freeze()
     observed = graph.history()
-    assert len(observed.entries) == len(history.entries) + 1
-    entry = observed.entries[-1]
-    assert entry.request is not None
-    assert entry.request.field == "run_program"
-    assert entry.request.value.program is not None
-    assert entry.request.value.program.commands[0].kind is not None
-    assert entry.request.value.program.commands[0].kind.field == "freeze"
-    assert entry.outcome is not None
-    assert entry.outcome.field == "run_program_response"
-    assert entry.outcome.value.outputs[0].kind is not None
-    assert entry.outcome.value.outputs[0].kind.field == "snapshot"
-    observed.entries.clear()
+    assert len(observed.commands) == len(history.commands) + 1
+    assert observed.commands[-1].kind is not None
+    assert observed.commands[-1].kind.field == "freeze"
+    observed.commands.clear()
     assert graph.history().to_binary() != observed.to_binary()
 
 
-def test_history_keeps_failure_response_and_live_prefix_after_source_view_invalidates() -> None:
+def test_history_keeps_accepted_failure_inputs_and_live_prefix_after_source_view_invalidates() -> None:
     @function
     def history_row(key: i64) -> i64: ...
 
@@ -146,47 +131,34 @@ def test_history_keeps_failure_response_and_live_prefix_after_source_view_invali
     with pytest.raises(RuntimeError, match="cannot be replayed"):
         _ = graph.as_egglog_string
     history = graph.history()
-    entry = history.entries[-1]
-    assert entry.request is not None
-    assert entry.request.field == "run_program"
-    assert entry.request.value.program is not None
-    assert len(entry.request.value.program.commands) == 4
-    assert entry.outcome is not None
-    assert entry.outcome.field == "run_program_response"
-    response = entry.outcome.value
-    assert response.error is not None
-    assert response.error.location is not None
-    assert response.error.location.path == [2]
-    assert len(response.outputs) == 1
-    output = response.outputs[0].kind
-    assert output is not None
-    assert output.field == "sizes"
-    assert output.value.sizes[0].rows == 2
+    assert len(history.commands) >= 4
+    failure = history.commands[-2].kind
+    assert failure is not None
+    assert failure.field == "action"
+    assert failure.value.kind == Oneof[Literal["panic"], str]("panic", "recorded prefix failure")
+    assert history.commands[-1].kind is not None
+    assert history.commands[-1].kind.field == "action"
     assert graph.lookup_function_value(history_row(i64(1))) == i64(11)
     assert graph.lookup_function_value(history_row(i64(2))) is None
 
 
-def test_history_parent_child_continuations_join_on_pop_without_rewinding_audit() -> None:
+def test_history_parent_child_continuations_restore_saved_prefix_on_pop() -> None:
     graph = EGraph(record_history=True)
     graph.register(i64(3))
     graph.push()
     parent = graph._state_stack[-1]
     assert parent.handle is not None
-    parent_before = pb.GetHistoryResponse.from_binary(
+    parent_before = pb.Program.from_binary(
         parent.transport.get_history(pb.GetHistoryRequest(egraph_id=parent.handle).to_binary())
     )
     graph.register(i64(4))
     graph.freeze()
     child = graph.history()
-    parent_after = pb.GetHistoryResponse.from_binary(
+    parent_after = pb.Program.from_binary(
         parent.transport.get_history(pb.GetHistoryRequest(egraph_id=parent.handle).to_binary())
     )
     assert parent_before == parent_after
-    assert len(child.entries) > len(parent_after.entries)
+    assert len(child.commands) > len(parent_after.commands)
     graph.pop()
-    joined = graph.history()
-    assert len(joined.entries) == len(child.entries) + 1
-    assert joined.entries[:-1] == child.entries
-    assert joined.entries[-1].request is not None
-    assert joined.entries[-1].request.field == "return_to"
-    assert graph.history() == joined
+    assert graph.history() == parent_before
+    assert graph.history() != child

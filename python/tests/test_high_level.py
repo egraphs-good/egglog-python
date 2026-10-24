@@ -46,7 +46,6 @@ def _replay_recorded_source(text: str) -> list[pb.RunProgramResponse]:
                     ).to_binary()
                 )
                 response = pb.RunProgramResponse.from_binary(encoded)
-                assert response.ruleset_publication is not None
                 if host_error is not None:
                     raise host_error
                 if response.error is not None:
@@ -122,39 +121,28 @@ def test_rule_eval_mode_rejects_unknown_value(seminaive: bool) -> None:
 
 def test_per_egraph_configuration() -> None:
     egraph = EGraph(num_threads=2, no_decomp=True)
-
     assert egraph.num_threads() == 2
     assert egraph.no_decomp()
-    egraph.set_num_threads(1)
-    egraph.set_no_decomp(False)
-    assert egraph.num_threads() == 1
-    assert not egraph.no_decomp()
+    for removed in ("set_num_threads", "set_no_decomp", "set_report_level"):
+        assert not hasattr(egraph, removed)
 
 
-def test_no_decomp_uses_native_clone_return_state() -> None:
+def test_no_decomp_uses_creation_settings_across_clone_return() -> None:
     egraph = EGraph(no_decomp=True)
     egraph.push()
     assert egraph.no_decomp()
-    egraph.set_no_decomp(False)
-    assert not egraph.no_decomp()
     egraph.pop()
     assert egraph.no_decomp()
 
 
-def test_no_decomp_saved_noop_update_invalidates_return_pairing() -> None:
+def test_reading_creation_settings_preserves_scope_return() -> None:
     egraph = EGraph()
     saved = egraph._state
     egraph.push()
-    active = egraph._state
-    assert not saved.configure_resources().no_decomp  # A query preserves pairing.
-    saved.configure_resources(no_decomp=False)  # Even a no-op is an acknowledged update.
-    with pytest.raises(ValueError, match="stale scope return"):
-        egraph.pop()
-    assert egraph._state is active
-    assert saved.handle is not None
-    assert active.handle is not None
-    active.destroy()
-    saved.destroy()
+    assert not saved.no_decomp
+    assert egraph.num_threads() == saved.threads
+    egraph.pop()
+    assert egraph._state is saved
 
 
 def test_independent_egraphs_run_concurrently_after_setup() -> None:
@@ -216,33 +204,20 @@ with ThreadPoolExecutor(max_workers=workers) as executor:
     )
 
 
-@pytest.mark.parametrize("use_setter", [False, True], ids=["constructor", "setter"])
-def test_zero_threads_uses_available_parallelism(*, use_setter: bool) -> None:
-    egraph = EGraph(num_threads=1 if use_setter else 0)
-    if use_setter:
-        egraph.set_num_threads(0)
-
-    assert egraph.num_threads() >= 1
+def test_zero_threads_uses_available_parallelism() -> None:
+    assert EGraph(num_threads=0).num_threads() >= 1
 
 
-@pytest.mark.parametrize("use_setter", [False, True], ids=["constructor", "setter"])
-def test_egraph_no_decomp_is_runtime_policy_not_saved_rule_metadata(*, use_setter: bool) -> None:
-    rel = relation(f"no_decomp_rel_{use_setter}", i64)
+def test_egraph_no_decomp_is_creation_policy_not_saved_rule_metadata() -> None:
+    rel = relation("no_decomp_creation", i64)
     x = var("x", i64)
-    egraph = EGraph(save_egglog_string=True, no_decomp=not use_setter)
-    if use_setter:
-        egraph.set_no_decomp(True)
-
+    egraph = EGraph(save_egglog_string=True, no_decomp=True)
     assert egraph.no_decomp()
     egraph.register(rel(i64(0)), rule(rel(x)).then(rel(x + 1)))
     egraph.run(run())
     egraph.check(rel(i64(1)))
-
     transcript = egraph.as_egglog_string
     assert ":no-decomp" not in transcript
-    egraph.set_no_decomp(False)
-    assert not egraph.no_decomp()
-    assert egraph.as_egglog_string == transcript
     _replay_recorded_source(transcript)
 
 
@@ -555,7 +530,11 @@ def test_saved_transcript_preserves_unparseable_ruleset_name(name: str) -> None:
     assert recorded.function_size(destination) == 2
     snapshot = pb.EGraphSnapshot.from_binary(recorded.freeze().to_binary())
     assert snapshot.program is not None
-    names = [ruleset.name for ruleset in snapshot.program.rulesets]
+    names = [
+        command.kind.value.group
+        for command in snapshot.program.commands
+        if command.kind is not None and command.kind.field == "add_rules"
+    ]
     assert len(names) >= 2
     assert len(set(names)) == len(names)
     _replay_recorded_source(recorded.as_egglog_string)
@@ -1331,8 +1310,7 @@ def test_saved_egglog_transcript_close_rejects_commands_before_mutation() -> Non
     assert transcript
     egraph.close()
     assert egraph.no_decomp()
-    egraph.set_no_decomp(False)
-    assert not egraph.no_decomp()
+    assert egraph.no_decomp()
 
     with pytest.raises(ValueError, match="transcript has been closed"):
         egraph.register(ClosedExpr(2))
@@ -2016,15 +1994,15 @@ def test_polynomial_theory_authoring_snapshots_without_engine(monkeypatch, name:
     # Recreate authoring without replacing globals used by retained expressions.
     retained = array_api.Boolean(True)
     namespace = runpy.run_path(array_api.__file__, run_name=array_api.__name__)
-    snapshot = namespace[name]._snapshot({})
-    packed = pack([snapshot])
+    snapshot = namespace[name]._snapshot()
+    packed = pack(commands=[snapshot])
     decoded = pb.Program.from_binary(packed.program.to_binary())
     assert len(decoded.rules) == rule_count
     assert decoded.nodes
     assert decoded.declarations
-    restored = Builder.from_program(decoded).publish().ref("rulesets", packed.indices[0]).read()
+    restored = Builder.from_program(decoded).publish().ref("commands", 0).read()
     assert restored.kind is not None
-    assert restored.kind.field == "rules"
+    assert restored.kind.field == "add_rules"
     assert len(restored.kind.value.rules) == rule_count
     assert retained.value is True
     engine.assert_not_called()
@@ -4802,15 +4780,20 @@ class TestScheduler:
             assert kind == "program"
             assert count == 0
             assert encoded is not None
-            for command in pb.Program.from_binary(encoded).commands:
+            pending = list(reversed(pb.Program.from_binary(encoded).commands))
+            while pending:
+                command = pending.pop()
                 assert command.kind is not None
                 if command.kind.field == "bind_scheduler":
                     bindings.append(command.kind.value)
                 elif command.kind.field == "action":
                     actions.append(command.kind.value)
-                else:
-                    assert command.kind.field == "run"
+                elif command.kind.field == "run":
                     runs.append(command.kind.value)
+                elif command.kind.field in {"repeat", "saturate"}:
+                    pending.extend(reversed(command.kind.value.body))
+                else:
+                    assert command.kind.field == "add_rules"
         assert len(bindings) == 1
         assert len(runs) == 2
         assert len(actions) == 2
@@ -4847,7 +4830,7 @@ class TestScheduler:
                 bindings.append((kind.value, depth))
             elif kind.field == "run":
                 runs.append((kind.value, depth))
-            else:
+            elif kind.field != "add_rules":
                 assert kind.field in {"repeat", "saturate"}
                 pending.extend((child, depth + 1) for child in reversed(kind.value.body))
         assert len(bindings) == len(runs) == 2
@@ -4864,7 +4847,7 @@ class TestScheduler:
         assert runs[0][1] >= inner_depth
         assert runs[1][0].scheduler == outer.name
         assert runs[1][1] < inner_depth
-        assert runs[0][0].ruleset == runs[1][0].ruleset
+        assert runs[0][0].groups == runs[1][0].groups
         _replay_recorded_source(transcript)
 
     def test_persistent_scheduler_child_binding_is_redeployed_after_pop(self):

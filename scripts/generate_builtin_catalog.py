@@ -752,7 +752,7 @@ def main() -> None:
     args = parser.parse_args()
     encoded = args.export.read_bytes()
     program = pb.Program.from_binary(encoded)
-    if program.commands or program.rules or program.rulesets:
+    if program.commands or program.rules:
         parser.error("Expected a declaration-only native catalog")
     names: set[tuple[str, str]] = set()
     for declaration in program.declarations:

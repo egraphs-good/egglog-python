@@ -161,7 +161,7 @@ def test_non_egglog_failure_invalidates_saved_transcript() -> None:
 
 def test_higher_order_callable_inference_does_not_mutate_ambient_ruleset() -> None:
     ambient = ruleset(name="hof-inference-ambient")
-    initial_snapshot = ambient._snapshot({})
+    initial_snapshot = ambient._snapshot()
 
     with set_current_ruleset(ambient):
         initial: Map[i64, f64] = Map[i64, f64].empty()
@@ -174,7 +174,7 @@ def test_higher_order_callable_inference_does_not_mutate_ambient_ruleset() -> No
         assert arguments is not None
         assert len(arguments) == 3
 
-    assert ambient._snapshot({}) == initial_snapshot
+    assert ambient._snapshot() == initial_snapshot
 
 
 def test_set_current_ruleset_restores_nested_contexts() -> None:

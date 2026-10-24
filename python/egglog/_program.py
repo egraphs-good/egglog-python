@@ -25,7 +25,7 @@ from protobuf import DescFieldValueList, DescFieldValueMessage, DescMessage, Mes
 # address; '@' means a named definition dependency. Other fields are copied,
 # recursively for inline messages. Binder positions are deliberately NOT indices.
 _FIELDS = {
-    "Program": "nodes sorts declarations commands files rulesets rules",
+    "Program": "nodes sorts declarations commands files rules",
     "Node": "sort_id:sorts var primitive_value call union get_cost span",
     "Sort": "eq@eq_sort family func var span egglog_aliases",
     "HostSort": "name@host_sort_family args:sorts",
@@ -76,19 +76,16 @@ _FIELDS = {
     "RustType": "sort:sorts borrowed",
     "EgglogBindings": "views",
     "EgglogCallable": "symbol datatype_member",
-    "Ruleset": "name rules combined span doc",
-    "RuleList": "rules:rules",
-    "RulesetRef": "index:rulesets name@ruleset",
     "Rule": "rule rewrite birewrite name eval_mode no_decomp include_subsumed span doc",
     "RuleBody": "query:nodes head",
     "Rewrite": "lhs:nodes rhs:nodes conditions:nodes subsume",
     "BiRewrite": "lhs:nodes rhs:nodes conditions:nodes",
-    "CombinedRuleset": "rulesets",
-    "Command": "action check prove prove_exists run bind_scheduler keep_best extract freeze print_size print_function print_table_stats repeat saturate fail stats span",
+    "Command": "action check prove prove_exists run bind_scheduler keep_best extract freeze print_size print_function print_table_stats repeat saturate fail stats add_rules span",
     "Check": "facts:nodes",
     "Prove": "facts:nodes",
     "ProveExists": "constructor@callable",
-    "Run": "ruleset scheduler",
+    "Run": "groups scheduler",
+    "AddRules": "group rules:rules",
     "BindScheduler": "name scheduler",
     "Scheduler": "back_off",
     "BackOff": "match_limit ban_length node_limit",
@@ -106,7 +103,6 @@ _ROLES: dict[str, type[Message]] = {
     "sorts": pb.Sort,
     "declarations": pb.Declaration,
     "rules": pb.Rule,
-    "rulesets": pb.Ruleset,
     "files": pb.SourceFile,
     "commands": pb.Command,
 }
@@ -249,7 +245,7 @@ def _structural_parts(
     ref = reference.owner.ref(reference.role, reference.index)
     record = cast("Message", ref.owner._slots[ref.role][ref.index])
     if identity and (
-        ref.role in {"rules", "rulesets"}
+        ref.role == "rules"
         or (isinstance(record, pb.Node) and record.kind is not None and record.kind.field == "union")
     ):
         return (ref.role, ref), []
@@ -356,7 +352,7 @@ def action_equal(left: Ref, right: Ref) -> bool:  # noqa: C901
     """
     Prove ordered Action syntax equality without identifying execution nodes.
 
-    Exact refs are axioms; empty Unions and rule/ruleset identities have no
+    Exact refs are axioms; empty Unions and rule identities have no
     structural proof. A repeated active distinct pair has no finite proof.
     Only completed proofs are reusable, including in the named closure.
     """
@@ -391,7 +387,7 @@ def action_equal(left: Ref, right: Ref) -> bool:  # noqa: C901
                 return False
             for ref in pair:
                 record = ref.owner._slots[ref.role][ref.index]
-                if ref.role in {"rules", "rulesets"} or (
+                if ref.role == "rules" or (
                     isinstance(record, pb.Node)
                     and record.kind is not None
                     and record.kind.field == "union"
@@ -602,8 +598,6 @@ class Packed:
     # Canonical source declarations let response owners retain the same
     # presentations without manufacturing another semantic declaration copy.
     definitions: tuple[Ref, ...]
-    # Exact source owners in request-index order for report attribution.
-    rulesets: tuple[Ref, ...]
 
 
 def clone_nodes(roots: Iterable[Ref]) -> tuple[Ref, ...]:  # noqa: C901
@@ -667,8 +661,6 @@ def _definition_key(record: Message) -> tuple[str, str] | None:
             raise ValueError(msg)
         namespace = record.kind.field if record.kind.field in {"eq_sort", "host_sort_family"} else "callable"
         return namespace, record.kind.value.name
-    if isinstance(record, pb.Ruleset) and record.has_field("name"):
-        return "ruleset", record.name
     return None
 
 
@@ -686,7 +678,7 @@ def pack(  # noqa: C901
     roots. Missing names require an explicit ambient declaration/provider set.
     Exact relocated definitions share one emission; differing code or metadata
     still requires adapter-aware reconciliation. Literal bits and identity-bearing
-    Union/rule/ruleset references are never guessed equivalent.
+    Union/rule references are never guessed equivalent.
     """
     program = pb.Program()
     mapped: dict[Ref, int] = {}
@@ -700,7 +692,7 @@ def pack(  # noqa: C901
         if owner in indexed:
             return
         indexed.add(owner)
-        for role in ("declarations", "rulesets"):
+        for role in ("declarations",):
             for index in range(len(owner._slots[role])):
                 ref = owner.ref(role, index)
                 record = cast("Message", ref.owner._slots[ref.role][ref.index])
@@ -736,7 +728,7 @@ def pack(  # noqa: C901
             raise ValueError(msg)
         if ref not in mapped:
             index_owner(ref.owner)
-            if ref.role in {"declarations", "rulesets"}:
+            if ref.role == "declarations":
                 key = _definition_key(ref.read())
                 if key is not None:
                     ref = reconcile(key, ref)
@@ -758,8 +750,8 @@ def pack(  # noqa: C901
 
     for reference in definitions:
         ref = reference.owner.ref(reference.role, reference.index)
-        if ref.role not in {"declarations", "rulesets"}:
-            msg = "Definitions must refer to declarations or rulesets"
+        if ref.role != "declarations":
+            msg = "Definitions must refer to declarations"
             raise TypeError(msg)
         index_owner(ref.owner)
     indices = tuple(allocate(ref) for ref in roots)
@@ -792,8 +784,7 @@ def pack(  # noqa: C901
             if missing:
                 raise ValueError(f"missing definitions: {sorted(missing)}")
             break
-    rulesets = tuple(ref for ref in sorted(mapped, key=mapped.__getitem__) if ref.role == "rulesets")
-    return Packed(program, indices, tuple(emitted.values()), rulesets)
+    return Packed(program, indices, tuple(emitted.values()))
 
 
 _check_inventory()

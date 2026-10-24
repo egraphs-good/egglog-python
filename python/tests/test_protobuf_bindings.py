@@ -50,7 +50,6 @@ def test_table_cell_reader_preserves_availability_and_ownership_without_engine(m
                 location=pb.CommandLocation(path=[0]),
             )
         ],
-        ruleset_publication=pb.RulesetPublication(),
     )
     encoded = response.to_binary()
     decoded = pb.RunProgramResponse.from_binary(encoded)
@@ -158,7 +157,6 @@ def test_maintenance_reader_preserves_site_and_metric_presence():
         ),
         pb.MaintenanceSite(target=Oneof[Literal["declaration"], int]("declaration", 0)),
         pb.MaintenanceSite(target=Oneof[Literal["sort"], int]("sort", 0)),
-        pb.MaintenanceSite(target=Oneof[Literal["ruleset"], int]("ruleset", 0)),
     ]
     response = pb.RunProgramResponse(
         profile=pb.ProfileSummary(
@@ -235,22 +233,18 @@ def _proof_program() -> pb.Program:
                 ),
             )
         ],
-        rulesets=[
-            pb.Ruleset(
-                name="rebuilding_ruleset", kind=Oneof[Literal["rules"], pb.RuleList]("rules", pb.RuleList(rules=[0]))
-            )
-        ],
         commands=[
+            pb.Command(
+                kind=Oneof[Literal["add_rules"], pb.AddRules](
+                    "add_rules", pb.AddRules(group="rebuilding_ruleset", rules=[0])
+                )
+            ),
             pb.Command(
                 kind=Oneof[Literal["action"], pb.Action](
                     "action", pb.Action(kind=Oneof[Literal["term"], int]("term", 2))
                 )
             ),
-            pb.Command(
-                kind=Oneof[Literal["run"], pb.Run](
-                    "run", pb.Run(ruleset=pb.RulesetRef(kind=Oneof[Literal["index"], int]("index", 0)))
-                )
-            ),
+            pb.Command(kind=Oneof[Literal["run"], pb.Run]("run", pb.Run(groups=["rebuilding_ruleset"]))),
             pb.Command(kind=Oneof[Literal["check"], pb.Check]("check", pb.Check(facts=[5]))),
             pb.Command(kind=Oneof[Literal["prove"], pb.Prove]("prove", pb.Prove(facts=[5]))),
             pb.Command(
@@ -299,7 +293,7 @@ def test_binary_proof_modes_requested_outputs_and_maintenance(proof_engine):
     profile = response.profile
     assert profile is not None
     assert len(profile.runs) == 1
-    assert profile.runs[0].command_path == [1]
+    assert profile.runs[0].command_path == [2]
     assert profile.runs[0].invocations == 1
     for field in ("search_and_apply_nanos", "merge_nanos", "rebuild_nanos"):
         assert profile.runs[0].has_field(field)
@@ -310,18 +304,18 @@ def test_binary_proof_modes_requested_outputs_and_maintenance(proof_engine):
     assert not requested_run.value.can_stop
     paths = [output.location.path for output in response.outputs if output.location is not None]
     if mode in (pb.ExecutionMode.NORMAL, pb.ExecutionMode.TERM_ENCODING):
-        assert paths == [[1]]
+        assert paths == [[2]]
         assert response.error is not None
         assert response.error.code == pb.ErrorCode.PROOF_FAILED
         assert response.error.proof_failure is not None
         assert response.error.proof_failure.reason == pb.ProofFailureReason.PROOFS_NOT_ENABLED
         assert response.error.location is not None
-        assert response.error.location.path == [3]
+        assert response.error.location.path == [4]
         assert not profile.complete
     else:
         assert response.error is None
         assert profile.complete
-        assert paths == ([[1], [2], [3], [4]] if mode == pb.ExecutionMode.PROOF_TESTING else [[1], [3], [4]])
+        assert paths == ([[2], [3], [4], [5]] if mode == pb.ExecutionMode.PROOF_TESTING else [[2], [4], [5]])
         for output in response.outputs[1:]:
             assert output.kind is not None
             assert output.kind.field == "proof"
@@ -338,7 +332,7 @@ def test_binary_proof_modes_requested_outputs_and_maintenance(proof_engine):
     if mode != pb.ExecutionMode.NORMAL:
         assert not response.rules
         assert not profile.runs[0].rules
-        for command in (1, 3):
+        for command in (2, 4):
             site = pb.MaintenanceSite(
                 target=Oneof[Literal["command"], pb.StaticCommandPath]("command", pb.StaticCommandPath(path=[command]))
             )
@@ -346,7 +340,10 @@ def test_binary_proof_modes_requested_outputs_and_maintenance(proof_engine):
             assert summary.invocations > 1
             assert summary.has_field("search_and_apply_nanos")
         assert any(
-            summary.site == pb.MaintenanceSite(target=Oneof[Literal["ruleset"], int]("ruleset", 0))
+            summary.site
+            == pb.MaintenanceSite(
+                target=Oneof[Literal["command"], pb.StaticCommandPath]("command", pb.StaticCommandPath(path=[0]))
+            )
             for summary in profile.maintenance
         )
 
@@ -369,7 +366,6 @@ def test_binary_proof_prefix_clone_and_native_error_order(proof_engine):
     program = _proof_program()
     program.declarations.clear()
     program.rules.clear()
-    program.rulesets.clear()
     program.commands = [
         pb.Command(
             kind=Oneof[Literal["prove_exists"], pb.ProveExists]("prove_exists", pb.ProveExists(constructor="Goal"))
@@ -491,7 +487,7 @@ def test_binary_encoded_print_function_returns_typed_logical_rows(proof_engine, 
     engine, handles, _mode = proof_engine
     program = _proof_program()
     program.commands = [
-        program.commands[0],
+        program.commands[1],
         pb.Command(
             kind=Oneof[Literal["print_function"], pb.PrintFunction](
                 "print_function", pb.PrintFunction(table="N", max_rows=max_rows)
@@ -562,9 +558,7 @@ def test_binary_unknown_mode_and_profile_off_stay_explicit():
     created = pb.CreateEGraphResponse.from_binary(engine.create(request.to_binary()))
     try:
         encoded, host_error = engine.run(
-            pb.RunProgramRequest(
-                egraph_id=created.egraph_id, program=pb.Program(), profile=False
-            ).to_binary()
+            pb.RunProgramRequest(egraph_id=created.egraph_id, program=pb.Program(), profile=False).to_binary()
         )
         assert host_error is None
         response = pb.RunProgramResponse.from_binary(encoded)
