@@ -6,7 +6,7 @@ the normal Python API. The generated protocol types live in
 `egglog_proto.egglog.v1.egglog_pb`.
 
 `egglog.bindings` is the private native transport. Its `_ProtoEngine` accepts
-bytes for creation, execution, cloning, destruction, resource configuration and
+bytes for creation, execution, cloning, destruction, history retrieval and
 scope return. Results are bytes, except that execution also returns an original
 Python callback exception when one occurred. `PrimitiveFailure`, re-exported
 from `egglog`, marks an expected host primitive non-match.
@@ -17,8 +17,10 @@ declarations for generation; builtin signatures come from their native owners.
 
 The extension has no public native EGraph, AST/command classes, raw values,
 extractor, snapshot, plan wrappers or tracing configuration functions. Extraction,
-compaction, snapshots and reports use the generated protocol records. Report
-detail is selected with the generated `egglog.ReportLevel` enum, and
+compaction and snapshots use the generated protocol records. Ordinary execution
+returns `RunResult` with `updated` and `can_stop`; explicit diagnostics use one
+opaque `Diagnostic` document. `_ProtoEngine.run_stream` delivers encoded owned
+chunks synchronously to a callback, with the same original exception channel.
 `EGraph.freeze()` returns an owned `EGraphSnapshot`.
 
 ## Thread safety

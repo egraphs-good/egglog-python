@@ -786,37 +786,52 @@ def _(i: i64, j: i64):
 ### `run`
 
 Use {meth}`egglog.egraph.EGraph.run` to execute a schedule and inspect the
-`RunReport` for per-run counters and timings:
+two semantic flags in its generated `RunResult`:
 
 ```{code-cell} python
 egraph = EGraph()
 expr = egraph.let("expr", DebugMath(2) + DebugMath(3))
 egraph.register(set_(score(expr)).to(5))
 
-report = egraph.run(debug_rules)
-report.num_matches_per_rule
+result = egraph.run(debug_rules)
+result.updated, result.can_stop
 ```
 
-`report.updated` records whether the run changed the database. The separate
-`report.can_stop` flag is true only when the run observed no changes and its
+`result.updated` records whether the run changed the database. The separate
+`result.can_stop` flag is true only when the run observed no changes and its
 scheduler has no deferred work that requires another iteration.
 
-The per-rule maps use immutable `RuleKey` inspection objects, backed by the
-canonical authored rule or rewrite. Their repr is readable Python rule syntax;
-structurally equal authored bodies group together even when installed as distinct
-memberships. These keys are not raw native names or mutable authoring wrappers.
-The report retains actual native histories and aggregate maps; totals are not
-reconstructed from the iteration list. `None` plans mean that no plan was recorded,
-which differs from a recorded empty plan.
+Detailed metric collection is off by default. Request an opaque backend document
+with `result, diagnostic = egraph.run_with_diagnostics(debug_rules)`.
+`diagnostic.format` identifies its format and `diagnostic.content` carries the
+text or JSON. Its backend fields are diagnostic data rather than a portable
+report API. `egraph.explain(*groups)` inspects plans for already installed group
+names without executing rules; omitting groups selects the default group.
 
 Schedules author sequencing, bounded repetition, saturation, BackOff bindings
 and conjunctive `until` queries as canonical records without an engine.
-Local scheduler scopes retain their explicit placement; persistent configurations
-have distinct identities but are not deployed yet. Actual custom-scheduler and
-`until` execution still fails explicitly at the shared adapter boundary; ordinary
-scheduler-free execution is unchanged.
+Local scheduler scopes retain their explicit placement. Persistent BackOff
+bindings and scheduler progress follow graph push/pop.
 Constructing a schedule does not install rules; printing it can materialize deferred
 rule generators, and later appended rules remain visible when it is run.
+
+### Live observations
+
+Pass `on_output=callback` to `run` or `run_with_diagnostics` to consume owned
+protobuf response chunks while execution is in progress. For snapshots,
+`schedule.with_snapshots()` appends one Freeze after the selected schedule.
+Place that schedule inside a loop to choose the observation cadence, for example
+`debug_rules.with_snapshots() * 3`. `EGraph.saturate()` uses these live snapshots
+for its existing per-round visualization. Notebook widgets update as snapshots
+arrive; the standalone browser view opens the collected history after completion.
+
+The callback is synchronous, so a slow consumer pauses execution without a
+growing queue. Return `False` to cancel at a safe command boundary. Completed
+effects and delivered observations remain available after cancellation or a
+later error; cancellation does not roll back. Inspect owned snapshots in the
+callback; operations on the executing graph are rejected. Callback exceptions
+retain their original Python identity. Buffered calls collect the same canonical
+stream. Input history continues to record inputs only.
 
 ### Recording replayable source
 
@@ -843,12 +858,12 @@ flags are still unsupported.
 
 ### `stats`
 
-Use {meth}`egglog.egraph.EGraph.stats` when you want cumulative counters for the
-current e-graph instead of only the most recent run:
+Use {meth}`egglog.egraph.EGraph.stats` for a cumulative backend `Diagnostic` in
+the same opaque format:
 
 ```{code-cell} python
 stats = egraph.stats()
-stats.num_matches_per_rule
+stats.format
 ```
 
 ### `function_values`

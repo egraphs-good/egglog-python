@@ -15,6 +15,7 @@ use pyo3::exceptions::{PyBaseException, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use std::cmp::Ordering;
+use std::ops::ControlFlow;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
 
@@ -524,7 +525,6 @@ mod tests {
             let request = pb::RunProgramRequest {
                 egraph_id: id,
                 program: Some(program),
-                profile: true,
                 ..Default::default()
             }
             .encode_to_vec();
@@ -713,7 +713,6 @@ mod tests {
             let request = pb::RunProgramRequest {
                 egraph_id: id,
                 program: Some(custom_program(b"inert provider payload".to_vec())),
-                profile: true,
                 ..Default::default()
             };
             let error = instance
@@ -1730,7 +1729,6 @@ mod tests {
         let request = pb::RunProgramRequest {
             egraph_id: id,
             program: Some(program),
-            profile: true,
             ..Default::default()
         };
         pb::RunProgramResponse::decode(engine.run(&request.encode_to_vec()).unwrap().as_slice())
@@ -1968,6 +1966,39 @@ impl ProtoEngine {
         request: &Bound<'py, PyBytes>,
     ) -> PyResult<(Bound<'py, PyBytes>, Option<Py<PyBaseException>>)> {
         self.run_request(py, request, Engine::run)
+    }
+
+    fn run_stream<'py>(
+        &mut self,
+        py: Python<'py>,
+        request: &Bound<'py, PyBytes>,
+        on_output: Py<PyAny>,
+    ) -> PyResult<(Bound<'py, PyBytes>, Option<Py<PyBaseException>>)> {
+        let errors = self.py_error.clone();
+        self.run_request(py, request, move |engine, bytes| {
+            let mut latest = Vec::new();
+            engine.run_stream(bytes, &mut |chunk| {
+                latest = chunk.encode_to_vec();
+                Python::attach(|py| {
+                    match on_output
+                        .bind(py)
+                        .call1((PyBytes::new(py, &latest),))
+                        .and_then(|value| value.extract::<bool>())
+                    {
+                        Ok(true) => ControlFlow::Continue(()),
+                        Ok(false) => ControlFlow::Break(()),
+                        Err(error) => {
+                            let mut first = errors.lock().unwrap();
+                            if first.is_none() {
+                                *first = Some(error);
+                            }
+                            ControlFlow::Break(())
+                        }
+                    }
+                })
+            })?;
+            Ok(latest)
+        })
     }
 
     fn clone_graph<'py>(

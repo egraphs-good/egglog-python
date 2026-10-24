@@ -42,7 +42,7 @@ def _replay_recorded_source(text: str) -> list[pb.RunProgramResponse]:
                 assert type(program) is bytes
                 encoded, host_error = graph._state.transport.run(
                     pb.RunProgramRequest(
-                        egraph_id=graph._state.handle, program=pb.Program.from_binary(program), profile=True
+                        egraph_id=graph._state.handle, program=pb.Program.from_binary(program)
                     ).to_binary()
                 )
                 response = pb.RunProgramResponse.from_binary(encoded)
@@ -228,7 +228,6 @@ def test_global_naive_recording_rejects_missing_source_creation_context() -> Non
 
 @pytest.mark.parametrize("bidirectional", [False, True], ids=["rewrite", "birewrite"])
 def test_global_rule_options_execute_without_fake_saved_rewrite_options(*, bidirectional: bool) -> None:
-    from egglog.run_report import RuleKey  # noqa: PLC0415
 
     class RewriteConfigExpr(Expr):
         def __init__(self, value: i64Like) -> None: ...
@@ -257,8 +256,7 @@ def test_global_rule_options_execute_without_fake_saved_rewrite_options(*, bidir
     egraph.check(eq(RewriteConfigExpr(i64(1))).to(RewriteConfigExpr(i64(2))))
 
     assert egraph.no_decomp()
-    assert report.num_matches_per_rule
-    assert set(report.num_matches_per_rule) == {RuleKey(registered.__egg_ref__)}
+    assert report.updated
     with pytest.raises(NotImplementedError, match="initial seminaive=False"):
         EGraph(save_egglog_string=True, seminaive=False, no_decomp=True)
 
@@ -4025,8 +4023,8 @@ def test_all_function_size():
     }
 
 
-def test_overall_run_report():
-    assert EGraph().stats()
+def test_overall_diagnostic_document():
+    assert isinstance(EGraph().stats(), pb.Diagnostic)
 
 
 def test_function_values():

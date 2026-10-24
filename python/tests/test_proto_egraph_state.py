@@ -2,6 +2,7 @@
 # Ellipsis bodies are DSL declarations or annotation-introspection fixtures.
 """Record/bytes plumbing tests; the inert responder is not engine conformance."""
 
+import json
 from collections.abc import Callable
 from operator import index
 from threading import Barrier, Event
@@ -205,9 +206,7 @@ def test_source_producer_later_error_preserves_executed_byte_prefix():
             assert (kind, count) == ("program", 0)
             assert type(encoded) is bytes
             response, host_error = graph._state.transport.run(
-                pb.RunProgramRequest(
-                    egraph_id=graph._state.handle, program=pb.Program.from_binary(encoded), profile=True
-                ).to_binary()
+                pb.RunProgramRequest(egraph_id=graph._state.handle, program=pb.Program.from_binary(encoded)).to_binary()
             )
             decoded = pb.RunProgramResponse.from_binary(response)
             assert host_error is None
@@ -223,9 +222,7 @@ def test_source_producer_later_error_preserves_executed_byte_prefix():
             assert (kind, count) == ("program", 0)
             assert encoded is not None
             response, host_error = graph._state.transport.run(
-                pb.RunProgramRequest(
-                    egraph_id=graph._state.handle, program=pb.Program.from_binary(encoded), profile=True
-                ).to_binary()
+                pb.RunProgramRequest(egraph_id=graph._state.handle, program=pb.Program.from_binary(encoded)).to_binary()
             )
             assert host_error is None
             assert pb.RunProgramResponse.from_binary(response).error is None
@@ -309,7 +306,7 @@ def test_persistent_scheduler_deployment_requires_acknowledgement(scheduler_tran
         request = transport.requests[0]
         assert len(request.program.commands) == 1
         assert request.program.commands[0].kind.field == "bind_scheduler"
-        assert not request.include_run_reports
+        assert not request.diagnostics
         assert state._scheduler_bindings[name] == reference.read().kind.value
         for options in (pb.BackOff(match_limit=1, ban_length=0), pb.BackOff(ban_length=0)):
             conflicting = reference.read()
@@ -581,7 +578,7 @@ def _callback_program(tag, callback=_observed_pyerr_callback):
 
 def _callback_exchange(state, program, path):
     """Keep the real encoded request/response before interpreting the atomic error pair."""
-    encoded = pb.RunProgramRequest(egraph_id=state.handle, program=program, profile=True).to_binary()
+    encoded = pb.RunProgramRequest(egraph_id=state.handle, program=program).to_binary()
     assert pb.RunProgramRequest.from_binary(encoded).to_binary() == encoded
     path.with_suffix(".request.pb").write_bytes(encoded)
     response, error = state.transport.run(encoded)
@@ -1366,8 +1363,8 @@ def test_table_constant_projection_does_not_invoke_callable(monkeypatch):
 
 
 @pytest.mark.parametrize("selected", [False, True])
-@pytest.mark.parametrize("corruption", ["outputs", "kind", "location", "run report", "table", "duplicate"])
-def test_function_sizes_reject_malformed_response_without_engine(monkeypatch, selected, corruption):  # noqa: C901
+@pytest.mark.parametrize("corruption", ["outputs", "kind", "location", "table", "duplicate"])
+def test_function_sizes_reject_malformed_response_without_engine(monkeypatch, selected, corruption):
     @function(egg_fn="size-table")
     def table(value: i64) -> i64: ...
 
@@ -1388,8 +1385,6 @@ def test_function_sizes_reject_malformed_response_without_engine(monkeypatch, se
             )
         case "location":
             output.location = pb.CommandLocation(path=[1])
-        case "run report":
-            output.run_report = pb.NativeRunReport()
         case "table":
             sizes.sizes[0].table = ""
         case "duplicate":
@@ -1825,9 +1820,12 @@ def test_schedule_additions_are_ordered_once_before_control_loops(monkeypatch, c
     assert [rule.name for rule in resolved.rules] == ["first", "last"]
 
 
-@pytest.mark.parametrize("operation", ["run", "stats"])
-@pytest.mark.parametrize("malformed", ["location", "kind", "missing", "flags"])
-def test_public_reports_require_the_requested_top_level_output(monkeypatch, operation, malformed):
+@pytest.mark.parametrize(
+    ("operation", "malformed"),
+    [(operation, malformed) for operation in ("run", "stats") for malformed in ("location", "kind", "missing")]
+    + [("run", "flags")],
+)
+def test_public_run_and_stats_require_the_requested_top_level_output(monkeypatch, operation, malformed):
     from egglog import seq  # noqa: PLC0415
 
     class InertTransport:
@@ -1835,28 +1833,24 @@ def test_public_reports_require_the_requested_top_level_output(monkeypatch, oper
             return pb.CreateEGraphResponse(egraph_id=1, threads=1).to_binary()
 
         def run(self, encoded):
-            report = pb.NativeRunReport(can_stop=True)
             output = pb.CommandOutput(
                 location=pb.CommandLocation(path=[1] if malformed == "location" else [0]),
-                kind=Oneof[Literal["statistics"], pb.NativeRunReport]("statistics", report)
+                kind=Oneof[Literal["diagnostic"], pb.Diagnostic](
+                    "diagnostic", pb.Diagnostic(format="application/json", content="{}")
+                )
                 if operation == "stats"
-                else Oneof[Literal["loop"], pb.LoopOutcome](
-                    "loop", pb.LoopOutcome(termination=pb.TerminationReason.COUNT_REACHED)
-                ),
-                run_report=report if operation == "run" else None,
+                else Oneof[Literal["run"], pb.RunResult]("run", pb.RunResult(can_stop=True)),
             )
             if malformed == "kind":
-                output.kind = Oneof[Literal["run"], pb.RunOutcome]("run", pb.RunOutcome(can_stop=True))
+                output.kind = (
+                    Oneof[Literal["run"], pb.RunResult]("run", pb.RunResult())
+                    if operation == "stats"
+                    else Oneof[Literal["diagnostic"], pb.Diagnostic]("diagnostic", pb.Diagnostic())
+                )
             elif malformed == "missing":
                 output.kind = None
             elif malformed == "flags":
-                if operation == "run":
-                    output_kind = output.kind
-                    assert output_kind is not None
-                    assert output_kind.field == "loop"
-                    output_kind.value.updated = True
-                else:
-                    output.run_report = report
+                output.kind = Oneof[Literal["run"], pb.RunResult]("run", pb.RunResult(updated=True, can_stop=True))
             return pb.RunProgramResponse(outputs=[output]).to_binary(), None
 
         def destroy(self, encoded):
@@ -1864,20 +1858,25 @@ def test_public_reports_require_the_requested_top_level_output(monkeypatch, oper
 
     monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
     graph = EGraph()
-    with pytest.raises(ValueError, match=r"report|statistics"):
+    with pytest.raises(ValueError, match=r"Run|Stats|stopping"):
         graph.run(seq()) if operation == "run" else graph.stats()
 
 
 def _run_ruleset_step(graph, selected=None):
-    """Execute one group selection and normalize canonical rule reports by label."""
+    """Inspect backend match counts only in explicit cursor/identity diagnostics."""
     from egglog import run  # noqa: PLC0415
 
-    report = graph.run(run(selected))
-    result: dict[str, int] = {}
-    for key, count in report.num_matches_per_rule.items():
-        name = key.__egg_ref__.read().name
-        result[name] = result.get(name, 0) + count
-    return result
+    _, diagnostic = graph.run_with_diagnostics(run(selected))
+    document: object = json.loads(diagnostic.content)
+    assert isinstance(document, dict)
+    matches = document["num_matches_per_rule"]
+    assert isinstance(matches, dict)
+    counts: list[int] = []
+    for count in matches.values():
+        assert isinstance(count, int)
+        if count:
+            counts.append(count)
+    return sorted(counts)
 
 
 def test_mixed_registration_is_one_ordered_input_program(monkeypatch):
@@ -1971,7 +1970,7 @@ def test_native_public_union_occurrence_boundary(tmp_path, reuse):
 
 
 def test_ruleset_append_preserves_native_cursor(tmp_path):
-    """Real encoded execution; raw summaries are not a public RunReport."""
+    """Real encoded execution, with explicitly requested backend counts."""
     from egglog import rule, ruleset, var  # noqa: PLC0415
 
     class Input(Expr):
@@ -2007,12 +2006,12 @@ def test_ruleset_append_preserves_native_cursor(tmp_path):
     x = var("x", i64)
     selected = ruleset(rule(Input(x), name="old").then(Old(x)), name="append_cursor")
 
-    assert _run_ruleset_step(graph, selected) == {"old": 1}
+    assert _run_ruleset_step(graph, selected) == [1]
     graph.check(Old(1))  # type: ignore[arg-type]  # Retain runtime integer-to-i64 coercion.
     selected.append(rule(Input(x), name="new").then(New(x)))
-    assert _run_ruleset_step(graph, selected) == {"new": 1}
+    assert _run_ruleset_step(graph, selected) == [1]
     graph.check(Old(1), New(1))  # type: ignore[arg-type]  # Retain runtime integer-to-i64 coercion.
-    assert _run_ruleset_step(graph, selected) == {}
+    assert _run_ruleset_step(graph, selected) == []
 
 
 @pytest.mark.parametrize("seeded", [False, True])
@@ -2058,11 +2057,11 @@ def test_native_class_default_rewrite_and_unregistered_closure(tmp_path, seeded)
     if seeded:
         graph.register(expression)
     matches = _run_ruleset_step(graph, selected)
-    assert matches == ({"": 1} if seeded else {})
+    assert matches == ([1] if seeded else [])
     if seeded:
         graph.check(eq(expression).to(Result(2)))  # type: ignore[arg-type]
     else:
-        assert _run_ruleset_step(graph, selected) == {}
+        assert _run_ruleset_step(graph, selected) == []
     assert callbacks == [1]
     declared = set()
     for request in requests:
@@ -2124,7 +2123,6 @@ def test_native_free_ruleset_body_is_deferred_with_complete_closure(table_transp
 @pytest.mark.parametrize("enabled", [False, True])
 def test_native_birewrite_runs_each_guarded_direction(table_transport, reverse, enabled):
     from egglog import birewrite, ruleset  # noqa: PLC0415
-    from egglog.run_report import RuleKey  # noqa: PLC0415
 
     class Box(Expr):
         pass
@@ -2132,27 +2130,20 @@ def test_native_birewrite_runs_each_guarded_direction(table_transport, reverse, 
     selected = ruleset()
     left, right = constant("left", Box), constant("right", Box)
     guard = constant("guard", i64)
-    authored = birewrite(left, selected).to(right, eq(guard).to(i64(5)))
+    birewrite(left, selected).to(right, eq(guard).to(i64(5)))
     seed, target = (right, left) if reverse else (left, right)
-    graph, requests, responses = table_transport
+    graph, requests, _responses = table_transport
     graph.register(seed, set_(guard).to(i64(5 if enabled else 6)))
     assert graph.function_size(seed) == 1
     assert graph.function_size(target) == 0
     graph.check_fail(eq(seed).to(target))
     report = graph.run(selected)
-    native_report = responses[-1].outputs[0].run_report
-    assert native_report is not None
     assert report.updated is enabled
     assert graph.function_size(target) == int(enabled)
     if enabled:
         graph.check(eq(seed).to(target))
-        assert list(report.search_and_apply_time_per_rule) == [RuleKey(authored.__egg_ref__)]
-        assert "birewrite(" in str(report)
     else:
         graph.check_fail(eq(seed).to(target))
-        assert not report.search_and_apply_time_per_rule
-        assert not native_report.search_and_apply_time_per_rule
-        assert not native_report.num_matches_per_rule
     encoded_rules = [rule for request in requests for rule in request.program.rules]
     assert encoded_rules
     assert all(rule.kind.field == "birewrite" for rule in encoded_rules)
@@ -2185,11 +2176,11 @@ def test_native_same_ident_retains_all_completed_memberships(native_rule_program
     r1, r2 = ruleset(first, name="same"), ruleset(second, name="same")
     graph = EGraph()
     graph.register(Seed(1))
-    assert _run_ruleset_step(graph, r1) == {"first": 1}
-    assert _run_ruleset_step(graph, r2) == {"second": 1}
-    assert _run_ruleset_step(graph, r1) == {}
+    assert _run_ruleset_step(graph, r1) == [1]
+    assert _run_ruleset_step(graph, r2) == [1]
+    assert _run_ruleset_step(graph, r1) == []
     graph.register(Seed(2))
-    assert _run_ruleset_step(graph, r1) == {"first": 1, "second": 1}
+    assert _run_ruleset_step(graph, r1) == [1, 1]
     graph.check(First(1), Second(1), First(2), Second(2))
 
 
@@ -2201,7 +2192,7 @@ def test_native_combined_same_group_adds_both_bodies_in_order(native_rule_progra
     r1, r2 = ruleset(first, name="same"), ruleset(second, name="same")
     graph = EGraph()
     graph.register(Seed(1))
-    assert _run_ruleset_step(graph, r2 | r1 if reverse else r1 | r2) == {"first": 1, "second": 1}
+    assert _run_ruleset_step(graph, r2 | r1 if reverse else r1 | r2) == [1, 1]
     graph.check(First(1), Second(1))
 
 
@@ -2213,13 +2204,13 @@ def test_native_combined_materializes_current_child_additions(native_rule_progra
     combined = left | ruleset(name="empty")
     graph = EGraph()
     graph.register(Seed(1))
-    assert _run_ruleset_step(graph, combined) == {"first": 1}
+    assert _run_ruleset_step(graph, combined) == [1]
     left.append(second)
-    assert _run_ruleset_step(graph, combined) == {"second": 1}
+    assert _run_ruleset_step(graph, combined) == [1]
     graph.check(Second(1))
-    assert _run_ruleset_step(graph, left) == {}
+    assert _run_ruleset_step(graph, left) == []
     graph.register(Seed(2))
-    assert _run_ruleset_step(graph, combined) == {"first": 1, "second": 1}
+    assert _run_ruleset_step(graph, combined) == [1, 1]
     graph.check(First(2), Second(2))
 
 
@@ -2231,9 +2222,9 @@ def test_native_content_shared_across_groups_keeps_one_cursor(native_rule_progra
     graph.register(Seed(1))
     r1 = ruleset(first, first, name="independent_one")
     r2 = ruleset(first, name="independent_two")
-    assert _run_ruleset_step(graph, r1) == {"first": 1}
-    assert _run_ruleset_step(graph, r2) == {}
-    assert _run_ruleset_step(graph, r1) == {}
+    assert _run_ruleset_step(graph, r1) == [1]
+    assert _run_ruleset_step(graph, r2) == []
+    assert _run_ruleset_step(graph, r1) == []
 
 
 @pytest.mark.parametrize("prefix_rule", [False, True])
@@ -2253,7 +2244,7 @@ def test_native_mixed_registration_rejects_invalid_program_before_any_command(na
     assert graph.check_bool(Seed(1)) is prefix_rule
     graph.check_fail(First(1))
     graph.check_fail(Second(2))
-    assert _run_ruleset_step(graph) == {}
+    assert _run_ruleset_step(graph) == []
 
 
 @pytest.mark.parametrize("prefix_rule", [False, True])
@@ -2270,7 +2261,7 @@ def test_native_mixed_registration_keeps_runtime_failure_prefix(native_rule_prog
     graph.check(Seed(1))
     graph.check_fail(First(1))
     graph.check_fail(Second(2))
-    assert _run_ruleset_step(graph) == ({"first": 1} if prefix_rule else {})
+    assert _run_ruleset_step(graph) == ([1] if prefix_rule else [])
     assert graph.check_bool(First(1)) is prefix_rule
     graph.check_fail(Second(2))
 
@@ -2281,18 +2272,18 @@ def test_native_valid_mixed_registration_and_scope_memberships(native_rule_progr
     Seed, First, Second, first, second = native_rule_program
     graph = EGraph()
     graph.register(Seed(1), first, Second(1))
-    assert _run_ruleset_step(graph) == {"first": 1}
+    assert _run_ruleset_step(graph) == [1]
     graph.check(First(1), Second(1))
     graph.push()
     graph.register(second)
-    assert _run_ruleset_step(graph) == {"second": 1}
+    assert _run_ruleset_step(graph) == [1]
     graph.pop()
     graph.register(Seed(2))
-    assert _run_ruleset_step(graph) == {"first": 1}
+    assert _run_ruleset_step(graph) == [1]
     graph.check(First(2))
     graph.check_fail(Second(2))
     explicit = ruleset(second, name="explicit")
-    assert _run_ruleset_step(graph, explicit) == {"second": 2}
+    assert _run_ruleset_step(graph, explicit) == [2]
 
 
 def test_native_repeated_registration_is_idempotent_and_labels_do_not_collide(native_rule_program):
@@ -2301,19 +2292,19 @@ def test_native_repeated_registration_is_idempotent_and_labels_do_not_collide(na
     Seed, First, Second, first, _ = native_rule_program
     graph = EGraph()
     graph.register(Seed(1), first, first)
-    assert _run_ruleset_step(graph) == {"first": 1}
+    assert _run_ruleset_step(graph) == [1]
     graph.register(first)
-    assert _run_ruleset_step(graph) == {}
+    assert _run_ruleset_step(graph) == []
     x = var("x", i64)
     relabeled = rule(Seed(x), name="another label").then(First(x))
     graph.register(relabeled)
-    assert _run_ruleset_step(graph) == {}
+    assert _run_ruleset_step(graph) == []
     different = rule(Seed(x), name="first").then(Second(x))
     graph.register(different)
-    assert _run_ruleset_step(graph) == {"first": 1}
+    assert _run_ruleset_step(graph) == [1]
     graph.check(First(1), Second(1))
     group = ruleset(first, relabeled, name="shared-content")
-    assert _run_ruleset_step(graph, group) == {}
+    assert _run_ruleset_step(graph, group) == []
 
 
 def test_native_publication_clone_before_and_after_append(native_rule_program):
@@ -2323,18 +2314,18 @@ def test_native_publication_clone_before_and_after_append(native_rule_program):
     selected = ruleset(first, name="cloned")
     graph = EGraph()
     graph.register(Seed(1))
-    assert _run_ruleset_step(graph, selected) == {"first": 1}
+    assert _run_ruleset_step(graph, selected) == [1]
     graph.push()
     selected.append(second)
-    assert _run_ruleset_step(graph, selected) == {"second": 1}
+    assert _run_ruleset_step(graph, selected) == [1]
     graph.pop()
     graph.check(First(1))
     graph.check_fail(Second(1))
-    assert _run_ruleset_step(graph, selected) == {"second": 1}
+    assert _run_ruleset_step(graph, selected) == [1]
     graph.push()
-    assert _run_ruleset_step(graph, selected) == {}
+    assert _run_ruleset_step(graph, selected) == []
     graph.pop()
-    assert _run_ruleset_step(graph, selected) == {}
+    assert _run_ruleset_step(graph, selected) == []
 
 
 def test_native_addition_keeps_independent_compatible_declaration_owners():
@@ -2345,9 +2336,9 @@ def test_native_addition_keeps_independent_compatible_declaration_owners():
     assert left.__egg_ref__.owner is not right.__egg_ref__.owner
     selected = ruleset(rule(name="first").then(set_(left).to(1)), name="owners")  # type: ignore[arg-type]
     graph = EGraph()
-    assert _run_ruleset_step(graph, selected) == {"first": 1}
+    assert _run_ruleset_step(graph, selected) == [1]
     selected.append(rule(name="second").then(set_(right).to(1)))  # type: ignore[arg-type]
-    assert _run_ruleset_step(graph, selected) == {}
+    assert _run_ruleset_step(graph, selected) == []
     graph.check(eq(left).to(1), eq(right).to(1))  # type: ignore[arg-type]
     graph.check(eq(left).to(1))  # type: ignore[arg-type]
     graph.check(eq(right).to(1))  # type: ignore[arg-type]
@@ -2934,13 +2925,12 @@ def resource_transport(monkeypatch: pytest.MonkeyPatch) -> ResourceTransport:
 @pytest.mark.parametrize("seminaive", [False, True])
 @pytest.mark.parametrize("no_decomp", [False, True])
 def test_compilation_flags_and_effective_threads_are_creation_only(resource_transport, seminaive, no_decomp):
-    graph = EGraph(seminaive=seminaive, no_decomp=no_decomp, num_threads=0, report_level=pb.ReportLevel.WITH_PLAN)
+    graph = EGraph(seminaive=seminaive, no_decomp=no_decomp, num_threads=0)
     request = resource_transport.creations[0]
     assert request.options is not None
     assert request.options.seminaive is seminaive
     assert request.no_decomp is no_decomp
     assert request.threads == 0
-    assert request.report_level == pb.ReportLevel.WITH_PLAN
     assert graph.num_threads() == 7
     assert graph.no_decomp() is no_decomp
     graph.push()
@@ -3008,10 +2998,3 @@ def test_creation_requires_positive_effective_thread_count(resource_transport):
     resource_transport.actual_threads = 0
     with pytest.raises(ValueError, match="actual thread count"):
         EGraph()
-
-
-@pytest.mark.parametrize("level", [0, 1, "TIME_ONLY", pb.ReportLevel.UNSPECIFIED])
-def test_invalid_creation_report_level_has_no_transport_effect(resource_transport, level):
-    with pytest.raises(TypeError, match="defined protobuf report level"):
-        EGraph(report_level=level)
-    assert not resource_transport.creations

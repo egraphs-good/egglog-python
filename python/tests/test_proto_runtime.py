@@ -127,7 +127,6 @@ def test_pyobject_local_values_and_trusted_display(class_authoring_without_engin
 
     from egglog import PyObject, py_eval  # noqa: PLC0415
     from egglog.pretty import pretty_ref  # noqa: PLC0415
-    from egglog.run_report import RuleKey  # noqa: PLC0415
 
     original = {"x": [1]}
     value = PyObject(original)
@@ -159,7 +158,6 @@ def test_pyobject_local_values_and_trusted_display(class_authoring_without_engin
     assert str(action) == str(value)
     rewrite_value = rewrite(value).to(PyObject({"x": [2]}))  # type: ignore[type-var]
     assert str(value) in str(rewrite_value)
-    assert str(value) in repr(RuleKey(rewrite_value.__egg_ref__))
 
     packed = pack([value.__egg_ref__])
 
@@ -637,8 +635,8 @@ def test_canonical_scheduler_until_queries_and_live_rulesets_without_engine(monk
     assert events == ["first", "failure"]
 
 
-def test_canonical_report_key_contextual_hash_without_engine(monkeypatch):
-    from egglog.run_report import RuleKey  # noqa: PLC0415
+def test_canonical_rule_key_contextual_hash_without_engine(monkeypatch):
+    from egglog._program import _rule_key  # noqa: PLC0415
 
     def forbidden(*args, **kwargs):
         pytest.fail("Report key accessed an engine")
@@ -646,28 +644,28 @@ def test_canonical_report_key_contextual_hash_without_engine(monkeypatch):
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
     first = rule(name="same").then(set_(constant("report-target", i64)).to(1))  # type: ignore[arg-type]
     second = rule(name="same").then(set_(constant("report-target", i64)).to(1))  # type: ignore[arg-type]
-    left, right = RuleKey(first.__egg_ref__), RuleKey(second.__egg_ref__)
+    left, right = _rule_key(first.__egg_ref__), _rule_key(second.__egg_ref__)
     assert left == right
     assert hash(left) == hash(right)
     assert len({left, right}) == 1
     assert "report-target" in repr(left)
     with pytest.raises(TypeError, match="rule"):
-        RuleKey(i64(1).__egg_ref__)
+        _rule_key(i64(1).__egg_ref__)
     with pytest.raises(TypeError):
         hash(first)
     shared = i64(1) + i64(2)
-    shared_key = RuleKey(rule().then(shared, shared).__egg_ref__)
-    copied_key = RuleKey(rule().then(i64(1) + 2, i64(1) + 2).__egg_ref__)
+    shared_key = _rule_key(rule().then(shared, shared).__egg_ref__)
+    copied_key = _rule_key(rule().then(i64(1) + 2, i64(1) + 2).__egg_ref__)
     assert shared_key == copied_key
     assert hash(shared_key) == hash(copied_key)
     nan = struct.unpack("!d", bytes.fromhex("7ff8000000000001"))[0]
     other_nan = struct.unpack("!d", bytes.fromhex("7ff8000000000002"))[0]
-    first_nan = RuleKey(rule().then(f64(nan)).__egg_ref__)
-    equal_nan = RuleKey(rule().then(f64(nan)).__egg_ref__)
+    first_nan = _rule_key(rule().then(f64(nan)).__egg_ref__)
+    equal_nan = _rule_key(rule().then(f64(nan)).__egg_ref__)
     assert first_nan == equal_nan
     assert hash(first_nan) == hash(equal_nan)
-    assert first_nan != RuleKey(rule().then(f64(other_nan)).__egg_ref__)
-    assert RuleKey(rule().then(f64(0.0)).__egg_ref__) == RuleKey(rule().then(f64(-0.0)).__egg_ref__)
+    assert first_nan != _rule_key(rule().then(f64(other_nan)).__egg_ref__)
+    assert _rule_key(rule().then(f64(0.0)).__egg_ref__) == _rule_key(rule().then(f64(-0.0)).__egg_ref__)
 
 
 def test_rule_template_comparison_and_live_rulesets_without_engine(monkeypatch):
@@ -743,8 +741,8 @@ def test_rule_comparison_memo_retains_only_successful_canonical_keys(monkeypatch
     assert first != equal  # Reusing comparison data does not merge occurrences.
 
 
-def test_report_key_default_and_lambda_use_domains_without_engine():
-    from egglog.run_report import RuleKey  # noqa: PLC0415
+def test_rule_key_default_and_lambda_use_domains_without_engine():
+    from egglog._program import _rule_key  # noqa: PLC0415
 
     class Value(Expr):
         def __init__(self) -> None: ...
@@ -762,8 +760,8 @@ def test_report_key_default_and_lambda_use_domains_without_engine():
 
     template = rule().then(choose(Value(), Value()))
     packed = pack([template.__egg_ref__])
-    equal = RuleKey(Builder.from_program(packed.program).publish().ref("rules", packed.indices[0]))
-    key = RuleKey(template.__egg_ref__)
+    equal = _rule_key(Builder.from_program(packed.program).publish().ref("rules", packed.indices[0]))
+    key = _rule_key(template.__egg_ref__)
     assert key == equal
     assert hash(key) == hash(equal)
     declaration = next(
@@ -774,7 +772,7 @@ def test_report_key_default_and_lambda_use_domains_without_engine():
     assert view.params[1].default_expr == original
     view.params[1].default_expr = len(packed.program.nodes)
     packed.program.nodes.append(packed.program.nodes[original])
-    independent = RuleKey(Builder.from_program(packed.program).publish().ref("rules", packed.indices[0]))
+    independent = _rule_key(Builder.from_program(packed.program).publish().ref("rules", packed.indices[0]))
     assert key != independent  # Defaults of one presentation are one allocation domain.
     assert len({key, equal, independent}) == 2
 
@@ -815,7 +813,7 @@ def test_report_key_default_and_lambda_use_domains_without_engine():
                 )
             ),
         )
-        return RuleKey(builder.publish().ref("rules", root))
+        return _rule_key(builder.publish().ref("rules", root))
 
     separate = lambdas(shared_body=False)
     shared = lambdas(shared_body=True)
@@ -827,9 +825,9 @@ def test_report_key_default_and_lambda_use_domains_without_engine():
 
 @pytest.mark.parametrize("allocating", [False, True])
 @pytest.mark.parametrize("bidirectional", [False, True])
-def test_report_key_shared_dag_work_is_bounded(monkeypatch, allocating, bidirectional):
+def test_rule_key_shared_dag_work_is_bounded(monkeypatch, allocating, bidirectional):
     from egglog import _program  # noqa: PLC0415
-    from egglog.run_report import RuleKey  # noqa: PLC0415
+    from egglog._program import _rule_key  # noqa: PLC0415
 
     depth = 14
     if allocating:
@@ -850,16 +848,16 @@ def test_report_key_shared_dag_work_is_bounded(monkeypatch, allocating, bidirect
         left = Value(left, left) if allocating else left + left  # type: ignore[arg-type, operator]
     if allocating:
         parent = Value(left, left)  # type: ignore[arg-type]
-        shared = RuleKey(rule().then(parent, parent).__egg_ref__)
-        duplicated = RuleKey(rule().then(Value(left, left), Value(left, left)).__egg_ref__)  # type: ignore[arg-type]
+        shared = _rule_key(rule().then(parent, parent).__egg_ref__)
+        duplicated = _rule_key(rule().then(Value(left, left), Value(left, left)).__egg_ref__)  # type: ignore[arg-type]
         assert shared == duplicated
         assert hash(shared) == hash(duplicated)
-    first = RuleKey(rule().then(left).__egg_ref__)
+    first = rule().then(left).__egg_ref__
     if bidirectional:
         expression = cast("Expr", left)
-        first = RuleKey(birewrite(expression).to(expression).__egg_ref__)
-    packed = pack([first.__egg_ref__])
-    second = RuleKey(Builder.from_program(packed.program).publish().ref("rules", packed.indices[0]))
+        first = birewrite(expression).to(expression).__egg_ref__
+    packed = pack([first])
+    second = Builder.from_program(packed.program).publish().ref("rules", packed.indices[0])
     original = _program._structural_parts
     visits = 0
 
@@ -870,13 +868,13 @@ def test_report_key_shared_dag_work_is_bounded(monkeypatch, allocating, bidirect
         return original(reference, identity=identity)
 
     monkeypatch.setattr(_program, "_structural_parts", counted)
-    assert first == second
-    assert hash(first) == hash(second)
+    assert _program.rule_equal(first, second)
+    assert hash(_rule_key(first)) == hash(_rule_key(second))
 
 
 def test_rule_template_union_contexts_and_occurrence_identity(monkeypatch):
     from egglog import RewriteOrRule, _program  # noqa: PLC0415
-    from egglog.run_report import RuleKey  # noqa: PLC0415
+    from egglog._program import _rule_key  # noqa: PLC0415
 
     def forbidden(*args, **kwargs):
         pytest.fail("Template comparison accessed an engine")
@@ -929,12 +927,12 @@ def test_rule_template_union_contexts_and_occurrence_identity(monkeypatch):
     shared, independent = authored(shared=True, empty=True), authored(shared=False, empty=True)
     assert shared != independent
     assert not _program.rule_equal(shared.__egg_ref__, independent.__egg_ref__, keys={})
-    assert hash(RuleKey(left.__egg_ref__)) == hash(RuleKey(right.__egg_ref__))
-    assert len({RuleKey(left.__egg_ref__), RuleKey(right.__egg_ref__)}) == 1
+    assert hash(_rule_key(left.__egg_ref__)) == hash(_rule_key(right.__egg_ref__))
+    assert len({_rule_key(left.__egg_ref__), _rule_key(right.__egg_ref__)}) == 1
     assert (
         len({
-            RuleKey(authored(shared=True, empty=True).__egg_ref__),
-            RuleKey(authored(shared=False, empty=True).__egg_ref__),
+            _rule_key(authored(shared=True, empty=True).__egg_ref__),
+            _rule_key(authored(shared=False, empty=True).__egg_ref__),
         })
         == 2
     )
@@ -942,7 +940,7 @@ def test_rule_template_union_contexts_and_occurrence_identity(monkeypatch):
 
 def test_rule_template_comparison_uses_only_referenced_declarations(monkeypatch):
     from egglog import RewriteOrRule, _program  # noqa: PLC0415
-    from egglog.run_report import RuleKey  # noqa: PLC0415
+    from egglog._program import _rule_key  # noqa: PLC0415
 
     def forbidden(*args, **kwargs):
         pytest.fail("Rule closure comparison accessed an engine")
@@ -951,7 +949,7 @@ def test_rule_template_comparison_uses_only_referenced_declarations(monkeypatch)
     first = rule().then(set_(constant("independent_target", i64)).to(1))  # type: ignore[arg-type]
     second = rule().then(set_(constant("independent_target", i64)).to(1))  # type: ignore[arg-type]
     assert first == second
-    assert hash(RuleKey(first.__egg_ref__)) == hash(RuleKey(second.__egg_ref__))
+    assert hash(_rule_key(first.__egg_ref__)) == hash(_rule_key(second.__egg_ref__))
     packed = pack(roots=[second.__egg_ref__])
     program = packed.program
     target = next(
@@ -972,7 +970,7 @@ def test_rule_template_comparison_uses_only_referenced_declarations(monkeypatch)
     modified = RewriteOrRule(Builder.from_program(program).publish().ref("rules", packed.indices[0]))
     assert first != modified  # The command shape alone is identical.
     assert not _program.rule_equal(first.__egg_ref__, modified.__egg_ref__, keys={})
-    assert len({RuleKey(first.__egg_ref__), RuleKey(modified.__egg_ref__)}) == 2
+    assert len({_rule_key(first.__egg_ref__), _rule_key(modified.__egg_ref__)}) == 2
     builder = Builder()
     root = builder.import_ref(first.__egg_ref__)
     builder.import_ref(constant("unrelated", i64).__egg_ref__)
@@ -1312,7 +1310,7 @@ def test_direct_birewrite_preserves_conversion_order_and_destination_on_failure(
 
 
 def test_direct_birewrite_keeps_occurrences_but_compares_structural_keys():
-    from egglog.run_report import RuleKey  # noqa: PLC0415
+    from egglog._program import _rule_key  # noqa: PLC0415
 
     class Box(Expr):
         def __init__(self, value: i64) -> None: ...
@@ -1324,8 +1322,8 @@ def test_direct_birewrite_keeps_occurrences_but_compares_structural_keys():
     assert first != rewrite(lhs).to(rhs)
     assert first != birewrite(rhs).to(lhs)
     assert first != birewrite(lhs).to(rhs, eq(i64(1)).to(i64(1)))
-    assert RuleKey(first.__egg_ref__) == RuleKey(second.__egg_ref__)
-    assert len({RuleKey(first.__egg_ref__), RuleKey(second.__egg_ref__)}) == 1
+    assert _rule_key(first.__egg_ref__) == _rule_key(second.__egg_ref__)
+    assert len({_rule_key(first.__egg_ref__), _rule_key(second.__egg_ref__)}) == 1
     with pytest.raises(TypeError, match="unhashable"):
         hash(first)
     selected = ruleset(first, first, second)
@@ -1340,7 +1338,7 @@ def test_direct_birewrite_keeps_occurrences_but_compares_structural_keys():
 
 
 def test_birewrite_comparison_isolates_directional_union_allocations():
-    from egglog.run_report import RuleKey  # noqa: PLC0415
+    from egglog._program import _rule_key  # noqa: PLC0415
 
     class Box(Expr):
         def __init__(self, value: i64) -> None: ...
@@ -1375,7 +1373,7 @@ def test_birewrite_comparison_isolates_directional_union_allocations():
 
     separate, shared = authored(), authored(shared_across=True, condition_alias=True)
     assert separate == shared  # Sharing across directions/queries is not action allocation identity.
-    assert hash(RuleKey(separate.__egg_ref__)) == hash(RuleKey(shared.__egg_ref__))
+    assert hash(_rule_key(separate.__egg_ref__)) == hash(_rule_key(shared.__egg_ref__))
     assert separate != authored(shared_left=False)
     assert separate != authored(shared_right=False)
 
@@ -2960,7 +2958,7 @@ def test_vec_map_executes_captured_callback_and_replays_source(equality_output):
             assert replay._state.handle is not None
             response, error = replay._state.transport.run(
                 pb.RunProgramRequest(
-                    egraph_id=replay._state.handle, program=pb.Program.from_binary(encoded), profile=True
+                    egraph_id=replay._state.handle, program=pb.Program.from_binary(encoded)
                 ).to_binary()
             )
             assert error is None
@@ -4341,7 +4339,7 @@ def test_public_union_action_freezes_canonical_operands_and_conversion(class_aut
 
 
 def test_public_union_reuse_and_separate_constructions_retain_identity(class_authoring_without_engine):
-    from egglog.run_report import RuleKey  # noqa: PLC0415
+    from egglog._program import _rule_key  # noqa: PLC0415
 
     class UnionNode(Expr):
         def __init__(self, value: i64) -> None: ...
@@ -4364,14 +4362,12 @@ def test_public_union_reuse_and_separate_constructions_retain_identity(class_aut
     head = authored.__egg_ref__.read().kind.value.head
     assert head[0].kind.value == head[1].kind.value == head[2].kind.value
     assert head[0].kind.value != head[3].kind.value
-    assert RuleKey(rule().then(action).__egg_ref__) == RuleKey(rule().then(separate).__egg_ref__)
-    assert hash(RuleKey(rule().then(action).__egg_ref__)) == hash(RuleKey(rule().then(separate).__egg_ref__))
-    assert RuleKey(rule().then(action, action).__egg_ref__) != RuleKey(rule().then(action, separate).__egg_ref__)
+    assert _rule_key(rule().then(action).__egg_ref__) == _rule_key(rule().then(separate).__egg_ref__)
+    assert hash(_rule_key(rule().then(action).__egg_ref__)) == hash(_rule_key(rule().then(separate).__egg_ref__))
+    assert _rule_key(rule().then(action, action).__egg_ref__) != _rule_key(rule().then(action, separate).__egg_ref__)
 
 
 def test_public_union_contextual_rule_and_fact_presentation(class_authoring_without_engine):
-    from egglog.run_report import RuleKey  # noqa: PLC0415
-
     class UnionNode(Expr):
         def __init__(self, value: i64) -> None: ...
 
@@ -4383,7 +4379,7 @@ def test_public_union_contextual_rule_and_fact_presentation(class_authoring_with
     assert str(action) == "union(x).with_(y)"
     authored = rule(query, name="union-context").then(action)
     expected = "rule(eq(x).to(y), name='union-context').then(union(x).with_(y))"
-    assert str(authored) == repr(RuleKey(authored.__egg_ref__)) == expected
+    assert str(authored) == expected
     packed = pack([authored.__egg_ref__]).program
     canonical = _required_oneof(packed.rules[0].kind, "rule", pb.RuleBody)
     assert canonical.query == [_required_oneof(canonical.head[0].kind, "term", int)]

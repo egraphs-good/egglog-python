@@ -6,8 +6,9 @@ _This project uses semantic versioning_
 
 - Use the shared protobuf byte engine throughout the Python frontend. Remove the
   native EGraph, AST, raw-value, extractor and report-wrapper binding APIs;
-  `freeze()` now returns an `EGraphSnapshot`, and report detail uses the generated
-  `ReportLevel` enum. Host Python-object providers and original callback exceptions
+  `freeze()` now returns an `EGraphSnapshot`. Runs return two semantic flags;
+  optional diagnostics use one opaque backend document. Streamed snapshots can
+  reach Python before execution completes. Host providers and original callback exceptions
   remain native. Display and saturation history project snapshots into the
   existing widget/Graphviz format without materializing opaque host values;
   display filtering never changes the snapshot. Custom cost callbacks, notebook

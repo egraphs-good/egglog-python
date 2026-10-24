@@ -37,6 +37,7 @@ if sys.version_info >= (3, 14):
     import annotationlib
 
 from egglog_proto.egglog.v1 import egglog_pb as pb
+from egglog_proto.egglog.v1.egglog_pb import RunResult
 from opentelemetry import trace
 from protobuf import Oneof
 from typing_extensions import ParamSpec, TypeForm
@@ -58,7 +59,6 @@ from .declarations import Ident, RuleEvalMode
 from .egraph_state import *
 from .egraph_state import _CostModelObservation
 from .pretty import _format_pyobject, pretty_ref
-from .run_report import RunReport
 from .runtime import *
 from .runtime import _ClassContext, _definition_at
 from .thunk import *
@@ -91,7 +91,7 @@ __all__ = [
     "RewriteOrRule",
     "RuleEvalMode",
     "Ruleset",
-    "RunReport",
+    "RunResult",
     "Schedule",
     "TreeCostModel",
     "_BirewriteBuilder",
@@ -1453,7 +1453,6 @@ class EGraph:
         record_history: bool = False,
         num_threads: SupportsIndex = 1,
         no_decomp: bool = False,
-        report_level: pb.ReportLevel | None = None,
     ) -> None:
         with _TRACER.start_as_current_span("create"):
             with _TRACER.start_as_current_span("create_bindings"):
@@ -1463,7 +1462,6 @@ class EGraph:
                     record_history=record_history,
                     seminaive=seminaive,
                     no_decomp=no_decomp,
-                    report_level=report_level,
                 )
             self._state_stack = []
             self._token_stack = []
@@ -1574,11 +1572,22 @@ class EGraph:
 
     @overload
     def run(
-        self, limit: int, /, *until: Fact, ruleset: Ruleset | UnstableCombinedRuleset | None = None
-    ) -> RunReport: ...
+        self,
+        limit: int,
+        /,
+        *until: Fact,
+        ruleset: Ruleset | UnstableCombinedRuleset | None = None,
+        on_output: Callable[[pb.RunProgramResponse], bool | None] | None = None,
+    ) -> RunResult: ...
 
     @overload
-    def run(self, schedule: Schedule, /) -> RunReport: ...
+    def run(
+        self,
+        schedule: Schedule,
+        /,
+        *,
+        on_output: Callable[[pb.RunProgramResponse], bool | None] | None = None,
+    ) -> RunResult: ...
 
     @_TRACER.start_as_current_span("run")
     def run(
@@ -1587,43 +1596,85 @@ class EGraph:
         /,
         *until: Fact,
         ruleset: Ruleset | UnstableCombinedRuleset | None = None,
-    ) -> RunReport:
+        on_output: Callable[[pb.RunProgramResponse], bool | None] | None = None,
+    ) -> RunResult:
         """
-        Run the egraph until the given limit or until the given facts are true.
+        Run to the given bound or stop condition, without detailed diagnostics.
+
+        An output callback receives owned chunks during execution. Return False
+        to cancel at a safe command boundary; completed effects remain.
         """
         if isinstance(limit_or_schedule, int):
             limit_or_schedule = run(ruleset, *until) * limit_or_schedule
-        return self._run_schedule(limit_or_schedule)
+        result, _ = self._run_schedule(limit_or_schedule, on_output=on_output)
+        return result
 
-    def _run_schedule(self, schedule: Schedule) -> RunReport:
+    def run_with_diagnostics(
+        self,
+        limit_or_schedule: int | Schedule,
+        /,
+        *until: Fact,
+        ruleset: Ruleset | UnstableCombinedRuleset | None = None,
+        on_output: Callable[[pb.RunProgramResponse], bool | None] | None = None,
+    ) -> tuple[RunResult, pb.Diagnostic]:
+        """Run with an opaque backend diagnostic document."""
+        if isinstance(limit_or_schedule, int):
+            limit_or_schedule = run(ruleset, *until) * limit_or_schedule
+        result, diagnostic = self._run_schedule(limit_or_schedule, diagnostics=True, on_output=on_output)
+        if diagnostic is None:
+            msg = "Run response omitted its requested diagnostic"
+            raise ValueError(msg)
+        return result, diagnostic
+
+    def _run_schedule(  # noqa: C901 -- validate the streamed result/diagnostic pair at one boundary
+        self,
+        schedule: Schedule,
+        *,
+        diagnostics: bool = False,
+        on_output: Callable[[pb.RunProgramResponse], bool | None] | None = None,
+    ) -> tuple[RunResult, pb.Diagnostic | None]:
         if isinstance(schedule, Ruleset | UnstableCombinedRuleset):
             schedule = run(schedule)
         command = schedule._resolve(self._state)
         packed = pack(commands=[command], ambient=self._state.definitions)
-        response, _ = self._state.run_program(packed, include_run_reports=True)
-        if len(response.outputs) != 1 or response.outputs[0].run_report is None:
-            msg = "Run response omitted its complete native report"
-            raise ValueError(msg)
-        output = response.outputs[0]
-        report = output.run_report
-        assert report is not None
-        expected = "run" if command.read().kind.field == "run" else "loop"
-        if (
-            output.location != pb.CommandLocation(path=[0])
-            or output.kind is None
-            or output.kind.field not in ("run", "loop")
-            or output.kind.field != expected
-            or output.kind.value.updated != report.updated
-            or (output.kind.field == "run" and output.kind.value.can_stop != report.can_stop)
-        ):
-            msg = "Run report does not match its requested top-level control"
-            raise ValueError(msg)
-        return RunReport._from_proto(report, response, packed, self._state)
+        result: RunResult | None = None
+        diagnostic: pb.Diagnostic | None = None
 
-    def stats(self) -> RunReport:
-        """
-        Returns the overall run report for the egraph.
-        """
+        def consume(chunk: pb.RunProgramResponse) -> bool | None:
+            nonlocal result, diagnostic
+            for output in chunk.outputs:
+                if output.location != pb.CommandLocation(path=[0]):
+                    continue
+                if output.kind is not None and output.kind.field == "diagnostic" and diagnostics:
+                    if diagnostic is not None:
+                        msg = "Run response repeated its top-level diagnostic"
+                        raise ValueError(msg)
+                    diagnostic = pb.Diagnostic.from_binary(output.kind.value.to_binary())
+                    continue
+                if output.kind is None or output.kind.field != "run":
+                    msg = "Run response does not match its requested top-level control"
+                    raise ValueError(msg)
+                if result is not None:
+                    msg = "Run response repeated its top-level result"
+                    raise ValueError(msg)
+                result = RunResult.from_binary(output.kind.value.to_binary())
+                if result.updated and result.can_stop:
+                    msg = "An updated run cannot also permit stopping"
+                    raise ValueError(msg)
+            return None if on_output is None else on_output(chunk)
+
+        if on_output is None:
+            response, _ = self._state.run_program(packed, diagnostics=diagnostics)
+            consume(response)
+        else:
+            self._state.run_program(packed, diagnostics=diagnostics, on_output=consume)
+        if result is None:
+            msg = "Run response omitted its top-level result"
+            raise ValueError(msg)
+        return result, diagnostic
+
+    def stats(self) -> pb.Diagnostic:
+        """Return cumulative backend diagnostics in the same opaque format."""
         builder = Builder()
         command = builder.add("commands", pb.Command(kind=Oneof[Literal["stats"], pb.Unit]("stats", pb.Unit())))
         packed = pack(commands=[builder.publish().ref("commands", command)])
@@ -1631,13 +1682,30 @@ class EGraph:
         if (
             len(response.outputs) != 1
             or response.outputs[0].kind is None
-            or response.outputs[0].kind.field != "statistics"
+            or response.outputs[0].kind.field != "diagnostic"
             or response.outputs[0].location != pb.CommandLocation(path=[0])
-            or response.outputs[0].run_report is not None
         ):
-            msg = "Stats response omitted its native statistics"
+            msg = "Stats response omitted its diagnostic"
             raise ValueError(msg)
-        return RunReport._from_proto(response.outputs[0].kind.value, response, packed, self._state)
+        return response.outputs[0].kind.value
+
+    def explain(self, *groups: str) -> pb.Diagnostic:
+        """Inspect plans for already installed groups without executing rules."""
+        builder = Builder()
+        command = builder.add(
+            "commands",
+            pb.Command(kind=Oneof[Literal["explain"], pb.Explain]("explain", pb.Explain(groups=list(groups) or [""]))),
+        )
+        response, _ = self._state.run_program([builder.publish().ref("commands", command)])
+        if (
+            len(response.outputs) != 1
+            or response.outputs[0].kind is None
+            or response.outputs[0].kind.field != "diagnostic"
+            or response.outputs[0].location != pb.CommandLocation(path=[0])
+        ):
+            msg = "Explain response omitted its diagnostic"
+            raise ValueError(msg)
+        return response.outputs[0].kind.value
 
     def check_bool(self, *facts: FactLike) -> bool:
         """
@@ -2066,14 +2134,14 @@ class EGraph:
             if exc_type is None:
                 raise
 
-    def _serialize(self, **kwargs: Unpack[GraphvizKwargs]) -> _Graph:
+    def _serialize(self, *, snapshot: pb.EGraphSnapshot | None = None, **kwargs: Unpack[GraphvizKwargs]) -> _Graph:
         """Read logical state over bytes and project a separate, filtered display."""
         from .visualizer_widget import _snapshot_to_data  # noqa: PLC0415
 
         split = {resolve_callable(fn).read().kind.value.name for fn in kwargs.get("split_functions", [])}
         # Backend temporaries are not part of the logical snapshot inventory.
         return _snapshot_to_data(
-            self.freeze(),
+            self.freeze() if snapshot is None else snapshot,
             split_functions=split,
             max_functions=kwargs.get("max_functions"),
             max_calls_per_function=kwargs.get("max_calls_per_function"),
@@ -2131,20 +2199,36 @@ class EGraph:
         **kwargs: Unpack[GraphvizKwargs],
     ) -> None:
         """Run repeated byte schedules until the adapter reports saturation."""
-        from .visualizer_widget import VisualizerWidget  # noqa: PLC0415
+        from .visualizer_widget import IN_IPYTHON, VisualizerWidget  # noqa: PLC0415
 
         history = [json.dumps(self._serialize(**kwargs))] if visualize else []
+        widget = VisualizerWidget(egraphs=history) if visualize else None
+        if widget is not None and IN_IPYTHON:
+            widget.display_or_open()
         failure: BaseException | None = None
+        round_number = 0
+
+        def observe(chunk: pb.RunProgramResponse) -> None:
+            for output in chunk.outputs:
+                if output.kind is not None and output.kind.field == "snapshot":
+                    if visualize:
+                        history.append(json.dumps(self._serialize(snapshot=output.kind.value, **kwargs)))
+                        assert widget is not None
+                        widget.egraphs = history.copy()
+                    if print_frozen:
+                        print(f"After iteration {round_number}:")
+                        print(output.kind.value, "\n")
+
         try:
             for iteration in range(max):
-                report = self.run(schedule or 1)
+                round_number = iteration + 1
+                selected = schedule if schedule is not None else run() * 1
+                report = self.run(
+                    selected.with_snapshots() if visualize or print_frozen else selected,
+                    on_output=observe if visualize or print_frozen else None,
+                )
                 if expr is not None:
                     print(self.extract(expr), "\n")
-                if visualize:
-                    history.append(json.dumps(self._serialize(**kwargs)))
-                if print_frozen:
-                    print(f"After iteration {iteration + 1}:")
-                    print(self.freeze(), "\n")
                 if report.can_stop:
                     break
         except BaseException as error:
@@ -2156,9 +2240,11 @@ class EGraph:
                     error.add_note(f"Could not visualize the failure prefix ({type(observation_error).__name__})")
             raise
         finally:
-            if visualize:
+            if widget is not None:
                 try:
-                    VisualizerWidget(egraphs=history).display_or_open()
+                    widget.egraphs = history
+                    if not IN_IPYTHON:
+                        widget.display_or_open()
                 except Exception as display_error:
                     if failure is None:
                         raise
@@ -2233,7 +2319,6 @@ class EGraph:
             or response.outputs[0].kind is None
             or response.outputs[0].kind.field != "sizes"
             or response.outputs[0].location != pb.CommandLocation(path=[0])
-            or response.outputs[0].run_report is not None
             or len(response.outputs[0].kind.value.sizes) != 1
             or response.outputs[0].kind.value.sizes[0].table != table
         ):
@@ -2254,7 +2339,6 @@ class EGraph:
             or response.outputs[0].kind is None
             or response.outputs[0].kind.field != "sizes"
             or response.outputs[0].location != pb.CommandLocation(path=[0])
-            or response.outputs[0].run_report is not None
         ):
             msg = "Shared adapter did not return all table sizes"
             raise ValueError(msg)
@@ -2326,7 +2410,6 @@ class EGraph:
             or response.outputs[0].kind.field != "printed_function"
             or response.outputs[0].location != pb.CommandLocation(path=[0])
             or response.outputs[0].kind.value.table != signature.name
-            or response.outputs[0].run_report is not None
         ):
             raise ValueError(f"Shared adapter did not return the requested table {signature.name!r}")
         builder = Builder()
@@ -2564,7 +2647,7 @@ class Schedule:
                     msg = "can't convert schedule count to unsigned native size"
                     raise OverflowError(msg)
                 pending.extend(reversed(control.body))
-            elif current.kind.field not in {"bind_scheduler", "add_rules"}:
+            elif current.kind.field not in {"bind_scheduler", "add_rules", "freeze"}:
                 msg = f"Schedule command is not migrated: {current.kind.field}"
                 raise NotImplementedError(msg)
         for leaf in leaves:
@@ -2619,6 +2702,34 @@ class Schedule:
 
     def __repr__(self) -> str:
         return str(self)
+
+    def with_snapshots(self) -> Schedule:
+        """
+        Observe one owned snapshot after this schedule completes.
+
+        Place the returned schedule inside a loop to request an observation
+        after each iteration. The observation can be consumed during execution
+        through the run output callback.
+        """
+        source = run(self) if isinstance(self, Ruleset | UnstableCombinedRuleset) else self
+        builder = Builder()
+        command: pb.Command = _copy_record(
+            source._command.read(),
+            relocate=lambda role, index: builder.import_ref(source._command.owner.ref(role, index)),
+        )
+        index = builder.add(
+            "commands",
+            pb.Command(
+                kind=Oneof[Literal["repeat"], pb.Repeat](
+                    "repeat",
+                    pb.Repeat(
+                        times=1,
+                        body=[command, pb.Command(kind=Oneof[Literal["freeze"], pb.Freeze]("freeze", pb.Freeze()))],
+                    ),
+                )
+            ),
+        )
+        return Schedule(builder.publish().ref("commands", index), source._bindings, source._schedulers)
 
     def __mul__(self, length: int) -> Schedule:
         """

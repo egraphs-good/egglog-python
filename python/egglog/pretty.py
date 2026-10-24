@@ -314,6 +314,8 @@ def pretty_ref(  # noqa: C901, PLR0912
                         pieces.append(f" * {count}")
             elif record.kind.field == "stats":
                 pieces = ["stats()"]
+            elif record.kind.field == "explain":
+                pieces = ["explain(" + ", ".join(repr(group) for group in record.kind.value.groups) + ")"]
             else:
                 msg_0 = f"Command presentation is not migrated: {record.kind.field}"
                 raise NotImplementedError(msg_0)

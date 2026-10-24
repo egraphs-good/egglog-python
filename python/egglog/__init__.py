@@ -2,8 +2,6 @@
 Package for creating e-graphs in Python.
 """
 
-from egglog_proto.egglog.v1.egglog_pb import ReportLevel as ReportLevel
-
 from . import config, ipython_magic  # noqa: F401
 from .bindings import PrimitiveFailure as PrimitiveFailure
 from .builtins import *

@@ -53,7 +53,6 @@ class EGraphState:
         record_history: object = False,
         seminaive: object = True,
         no_decomp: object = False,
-        report_level: pb.ReportLevel | None = None,
     ) -> None:
         num_threads = _thread_count(num_threads)
         if not isinstance(seminaive, bool) or not isinstance(no_decomp, bool):
@@ -65,11 +64,6 @@ class EGraphState:
         if save_egglog_string and not seminaive:
             msg = "Recording cannot replay initial seminaive=False without a Source creation context"
             raise NotImplementedError(msg)
-        if report_level is not None and (
-            type(report_level) is not pb.ReportLevel or report_level == pb.ReportLevel.UNSPECIFIED
-        ):
-            msg = "Expected a defined protobuf report level"
-            raise TypeError(msg)
         self.transport = bindings._ProtoEngine()
         # The public default cost sort is an ambient engine builtin. Creation
         # references it directly; authored Programs still send full declarations.
@@ -79,7 +73,6 @@ class EGraphState:
             threads=num_threads,
             no_decomp=no_decomp,
             record_history=record_history,
-            report_level=report_level,
         )
         response = pb.CreateEGraphResponse.from_binary(self.transport.create(request.to_binary()))
         self.handle: int | None = response.egraph_id
@@ -123,10 +116,16 @@ class EGraphState:
         commands: Iterable[Ref] | Packed,
         *,
         roots: Iterable[Ref] = (),
-        include_run_reports: bool = False,
+        diagnostics: bool = False,
+        on_output: Callable[[pb.RunProgramResponse], bool | None] | None = None,
         allow_failed_check: bool = False,
     ) -> tuple[pb.RunProgramResponse, Owner]:
-        """Pack canonical command closure once and adopt the returned records."""
+        """
+        Pack canonical command closure once and adopt the returned records.
+
+        With an output callback, the returned response is the terminal chunk;
+        preceding owned observations are delivered only through the callback.
+        """
         if self._cost_model_active or self._native_running:
             msg = "Cannot execute engine operations during a cost-model callback"
             raise RuntimeError(msg)
@@ -145,9 +144,7 @@ class EGraphState:
         ):
             msg = "Failed-check policy requires exactly one top-level Check"
             raise ValueError(msg)
-        request = pb.RunProgramRequest(
-            egraph_id=self.handle, program=packed.program, profile=True, include_run_reports=include_run_reports
-        )
+        request = pb.RunProgramRequest(egraph_id=self.handle, program=packed.program, diagnostics=diagnostics)
         encoded_request = request.to_binary()
         scheduler_bindings = [
             _copy_record(command.kind.value)
@@ -179,10 +176,23 @@ class EGraphState:
         # After transport starts, never retry an unacknowledged deployment.
         for binding in scheduler_bindings:
             self._scheduler_bindings.setdefault(binding.name, None)
+
+        def consume(encoded: bytes) -> bool:
+            assert on_output is not None
+            chunk = pb.RunProgramResponse.from_binary(encoded)
+            result = cast("object", on_output(chunk))
+            if result is not None and type(result) is not bool:
+                msg = "Output callbacks must return bool or None"
+                raise TypeError(msg)
+            return result is not False
+
         self._native_running = True
         self._active_definitions = packed.definitions
         try:
-            encoded, host_error = self.transport.run(encoded_request)
+            if on_output is None:
+                encoded, host_error = self.transport.run(encoded_request)
+            else:
+                encoded, host_error = self.transport.run_stream(encoded_request, consume)
         except BaseException:
             if self._recording:
                 self.transport.finish_recording(False)

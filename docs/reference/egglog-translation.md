@@ -717,7 +717,7 @@ step_egraph.run(run(step_right, scheduler=bo))
 The scheduler is registered once on that e-graph and reused by both calls. A
 persistent scheduler has its own identity, so deriving it from another
 scheduler configuration does not alias that configuration's local state.
-High-level `EGraph.saturate()` also waits for `RunReport.can_stop`, so a
+High-level `EGraph.saturate()` also waits for `RunResult.can_stop`, so a
 no-change round does not discard work deferred by a persistent scheduler.
 
 ## Check

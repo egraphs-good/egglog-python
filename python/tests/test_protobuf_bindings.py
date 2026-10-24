@@ -114,9 +114,7 @@ def test_binary_engine_lifecycle_and_scalar_extract():
             )
         ],
     )
-    encoded, host_error = engine.run(
-        pb.RunProgramRequest(egraph_id=created.egraph_id, program=program, profile=True).to_binary()
-    )
+    encoded, host_error = engine.run(pb.RunProgramRequest(egraph_id=created.egraph_id, program=program).to_binary())
     assert host_error is None
     response = pb.RunProgramResponse.from_binary(encoded)
     assert response.error is None
@@ -142,43 +140,6 @@ def test_binary_engine_rejects_non_bytes_and_malformed_payloads():
         engine.create(pb.CreateEGraphRequest())  # type: ignore[arg-type]
     with pytest.raises(ValueError, match=r".+"):
         engine.create(b"\xff")
-
-
-def test_maintenance_reader_preserves_site_and_metric_presence():
-    """Generated response data, not Program indices or inferred native timings."""
-    # Native prost uses unpacked paths; this reader writes packed paths. Both
-    # protobuf encodings carry the same ordered indices, not different records.
-    assert pb.CommandLocation.from_binary(bytes.fromhex("0801")) == pb.CommandLocation.from_binary(
-        bytes.fromhex("0a0101")
-    )
-    sites = [
-        pb.MaintenanceSite(
-            target=Oneof[Literal["command"], pb.StaticCommandPath]("command", pb.StaticCommandPath(path=[0, 2]))
-        ),
-        pb.MaintenanceSite(target=Oneof[Literal["declaration"], int]("declaration", 0)),
-        pb.MaintenanceSite(target=Oneof[Literal["sort"], int]("sort", 0)),
-    ]
-    response = pb.RunProgramResponse(
-        profile=pb.ProfileSummary(
-            complete=False,
-            runs=[pb.RunSummary(command_path=[0], invocations=1, search_and_apply_nanos=0)],
-            maintenance=[pb.MaintenanceSummary(site=site, invocations=1, merge_nanos=0) for site in sites],
-        )
-    )
-    encoded = response.to_binary()
-    decoded = pb.RunProgramResponse.from_binary(encoded)
-    assert decoded.to_binary() == encoded
-    assert decoded.profile is not None
-    assert not decoded.profile.complete
-    assert decoded.profile.runs[0].has_field("search_and_apply_nanos")
-    assert not decoded.profile.runs[0].has_field("merge_nanos")
-    assert [summary.site for summary in decoded.profile.maintenance] == sites
-    for summary in decoded.profile.maintenance:
-        assert summary.invocations == 1
-        assert summary.has_field("merge_nanos")
-        assert summary.merge_nanos == 0
-        assert not summary.has_field("search_and_apply_nanos")
-        assert not summary.has_field("rebuild_nanos")
 
 
 def _proof_program() -> pb.Program:
@@ -282,21 +243,12 @@ def proof_engine(request):
             engine.destroy(pb.DestroyEGraphRequest(egraph_id=handle).to_binary())
 
 
-def test_binary_proof_modes_requested_outputs_and_maintenance(proof_engine):
+def test_binary_proof_modes_requested_outputs_and_control(proof_engine):
     engine, handles, mode = proof_engine
-    encoded, host_error = engine.run(
-        pb.RunProgramRequest(egraph_id=handles[0], program=_proof_program(), profile=True).to_binary()
-    )
+    encoded, host_error = engine.run(pb.RunProgramRequest(egraph_id=handles[0], program=_proof_program()).to_binary())
     assert host_error is None
     response = pb.RunProgramResponse.from_binary(encoded)
     assert pb.RunProgramResponse.from_binary(response.to_binary()) == response
-    profile = response.profile
-    assert profile is not None
-    assert len(profile.runs) == 1
-    assert profile.runs[0].command_path == [2]
-    assert profile.runs[0].invocations == 1
-    for field in ("search_and_apply_nanos", "merge_nanos", "rebuild_nanos"):
-        assert profile.runs[0].has_field(field)
     requested_run = response.outputs[0].kind
     assert requested_run is not None
     assert requested_run.field == "run"
@@ -311,10 +263,8 @@ def test_binary_proof_modes_requested_outputs_and_maintenance(proof_engine):
         assert response.error.proof_failure.reason == pb.ProofFailureReason.PROOFS_NOT_ENABLED
         assert response.error.location is not None
         assert response.error.location.path == [4]
-        assert not profile.complete
     else:
         assert response.error is None
-        assert profile.complete
         assert paths == ([[2], [3], [4], [5]] if mode == pb.ExecutionMode.PROOF_TESTING else [[2], [4], [5]])
         for output in response.outputs[1:]:
             assert output.kind is not None
@@ -329,32 +279,13 @@ def test_binary_proof_modes_requested_outputs_and_maintenance(proof_engine):
                 assert step.has_field("rhs")
                 assert step.rhs < len(proof.terms)
                 assert step.justification is not None
-    if mode != pb.ExecutionMode.NORMAL:
-        assert not response.rules
-        assert not profile.runs[0].rules
-        for command in (2, 4):
-            site = pb.MaintenanceSite(
-                target=Oneof[Literal["command"], pb.StaticCommandPath]("command", pb.StaticCommandPath(path=[command]))
-            )
-            (summary,) = [summary for summary in profile.maintenance if summary.site == site]
-            assert summary.invocations > 1
-            assert summary.has_field("search_and_apply_nanos")
-        assert any(
-            summary.site
-            == pb.MaintenanceSite(
-                target=Oneof[Literal["command"], pb.StaticCommandPath]("command", pb.StaticCommandPath(path=[0]))
-            )
-            for summary in profile.maintenance
-        )
 
 
 def test_binary_proof_prefix_clone_and_native_error_order(proof_engine):
     engine, handles, mode = proof_engine
     setup = _proof_program()
     del setup.commands[3:]
-    setup_bytes, host_error = engine.run(
-        pb.RunProgramRequest(egraph_id=handles[0], program=setup, profile=True).to_binary()
-    )
+    setup_bytes, host_error = engine.run(pb.RunProgramRequest(egraph_id=handles[0], program=setup).to_binary())
     assert host_error is None
     response = pb.RunProgramResponse.from_binary(setup_bytes)
     assert response.error is None
@@ -382,9 +313,7 @@ def test_binary_proof_prefix_clone_and_native_error_order(proof_engine):
     ]
     if not proofs_enabled:
         del program.commands[0]
-    encoded, host_error = engine.run(
-        pb.RunProgramRequest(egraph_id=handles[0], program=program, profile=True).to_binary()
-    )
+    encoded, host_error = engine.run(pb.RunProgramRequest(egraph_id=handles[0], program=program).to_binary())
     assert host_error is None
     response = pb.RunProgramResponse.from_binary(encoded)
     assert response.error is not None
@@ -397,13 +326,9 @@ def test_binary_proof_prefix_clone_and_native_error_order(proof_engine):
     assert response.error.location is not None
     assert response.error.location.path == ([2] if proofs_enabled else [1])
     assert len(response.outputs) == int(proofs_enabled)
-    assert response.profile is not None
-    assert not response.profile.complete
     for handle, node, succeeds in [(handles[0], 7, True), (handles[0], 9, False), (handles[1], 7, False)]:
         program.commands = [pb.Command(kind=Oneof[Literal["check"], pb.Check]("check", pb.Check(facts=[node])))]
-        checked_bytes, host_error = engine.run(
-            pb.RunProgramRequest(egraph_id=handle, program=program, profile=True).to_binary()
-        )
+        checked_bytes, host_error = engine.run(pb.RunProgramRequest(egraph_id=handle, program=program).to_binary())
         assert host_error is None
         checked = pb.RunProgramResponse.from_binary(checked_bytes)
         assert (checked.error is None) == succeeds
@@ -412,9 +337,7 @@ def test_binary_proof_prefix_clone_and_native_error_order(proof_engine):
             kind=Oneof[Literal["prove_exists"], pb.ProveExists]("prove_exists", pb.ProveExists(constructor="Goal"))
         )
     ]
-    copied_bytes, host_error = engine.run(
-        pb.RunProgramRequest(egraph_id=handles[1], program=program, profile=True).to_binary()
-    )
+    copied_bytes, host_error = engine.run(pb.RunProgramRequest(egraph_id=handles[1], program=program).to_binary())
     assert host_error is None
     copied = pb.RunProgramResponse.from_binary(copied_bytes)
     assert (copied.error is None) == proofs_enabled
@@ -455,22 +378,14 @@ def test_binary_encoded_extract_stays_explicitly_unsupported(proof_engine):
             )
         ),
     ]
-    encoded, host_error = engine.run(
-        pb.RunProgramRequest(egraph_id=handles[0], program=program, profile=True).to_binary()
-    )
+    encoded, host_error = engine.run(pb.RunProgramRequest(egraph_id=handles[0], program=program).to_binary())
     assert host_error is None
     failed = pb.RunProgramResponse.from_binary(encoded)
     assert failed.error is not None
     assert failed.error.code == pb.ErrorCode.INVALID_PROGRAM
     assert not failed.outputs
-    assert failed.profile is not None
-    assert not failed.profile.complete
-    assert not failed.profile.runs
-    assert not failed.profile.maintenance
     program.commands = [pb.Command(kind=Oneof[Literal["check"], pb.Check]("check", pb.Check(facts=[2])))]
-    encoded, host_error = engine.run(
-        pb.RunProgramRequest(egraph_id=handles[0], program=program, profile=True).to_binary()
-    )
+    encoded, host_error = engine.run(pb.RunProgramRequest(egraph_id=handles[0], program=program).to_binary())
     assert host_error is None
     retry = pb.RunProgramResponse.from_binary(encoded)
     assert retry.error is not None
@@ -494,15 +409,10 @@ def test_binary_encoded_print_function_returns_typed_logical_rows(proof_engine, 
             )
         ),
     ]
-    encoded, host_error = engine.run(
-        pb.RunProgramRequest(egraph_id=handles[0], program=program, profile=True).to_binary()
-    )
+    encoded, host_error = engine.run(pb.RunProgramRequest(egraph_id=handles[0], program=program).to_binary())
     assert host_error is None
     response = pb.RunProgramResponse.from_binary(encoded)
     assert response.error is None
-    assert response.profile is not None
-    assert response.profile.complete
-    assert not response.profile.runs
     (output,) = response.outputs
     assert output.location == pb.CommandLocation(path=[1])
     assert output.kind is not None
@@ -537,14 +447,12 @@ def test_binary_encoded_print_function_returns_typed_logical_rows(proof_engine, 
         assert response.sorts[result_node.sort_id].kind == Oneof[Literal["eq"], str]("eq", "Num")
     assert pb.RunProgramResponse.from_binary(response.to_binary()) == response
     program.commands = [pb.Command(kind=Oneof[Literal["check"], pb.Check]("check", pb.Check(facts=[2])))]
-    encoded, host_error = engine.run(
-        pb.RunProgramRequest(egraph_id=handles[0], program=program, profile=True).to_binary()
-    )
+    encoded, host_error = engine.run(pb.RunProgramRequest(egraph_id=handles[0], program=program).to_binary())
     assert host_error is None
     assert pb.RunProgramResponse.from_binary(encoded).error is None
 
 
-def test_binary_unknown_mode_and_profile_off_stay_explicit():
+def test_binary_unknown_mode_rejected_and_diagnostics_off_works():
     engine = bindings._ProtoEngine()
     request = pb.CreateEGraphRequest(
         sorts=[pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))],
@@ -558,14 +466,11 @@ def test_binary_unknown_mode_and_profile_off_stay_explicit():
     created = pb.CreateEGraphResponse.from_binary(engine.create(request.to_binary()))
     try:
         encoded, host_error = engine.run(
-            pb.RunProgramRequest(egraph_id=created.egraph_id, program=pb.Program(), profile=False).to_binary()
+            pb.RunProgramRequest(egraph_id=created.egraph_id, program=pb.Program()).to_binary()
         )
         assert host_error is None
         response = pb.RunProgramResponse.from_binary(encoded)
-        assert response.error is not None
-        assert response.error.code == pb.ErrorCode.INVALID_PROGRAM
-        assert "profile=false" in response.error.message
-        assert response.profile is None
+        assert response.error is None
         assert not response.outputs
     finally:
         engine.destroy(pb.DestroyEGraphRequest(egraph_id=created.egraph_id).to_binary())
