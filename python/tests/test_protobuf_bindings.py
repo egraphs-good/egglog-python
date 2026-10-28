@@ -203,33 +203,37 @@ def _proof_program() -> pb.Program:
             ),
         ],
         nodes=nodes,
-        commands=[
-            pb.Command(
-                kind=Oneof[Literal["add_rules"], pb.AddRules](
-                    "add_rules",
-                    pb.AddRules(
-                        group="rebuilding_ruleset",
-                        rules=[
-                            pb.Rule(
-                                name="derive",
-                                eval_mode=pb.RuleEvalMode.SEMINAIVE,
-                                kind=Oneof[Literal["rule"], pb.RuleBody](
-                                    "rule",
-                                    pb.RuleBody(
-                                        query=[3], head=[pb.Action(kind=Oneof[Literal["term"], int]("term", 4))]
-                                    ),
-                                ),
-                            )
-                        ],
-                    ),
-                )
+        rulesets=[
+            pb.RulesetBinding(
+                name="rebuilding_ruleset",
+                value=pb.Ruleset(
+                    rules=[
+                        pb.Rule(
+                            name="derive",
+                            eval_mode=pb.RuleEvalMode.SEMINAIVE,
+                            kind=Oneof[Literal["rule"], pb.RuleBody](
+                                "rule",
+                                pb.RuleBody(query=[3], head=[pb.Action(kind=Oneof[Literal["term"], int]("term", 4))]),
+                            ),
+                        )
+                    ]
+                ),
             ),
+        ],
+        commands=[
             pb.Command(
                 kind=Oneof[Literal["action"], pb.Action](
                     "action", pb.Action(kind=Oneof[Literal["term"], int]("term", 2))
                 )
             ),
-            pb.Command(kind=Oneof[Literal["run"], pb.Run]("run", pb.Run(groups=["rebuilding_ruleset"]))),
+            pb.Command(
+                kind=Oneof[Literal["run"], pb.Run](
+                    "run",
+                    pb.Run(
+                        rulesets=[pb.RulesetSelection(kind=Oneof[Literal["name"], str]("name", "rebuilding_ruleset"))]
+                    ),
+                )
+            ),
             pb.Command(kind=Oneof[Literal["check"], pb.Check]("check", pb.Check(facts=[5]))),
             pb.Command(kind=Oneof[Literal["prove"], pb.Prove]("prove", pb.Prove(facts=[5]))),
             pb.Command(
@@ -294,14 +298,14 @@ def test_binary_proof_modes_requested_outputs_and_control(proof_engine):
     terminal = frames[-1].result
     assert terminal is not None
     if mode in (pb.ExecutionMode.NORMAL, pb.ExecutionMode.TERM_ENCODING):
-        assert paths == [[2]]
+        assert paths == [[1]]
         assert terminal.field == "error"
         assert terminal.value.code == pb.ErrorCode.RUNTIME_FAILURE
         assert terminal.value.location is not None
-        assert terminal.value.location.path == [4]
+        assert terminal.value.location.path == [3]
     else:
         assert terminal.field == "output"
-        assert paths == ([[2], [3], [4], [5]] if mode == pb.ExecutionMode.PROOF_TESTING else [[2], [4], [5]])
+        assert paths == ([[1], [2], [3], [4]] if mode == pb.ExecutionMode.PROOF_TESTING else [[1], [3], [4]])
         for output in outputs[1:]:
             assert output.kind is not None
             assert output.kind.field == "proof"
@@ -320,7 +324,7 @@ def test_binary_proof_modes_requested_outputs_and_control(proof_engine):
 def test_binary_proof_prefix_clone_and_native_error_order(proof_engine):
     engine, handles, mode = proof_engine
     setup = _proof_program()
-    del setup.commands[3:]
+    del setup.commands[2:]
     setup_bytes, host_error = engine.run(pb.RunProgramRequest(egraph_id=handles[0], program=setup).to_binary())
     assert host_error is None
     assert all(frame.result is not None and frame.result.field == "output" for frame in _decode_run_frames(setup_bytes))
@@ -446,7 +450,7 @@ def test_binary_encoded_print_function_returns_typed_logical_rows(proof_engine, 
     engine, handles, _mode = proof_engine
     program = _proof_program()
     program.commands = [
-        program.commands[1],
+        program.commands[0],
         pb.Command(
             kind=Oneof[Literal["table_rows"], pb.GetTableRows](
                 "table_rows", pb.GetTableRows(table="N", max_rows=max_rows)

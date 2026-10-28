@@ -95,30 +95,22 @@ from egglog.type_constraint_solver import TypeConstraintError, infer_sort, subst
 def _pack_rule(reference: Ref) -> Packed:
     """Observe the real wire form of an owned reusable rule and its closure."""
     builder = Builder()
-    command = builder.add(
-        "commands",
-        pb.Command(
-            kind=Oneof[Literal["add_rules"], pb.AddRules](
-                "add_rules", pb.AddRules(rules=[builder.import_rule(reference)])
-            )
-        ),
-    )
-    return pack(commands=[builder.publish().ref("commands", command)])
+    binding = builder.add("rulesets", pb.RulesetBinding(value=pb.Ruleset(rules=[builder.import_rule(reference)])))
+    return pack([builder.publish().ref("rulesets", binding)])
 
 
-def _inline_rule(command: Ref, index: int = 0) -> Ref:
-    """Own one inline rule with all its surrounding Program arena references."""
-    record = command.read()
-    assert isinstance(record, pb.Command)
-    assert record.kind is not None
-    assert record.kind.field == "add_rules"
+def _inline_rule(binding: Ref, index: int = 0) -> Ref:
+    """Own one collection member with its surrounding Program arena references."""
+    record = binding.read()
+    assert isinstance(record, pb.RulesetBinding)
+    assert record.value is not None
     builder = Builder()
-    builder.import_context(command.owner)
+    builder.import_context(binding.owner)
     slot = builder.add(
         "rules",
         _copy_record(
-            record.kind.value.rules[index],
-            relocate=lambda role, index: builder.import_ref(command.owner.ref(role, index)),
+            record.value.rules[index],
+            relocate=lambda role, index: builder.import_ref(binding.owner.ref(role, index)),
         ),
     )
     return builder.publish().ref("rules", slot)
@@ -540,14 +532,13 @@ def test_canonical_backoff_records_and_persistent_identity_without_engine(monkey
     selected = ruleset(name="persistent-source")
     schedule = run(selected, scheduler=persistent)
     root = schedule._resolve(None)
-    addition, execution = _required_oneof(root.read().kind, "loop", pb.Loop).body
-    assert _required_oneof(addition.kind, "add_rules", pb.AddRules).rules == []
-    assert _required_oneof(execution.kind, "run", pb.Run).scheduler == binding.name
+    assert pack(commands=[root]).program.rulesets[0].value == pb.Ruleset()
+    assert _required_oneof(root.read().kind, "run", pb.Run).scheduler == binding.name
     assert schedule._schedulers[binding.name] is persistent
     program = pack(commands=[persistent.__egg_ref__, root]).program
     deployment, execution = program.commands
     _required_oneof(deployment.kind, "bind_scheduler", pb.BindScheduler)
-    _required_oneof(execution.kind, "loop", pb.Loop)
+    _required_oneof(execution.kind, "run", pb.Run)
     assert pb.Program.from_binary(program.to_binary()) == program
     assert ".persistent()" in repr(persistent)
     assert f"scheduler={binding.name!r}" in str(schedule)
@@ -578,38 +569,32 @@ def test_canonical_backoff_hoist_and_scope_topology_without_engine(monkeypatch):
     leaf = run(ruleset(name="scoped-source"), scheduler=scheduler)
     implicit = (leaf * 3)._resolve(None).read().kind.value
     outer = scheduler.scope(leaf * 3)._resolve(None).read().kind.value
-    assert implicit.body[0].kind.field == outer.body[0].kind.field == "add_rules"
-    outer_scope = outer.body[1].kind.value
-    for block, body in ((implicit, implicit.body[1:]), (outer_scope, outer_scope.body)):
+    outer_scope = outer
+    for block, body in ((implicit, implicit.body), (outer_scope, outer_scope.body)):
         assert block.max_iterations == 1
         binding, loop = body
         assert binding.kind.field == "bind_scheduler"
         assert loop.kind.field == "loop"
         assert loop.kind.value.max_iterations == 3
         assert loop.kind.value.body[0].kind.value.scheduler == binding.kind.value.name
-    assert implicit.body[1].kind.value.name == name
+    assert implicit.body[0].kind.value.name == name
     assert outer_scope.body[0].kind.value.name != name
     inner_prelude = (scheduler.scope(leaf) * 3)._resolve(None).read().kind.value
-    assert inner_prelude.body[0].kind.field == "add_rules"
-    inner = inner_prelude.body[1]
-    assert inner.kind.field == "loop"
-    assert inner.kind.value.max_iterations == 3
-    inner_binding, inner_run = inner.kind.value.body[0].kind.value.body
+    assert inner_prelude.max_iterations == 3
+    inner_binding, inner_run = inner_prelude.body[0].kind.value.body
     assert inner_run.kind.value.scheduler == inner_binding.kind.value.name
     assert inner_binding.kind.value.name not in {name, outer_scope.body[0].kind.value.name}
 
     siblings = seq(scheduler.scope(leaf), leaf)
     block = siblings._resolve(None).read().kind.value
-    assert [command.kind.field for command in block.body[:2]] == ["add_rules", "add_rules"]
-    assert block.body[2].kind.value.name == name  # Default hoist for the sibling only.
-    scoped, unbound = block.body[3].kind.value.body
+    assert block.body[0].kind.value.name == name  # Default hoist for the sibling only.
+    scoped, unbound = block.body[1].kind.value.body
     scoped_binding, scoped_run = scoped.kind.value.body
     assert scoped_run.kind.value.scheduler == scoped_binding.kind.value.name != name
     assert unbound.kind.value.scheduler == name
     independent = seq(scheduler.scope(leaf), scheduler.scope(leaf))._resolve(None)
     independent_prelude = independent.read().kind.value
-    assert [command.kind.field for command in independent_prelude.body[:2]] == ["add_rules", "add_rules"]
-    scoped_names = [child.kind.value.body[0].kind.value.name for child in independent_prelude.body[2].kind.value.body]
+    scoped_names = [child.kind.value.body[0].kind.value.name for child in independent_prelude.body]
     assert len(set(scoped_names)) == 2
     assert name not in scoped_names
     assert "bind_scheduler(" in str(siblings)
@@ -622,8 +607,7 @@ def test_canonical_backoff_hoist_and_scope_topology_without_engine(monkeypatch):
     mixed = seq(scoped_persistent, persistent_leaf)
     assert mixed._schedulers[persistent_name] is persistent
     mixed_prelude = mixed._resolve(None).read().kind.value
-    assert [command.kind.field for command in mixed_prelude.body[:2]] == ["add_rules", "add_rules"]
-    explicit, retained = mixed_prelude.body[2].kind.value.body
+    explicit, retained = mixed_prelude.body
     explicit_binding, explicit_run = explicit.kind.value.body
     assert explicit_run.kind.value.scheduler == explicit_binding.kind.value.name != persistent_name
     assert retained.kind.value.scheduler == persistent_name
@@ -652,8 +636,9 @@ def test_canonical_scheduler_until_queries_and_live_rulesets_without_engine(monk
     assert events == ["first"]
     program = pack(commands=[root]).program
     assert pb.Program.from_binary(program.to_binary()) == program
-    addition, binding, conditional = _required_oneof(program.commands[0].kind, "loop", pb.Loop).body
-    additions = _required_oneof(addition.kind, "add_rules", pb.AddRules).rules
+    binding, conditional = _required_oneof(program.commands[0].kind, "loop", pb.Loop).body
+    assert program.rulesets[0].value is not None
+    additions = program.rulesets[0].value.rules
     assert len(additions) == 1
     assert additions[0].name == "first"
     binding_data = _required_oneof(binding.kind, "bind_scheduler", pb.BindScheduler)
@@ -733,16 +718,15 @@ def test_rule_template_comparison_and_live_rulesets_without_engine(monkeypatch):
         hash(one)
     selected = ruleset(one, equivalent, name="selected")
     before = selected._snapshot()
-    assert len(before.read().kind.value.rules) == 2
+    assert len(before.read().value.rules) == 2
     selected.append(rule(fact, name="new").then(set_(target).to(2)))  # type: ignore[arg-type]
     after = selected._snapshot()
-    assert len(after.read().kind.value.rules) == 3
-    assert len(before.read().kind.value.rules) == 2
+    assert len(after.read().value.rules) == 3
+    assert len(before.read().value.rules) == 2
     combined = selected | ruleset(name="empty")
     combined_command = combined._snapshot().read()
-    assert combined_command.kind is not None
-    assert combined_command.kind.field == "loop"
-    assert [command.kind.field for command in combined_command.kind.value.body] == ["add_rules", "add_rules"]
+    assert combined_command.value is not None
+    assert len(combined_command.value.rules) == 3
     assert "rule(" in str(selected)
 
 
@@ -806,7 +790,7 @@ def test_rule_key_default_and_lambda_use_domains_without_engine():
 
     template = rule().then(choose(Value(), Value()))
     packed = _pack_rule(template.__egg_ref__)
-    equal = _rule_key(_inline_rule(Builder.from_program(packed.program).publish().ref("commands", 0)))
+    equal = _rule_key(_inline_rule(Builder.from_program(packed.program).publish().ref("rulesets", 0)))
     key = _rule_key(template.__egg_ref__)
     assert key == equal
     assert hash(key) == hash(equal)
@@ -897,7 +881,7 @@ def test_rule_key_shared_dag_work_is_bounded(monkeypatch, allocating, bidirectio
         expression = cast("Expr", left)
         first = birewrite(expression).to(expression).__egg_ref__
     packed = _pack_rule(first)
-    second = Builder.from_program(packed.program, environment=first.owner._environment).publish().ref("commands", 0)
+    second = Builder.from_program(packed.program, environment=first.owner._environment).publish().ref("rulesets", 0)
     second = _inline_rule(second)
     original = _program._structural_parts
     visits = 0
@@ -1013,7 +997,7 @@ def test_rule_template_comparison_uses_only_referenced_declarations(monkeypatch)
             Builder
             .from_program(program, environment=second.__egg_ref__.owner._environment)
             .publish()
-            .ref("commands", 0)
+            .ref("rulesets", 0)
         )
     )
     assert first != modified  # The command shape alone is identical.
@@ -1059,7 +1043,7 @@ def test_deferred_rulesets_keep_live_scope_order_and_failure_prefix(monkeypatch)
     assert get_current_ruleset() is None
     snapshot = selected._snapshot()
     assert events == [("failing", selected), ("older", selected)]
-    assert [rule.name for rule in snapshot.read().kind.value.rules] == [
+    assert [rule.name for rule in snapshot.read().value.rules] == [
         "side-effect",
         "older",
     ]
@@ -1288,8 +1272,9 @@ def test_direct_rewrite_owns_records_without_an_engine(monkeypatch, bidirectiona
     body.conditions.clear()
     assert str(authored) == expected
     packed = _pack_rule(authored.__egg_ref__)
-    assert len(_required_oneof(packed.program.commands[0].kind, "add_rules", pb.AddRules).rules) == 1
-    assert len(packed.program.commands) == 1
+    assert packed.program.rulesets[0].value is not None
+    assert len(packed.program.rulesets[0].value.rules) == 1
+    assert not packed.program.commands
     decoded = pb.Program.from_binary(packed.program.to_binary())
     builder = Builder.from_program(decoded, environment=authored.__egg_ref__.owner._environment)
     builder.presentations.update({
@@ -1298,7 +1283,7 @@ def test_direct_rewrite_owns_records_without_an_engine(monkeypatch, bidirectiona
         if (key := _definition_key(definition.read())) is not None
     })
     owner = builder.publish()
-    restored = RewriteOrRule(_inline_rule(owner.ref("commands", 0)))
+    restored = RewriteOrRule(_inline_rule(owner.ref("rulesets", 0)))
     assert str(restored) == expected
     assert restored == authored
     assert _pack_rule(restored.__egg_ref__).program.to_binary() == decoded.to_binary()
@@ -1344,10 +1329,9 @@ def test_direct_birewrite_preserves_conversion_order_and_destination_on_failure(
     assert ambient.__egg_ref__ == original_ambient
     assert get_current_ruleset() is None
     record = destination.__egg_ref__.read()
-    assert isinstance(record, pb.Command)
-    assert record.kind is not None
-    assert isinstance(record.kind.value, pb.AddRules)
-    assert len(record.kind.value.rules) == 1
+    assert isinstance(record, pb.RulesetBinding)
+    assert record.value is not None
+    assert len(record.value.rules) == 1
     assert rule_equal(_inline_rule(destination.__egg_ref__), authored.__egg_ref__)
     assert unattached == authored
     with pytest.raises(TypeError, match="destinations must be Rulesets"):
@@ -1373,11 +1357,10 @@ def test_direct_birewrite_keeps_occurrences_but_compares_structural_keys():
     with pytest.raises(TypeError, match="unhashable"):
         hash(first)
     selected = ruleset(first, first, second)
-    packed = pack(commands=[selected.__egg_ref__])
-    record = packed.program.commands[0]
-    assert record.kind is not None
-    assert isinstance(record.kind.value, pb.AddRules)
-    occurrences = record.kind.value.rules
+    packed = pack([selected.__egg_ref__])
+    record = packed.program.rulesets[0]
+    assert record.value is not None
+    occurrences = record.value.rules
     assert len(occurrences) == 3
     assert occurrences[0] == occurrences[1] == occurrences[2]
 
@@ -1444,9 +1427,8 @@ def test_direct_rule_reuses_query_variable_in_inline_set(monkeypatch):
     assert len(variables) == 1
     index = variables[0]
     assert _required_oneof(packed.nodes[index].kind, "var", str) == "x"
-    rule_record = _required_oneof(
-        _required_oneof(packed.commands[0].kind, "add_rules", pb.AddRules).rules[0].kind, "rule", pb.RuleBody
-    )
+    assert packed.rulesets[0].value is not None
+    rule_record = _required_oneof(packed.rulesets[0].value.rules[0].kind, "rule", pb.RuleBody)
     members = _required_oneof(packed.nodes[rule_record.query[0]].kind, "union", pb.Union).members
     assert members[1] == index
     assert _required_oneof(packed.nodes[members[0]].kind, "call", pb.Call).args == [index]
@@ -1495,10 +1477,9 @@ def test_direct_rule_relocates_inline_actions_without_an_engine(monkeypatch):
     assert record.no_decomp
     assert [action.kind.field for action in record.kind.value.head] == ["set", "term", "term", "term"]
     packed = _pack_rule(authored.__egg_ref__)
-    assert len(packed.program.commands) == 1
-    body = _required_oneof(
-        _required_oneof(packed.program.commands[0].kind, "add_rules", pb.AddRules).rules[0].kind, "rule", pb.RuleBody
-    )
+    assert not packed.program.commands
+    assert packed.program.rulesets[0].value is not None
+    body = _required_oneof(packed.program.rulesets[0].value.rules[0].kind, "rule", pb.RuleBody)
     assert body.query[0] != body.query[1]  # Distinct equal Union occurrences stay distinct.
     assert (
         _required_oneof(body.head[1].kind, "term", int)
@@ -1531,7 +1512,7 @@ def test_direct_rule_relocates_inline_actions_without_an_engine(monkeypatch):
     assert str(authored) == expected
     decoded = pb.Program.from_binary(packed.program.to_binary())
     owner = Builder.from_program(decoded, environment=authored.__egg_ref__.owner._environment).publish()
-    assert _pack_rule(_inline_rule(owner.ref("commands", 0))).program.to_binary() == decoded.to_binary()
+    assert _pack_rule(_inline_rule(owner.ref("rulesets", 0))).program.to_binary() == decoded.to_binary()
 
 
 def test_set_local_protocols_preserve_symbolic_order_and_empty_distinction(set_runtime):
@@ -3951,7 +3932,7 @@ def test_named_eager_eqsort_result_and_ambient_ruleset_isolation():
     assert calls == [None]
     assert isinstance(result, Box)
     assert resolve_callable(body).read().kind.field == "user_defined_primitive"
-    assert not ambient._snapshot().read().kind.value.rules
+    assert not ambient._snapshot().read().value.rules
 
     def empty(value: i64): ...
 
@@ -3986,7 +3967,7 @@ def test_named_eager_result_conversion_has_no_ambient_ruleset():
         resolve_callable(wrapped)
         assert get_current_ruleset() is ambient
     assert calls == [None, None]
-    assert not ambient._snapshot().read().kind.value.rules
+    assert not ambient._snapshot().read().value.rules
 
 
 @pytest.mark.parametrize("subsume_body", [False, True])
@@ -4002,7 +3983,7 @@ def test_free_ruleset_body_is_a_deferred_constructor_rewrite(subsume_body):
         calls.append((get_current_ruleset(), str(unused), str(value)))
         return FreeRewriteBox(value)
 
-    assert not destination._snapshot().read().kind.value.rules
+    assert not destination._snapshot().read().value.rules
     with set_current_ruleset(ambient):
         expression = body(i64(9))
         assert get_current_ruleset() is ambient
@@ -4014,8 +3995,8 @@ def test_free_ruleset_body_is_a_deferred_constructor_rewrite(subsume_body):
     body(i64(8), i64(5))
     assert len(calls) == 1
     snapshot = destination._snapshot()
-    assert len(snapshot.read().kind.value.rules) == 1
-    assert not ambient._snapshot().read().kind.value.rules
+    assert len(snapshot.read().value.rules) == 1
+    assert not ambient._snapshot().read().value.rules
     reference = _inline_rule(snapshot, 0)
     record = reference.read().kind.value
     assert record.subsume is subsume_body
@@ -4028,7 +4009,7 @@ def test_free_ruleset_body_is_a_deferred_constructor_rewrite(subsume_body):
     rhs_arguments = get_callable_args(rhs, FreeRewriteBox)
     assert rhs_arguments is not None
     assert rhs_arguments[0].__egg_ref__.read().kind.value == "_1"
-    encoded = pack(commands=[snapshot]).program.to_binary()
+    encoded = pack([snapshot]).program.to_binary()
     program = pb.Program.from_binary(encoded)
     assert program.to_binary() == encoded
     assert {
@@ -4068,7 +4049,7 @@ def test_free_ruleset_body_preserves_original_positional_variable_relation(name,
     assert call_arguments is not None
     assert call_arguments[0].__egg_ref__.read().kind.value == "_0"
     assert free.__egg_ref__.read().kind.value == expected
-    program = pack(commands=[snapshot]).program
+    program = pack([snapshot]).program
     declaration = next(
         item.kind.value
         for item in program.declarations
@@ -4132,8 +4113,8 @@ def test_free_ruleset_body_result_conversion_restores_outer_context():
         resolve_callable(wrapped)
         assert get_current_ruleset() is ambient
     assert calls == [destination, ambient]
-    assert len(destination._snapshot().read().kind.value.rules) == 1
-    assert not ambient._snapshot().read().kind.value.rules
+    assert len(destination._snapshot().read().value.rules) == 1
+    assert not ambient._snapshot().read().value.rules
 
 
 @pytest.mark.parametrize("outcome", ["none", "wrong", "raise", "recursive"])
@@ -4172,8 +4153,8 @@ def test_free_ruleset_body_failure_is_cached_without_default_publication(outcome
     assert calls == [destination]
     assert wrapped.__egg_declaration__ is None
     assert wrapped.__egg_prepare__ is None
-    assert len(destination._snapshot().read().kind.value.rules) == 1
-    assert not ambient._snapshot().read().kind.value.rules
+    assert len(destination._snapshot().read().value.rules) == 1
+    assert not ambient._snapshot().read().value.rules
 
 
 def test_free_ruleset_body_invalid_destination_precedes_callback():
@@ -4211,7 +4192,7 @@ def test_free_ruleset_body_preserves_constructor_options(options):
     else:
         assert not record.kind.value.has_field("cost")
     assert calls == [destination]
-    assert len(destination._snapshot().read().kind.value.rules) == 1
+    assert len(destination._snapshot().read().value.rules) == 1
     expression = body()
     graph = EGraph(expression)
     graph.run(destination)
@@ -4429,9 +4410,8 @@ def test_public_union_contextual_rule_and_fact_presentation(class_authoring_with
     expected = "rule(eq(x).to(y), name='union-context').then(union(x).with_(y))"
     assert str(authored) == expected
     packed = _pack_rule(authored.__egg_ref__).program
-    canonical = _required_oneof(
-        _required_oneof(packed.commands[0].kind, "add_rules", pb.AddRules).rules[0].kind, "rule", pb.RuleBody
-    )
+    assert packed.rulesets[0].value is not None
+    canonical = _required_oneof(packed.rulesets[0].value.rules[0].kind, "rule", pb.RuleBody)
     assert canonical.query == [_required_oneof(canonical.head[0].kind, "term", int)]
     assert pb.Program.from_binary(packed.to_binary()) == packed
 
@@ -4448,17 +4428,14 @@ def test_fact_action_reuses_authored_union_nodes_without_engine(class_authoring_
     actions = [expr_action(item) for item in (fact, fact, separate)]
     builder = Builder()
     command = builder.add(
-        "commands",
-        pb.Command(
-            kind=Oneof[Literal["add_rules"], pb.AddRules](
-                "add_rules", pb.AddRules(rules=[builder.import_rule(authored.__egg_ref__)])
-            )
-        ),
+        "rulesets",
+        pb.RulesetBinding(name="", value=pb.Ruleset(rules=[builder.import_rule(authored.__egg_ref__)])),
     )
-    rule_command = builder.publish().ref("commands", command)
+    rule_binding = builder.publish().ref("rulesets", command)
     packet = pack(
         [fact.__egg_ref__, separate.__egg_ref__],
-        commands=[*(action.__egg_ref__ for action in actions), rule_command],
+        commands=[action.__egg_ref__ for action in actions],
+        rulesets=[rule_binding],
     )
     program = pb.Program.from_binary(packet.program.to_binary())
     first, second = packet.indices
@@ -4472,9 +4449,10 @@ def test_fact_action_reuses_authored_union_nodes_without_engine(class_authoring_
         )
         == 2
     )
-    action_data = [_required_oneof(command.kind, "action", pb.Action) for command in program.commands[:-1]]
+    action_data = [_required_oneof(command.kind, "action", pb.Action) for command in program.commands]
     assert [_required_oneof(command.kind, "term", int) for command in action_data] == [first, first, second]
-    addition = _required_oneof(program.commands[-1].kind, "add_rules", pb.AddRules)
+    addition = program.rulesets[0].value
+    assert addition is not None
     canonical = _required_oneof(addition.rules[0].kind, "rule", pb.RuleBody)
     assert canonical.query == [first]
     assert [_required_oneof(action.kind, "term", int) for action in canonical.head] == [first, first, second]
@@ -4677,7 +4655,7 @@ def test_constant_merges_are_nullary_functions_without_engine(monkeypatch):
         assert str(RuntimeExpr(declaration.owner.ref("nodes", merged.merge))) == expected
     assert set_(maximum_value).to(i64(2)).__egg_ref__.read().kind.value.kind.field == "set"
     assert set_(token).to(MergedToken()).__egg_ref__.read().kind.value.kind.field == "set"
-    assert not ambient._snapshot().read().kind.value.rules
+    assert not ambient._snapshot().read().value.rules
 
 
 def test_constant_ruleset_default_is_a_destination_constructor_rewrite(monkeypatch):
@@ -4696,10 +4674,10 @@ def test_constant_ruleset_default_is_a_destination_constructor_rewrite(monkeypat
         value = constant("token", DefaultToken, default, ruleset=destination)
         assert get_current_ruleset() is ambient
     assert resolve_callable(value).read().kind.field == "constructor"
-    assert not previous.read().kind.value.rules
-    assert not ambient._snapshot().read().kind.value.rules
+    assert not previous.read().value.rules
+    assert not ambient._snapshot().read().value.rules
     snapshot = destination._snapshot()
-    assert len(snapshot.read().kind.value.rules) == 1
+    assert len(snapshot.read().value.rules) == 1
     reference = _inline_rule(snapshot, 0)
     record = reference.read().kind.value
     assert isinstance(record, pb.Rewrite)
@@ -4707,7 +4685,7 @@ def test_constant_ruleset_default_is_a_destination_constructor_rewrite(monkeypat
     assert not record.subsume
     assert expr_parts(RuntimeExpr(reference.owner.ref("nodes", record.lhs))) == expr_parts(value)
     assert expr_parts(RuntimeExpr(reference.owner.ref("nodes", record.rhs))) == expr_parts(default)
-    encoded = pack(commands=[snapshot]).program.to_binary()
+    encoded = pack([snapshot]).program.to_binary()
     assert pb.Program.from_binary(encoded).to_binary() == encoded
     with pytest.raises(TypeError, match="Rewrite destinations must be Rulesets"):
         constant("invalid", DefaultToken, default, ruleset=object())  # type: ignore[call-overload]
@@ -4724,7 +4702,7 @@ def test_constant_defaults_reject_unbound_query_variables(explicit, spelling):
     with pytest.raises(ValueError, match=r"Free variable.*named eager body"):
         constant("invalid", QueryDefaultToken, default, ruleset=destination)
     if destination is not None:
-        assert not destination._snapshot().read().kind.value.rules
+        assert not destination._snapshot().read().value.rules
 
 
 @pytest.mark.parametrize("egg_name", [None, ""])
@@ -5145,7 +5123,7 @@ def test_reverse_args_rewrite_body_receives_python_order(class_authoring_without
     ReversedRewrite(i64(1)).select("tag", i64(2))
     assert calls == [("self", "label", "count")]
     snapshot = destination._snapshot()
-    assert len(snapshot.read().kind.value.rules) == 1
+    assert len(snapshot.read().value.rules) == 1
     reference = _inline_rule(snapshot, 0)
     rewrite = reference.read().kind.value
     lhs = reference.owner.ref("nodes", rewrite.lhs)
@@ -5666,7 +5644,7 @@ def test_eager_member_conversion_is_once_without_ambient_ruleset(class_authoring
         assert isinstance(Converted().value(), i64)
         assert get_current_ruleset() is ambient
     assert calls == [("body", None), ("conversion", None)]
-    assert not ambient._snapshot().read().kind.value.rules
+    assert not ambient._snapshot().read().value.rules
 
 
 @pytest.mark.parametrize("late_bad", [False, True])
@@ -6068,7 +6046,7 @@ def test_initializer_cost_waits_for_all_static_headers(class_authoring_without_e
     assert calls == []
     assert invalid_context.catalog is not None
     assert not invalid_context.catalog.members
-    assert not destination._snapshot().read().kind.value.rules
+    assert not destination._snapshot().read().value.rules
 
 
 @pytest.mark.parametrize("explicit", [False, True])
@@ -6103,7 +6081,7 @@ def test_member_default_barrier_preserves_explicit_rulesets(class_authoring_with
 
     assert isinstance(Defaults().defaulted(), Result)
     assert calls == (["conversion", "first", "later"] if explicit else ["first", "later", "conversion"])
-    assert len(destination._snapshot().read().kind.value.rules) == (2 if explicit else 0)
+    assert len(destination._snapshot().read().value.rules) == (2 if explicit else 0)
     pack([to_runtime_expr(Defaults().defaulted()).__egg_ref__])
 
 
@@ -6144,7 +6122,7 @@ def test_classvar_eager_defaults_are_closed_nullary_primitives(class_authoring_w
     with set_current_ruleset(ambient):
         values = [(Defaults.COUNT, scalar), (Defaults.BOX, box), (Defaults.MISSING, Maybe[i64].none())]
         assert get_current_ruleset() is ambient
-    assert not ambient._snapshot().read().kind.value.rules
+    assert not ambient._snapshot().read().value.rules
     for value, expected in values:
         assert value is not None
         declaration = resolve_callable(value)
@@ -6210,7 +6188,7 @@ def test_classvar_eager_default_conversion_keeps_completed_prefix(class_authorin
         with pytest.raises(AttributeError):
             getattr(Partial, name)
     assert events == [None, None]
-    assert not ambient._snapshot().read().kind.value.rules
+    assert not ambient._snapshot().read().value.rules
 
 
 @pytest.mark.parametrize("spelling", ["external", "_0"])
@@ -6313,7 +6291,7 @@ def test_class_ruleset_bodyless_members_do_not_create_rewrites():
         def value(self) -> i64: ...
 
     assert isinstance(Bodyless().value(), i64)
-    assert destination._snapshot().read().kind.value.rules == []
+    assert destination._snapshot().read().value.rules == []
 
 
 @pytest.fixture
@@ -6908,7 +6886,7 @@ def test_bodyless_named_mutation_defaults_and_errors(class_authoring_without_eng
     declaration = resolve_callable(Accumulator.update)
     assert declaration.read().kind.value.name == "exact mutable member"
     assert Accumulator.update.__doc__ == "A bodyless mutating declaration."
-    assert destination._snapshot().read().kind.value.rules == []
+    assert destination._snapshot().read().value.rules == []
     default.__replace_expr__(i64(9))
     original = copy(receiver)
     assert receiver.update() is None
@@ -6954,7 +6932,7 @@ def test_bodyless_named_mutation_defaults_and_errors(class_authoring_without_eng
     assert to_runtime_expr(wrong_receiver).__egg_ref__ is wrong_root
     assert receiver.reset() is None
     assert _required_callable_args(receiver, Accumulator.reset)[0].__egg_ref__ == root
-    assert destination._snapshot().read().kind.value.rules == []
+    assert destination._snapshot().read().value.rules == []
 
 
 @pytest.mark.parametrize("name", ["__delitem__", "__setitem__", "update"])
@@ -7056,7 +7034,7 @@ def test_mutating_member_rewrite_keeps_original_binders(class_authoring_without_
     view = presentation(resolve_callable(Mutable.replace)).views[0]
     assert view.receiver == view.mutates == int(reverse)
     snapshot = destination._snapshot()
-    assert len(snapshot.read().kind.value.rules) == 1
+    assert len(snapshot.read().value.rules) == 1
     record = _inline_rule(snapshot, 0)
     rewrite_record = record.read().kind.value
     assert isinstance(rewrite_record, pb.Rewrite)
@@ -7067,7 +7045,7 @@ def test_mutating_member_rewrite_keeps_original_binders(class_authoring_without_
     rhs = record.owner.ref("nodes", rewrite_record.rhs)
     assert rhs.read().kind.field == "var"
     assert rhs.read().kind.value == "other"
-    encoded = pack([to_runtime_expr(value).__egg_ref__], commands=[snapshot]).program.to_binary()
+    encoded = pack([to_runtime_expr(value).__egg_ref__], rulesets=[snapshot]).program.to_binary()
     assert pb.Program.from_binary(encoded).to_binary() == encoded
 
 
@@ -7104,7 +7082,7 @@ def test_class_ruleset_bodyless_callable_headers(class_authoring_without_engine)
         function_sort = sort.read().kind.value
         assert function_sort.params == []
         assert StructuralView(sort.owner.ref("sorts", function_sort.result)) == StructuralView(boolean_sort)
-    assert destination._snapshot().read().kind.value.rules == []
+    assert destination._snapshot().read().value.rules == []
 
     @function(ruleset=destination)
     def bodyless() -> Boolean: ...
@@ -7151,7 +7129,7 @@ def test_class_late_header_failure_keeps_prefix(class_authoring_without_engine, 
     assert events == expected
     assert isinstance(Partial.FIRST, HeaderResult)
     assert isinstance(Partial().early(), HeaderResult)
-    assert len(destination._snapshot().read().kind.value.rules) == 1
+    assert len(destination._snapshot().read().value.rules) == 1
     for name in ("bad", "later"):
         with pytest.raises(AttributeError):
             getattr(Partial, name)
@@ -7202,7 +7180,7 @@ def test_classvar_header_precedes_failing_default_conversion(class_authoring_wit
         _ = Partial.FIRST
     assert events == [Partial.FIRST]
     assert isinstance(Partial.FIRST, ConversionResult)
-    assert destination._snapshot().read().kind.value.rules == []
+    assert destination._snapshot().read().value.rules == []
     with pytest.raises(AttributeError):
         Partial()
     assert len(events) == 1
@@ -7221,11 +7199,11 @@ def test_class_default_bodies_see_all_headers_and_keep_failure_prefix(class_auth
         def __init__(self) -> None: ...
 
         def early(self, value: i64) -> BodyResult:
-            events.append(("early", len(destination._snapshot().read().kind.value.rules)))
+            events.append(("early", len(destination._snapshot().read().value.rules)))
             return self.later(value)
 
         def later(self, value: i64) -> BodyResult:
-            events.append(("later", len(destination._snapshot().read().kind.value.rules)))
+            events.append(("later", len(destination._snapshot().read().value.rules)))
             msg = "body marker"
             raise ValueError(msg)
 
@@ -7241,8 +7219,8 @@ def test_class_default_bodies_see_all_headers_and_keep_failure_prefix(class_auth
     assert isinstance(value.unvisited(), BodyResult)
     assert events == [("early", 1), ("later", 2)]
     snapshot = destination._snapshot()
-    assert len(snapshot.read().kind.value.rules) == 2
-    encoded = pack(commands=[snapshot]).program.to_binary()
+    assert len(snapshot.read().value.rules) == 2
+    encoded = pack([snapshot]).program.to_binary()
     assert pb.Program.from_binary(encoded).to_binary() == encoded
 
 
@@ -7321,7 +7299,7 @@ def test_class_default_views_share_canonical_parameter_binding(class_authoring_w
     assert _required_callable_args(expression.wrapped())[1].value == 4
     assert isinstance(expression.own, Defaults)
     snapshot = destination._snapshot()
-    records = [_inline_rule(snapshot, index) for index in range(len(snapshot.read().kind.value.rules))]
+    records = [_inline_rule(snapshot, index) for index in range(len(snapshot.read().value.rules))]
     assert [record.read().kind.value.subsume for record in records] == [False, False, True]
     for record in records:
         rewrite_record = record.read().kind.value
@@ -7343,7 +7321,9 @@ def test_class_default_views_share_canonical_parameter_binding(class_authoring_w
             assert [StructuralView(rhs_ref.owner.ref("nodes", arg)) for arg in rhs.kind.value.args] == [
                 StructuralView(lhs_ref.owner.ref("nodes", lhs.args[1]))
             ]
-    assert len(_required_oneof(pack(commands=[snapshot]).program.commands[0].kind, "add_rules", pb.AddRules).rules) == 3
+    packed_snapshot = pack([snapshot]).program
+    assert packed_snapshot.rulesets[0].value is not None
+    assert len(packed_snapshot.rulesets[0].value.rules) == 3
 
 
 @pytest.mark.parametrize("replace_receiver", [False, True])
@@ -7365,7 +7345,7 @@ def test_class_default_lhs_keeps_original_binders_after_wrapper_replacement(
     expression = Binders(1).body(2)  # type: ignore[arg-type]
     assert _required_callable_args(expression)[1].value == 2
     snapshot = destination._snapshot()
-    assert len(snapshot.read().kind.value.rules) == 1
+    assert len(snapshot.read().value.rules) == 1
     reference = _inline_rule(snapshot, 0)
     rewrite_record = reference.read().kind.value
     lhs = reference.owner.ref("nodes", rewrite_record.lhs)
@@ -7374,7 +7354,9 @@ def test_class_default_lhs_keeps_original_binders_after_wrapper_replacement(
     assert [argument.read().kind.value for argument in lhs_args] == ["self", "value"]
     rhs = RuntimeExpr(reference.owner.ref("nodes", rewrite_record.rhs))
     assert _required_callable_args(rhs, Binders)[0].value == (9 if replace_receiver else 7)
-    assert len(_required_oneof(pack(commands=[snapshot]).program.commands[0].kind, "add_rules", pb.AddRules).rules) == 1
+    packed_snapshot = pack([snapshot]).program
+    assert packed_snapshot.rulesets[0].value is not None
+    assert len(packed_snapshot.rulesets[0].value.rules) == 1
 
 
 @pytest.mark.parametrize("result", [None, i64(2)])
@@ -7394,7 +7376,7 @@ def test_class_invalid_default_body_result_does_not_poison_headers(class_authori
         InvalidResult()
     assert isinstance(InvalidResult().body(), InvalidResult)
     assert calls == [1]
-    assert destination._snapshot().read().kind.value.rules == []
+    assert destination._snapshot().read().value.rules == []
 
 
 @pytest.mark.parametrize("default", [None, i64(1)])
@@ -7409,7 +7391,7 @@ def test_class_primitive_default_with_ruleset_remains_invalid(class_authoring_wi
         _ = InvalidDefault.FIRST
     assert invalid_default_context.catalog is not None
     assert not invalid_default_context.catalog.members
-    assert destination._snapshot().read().kind.value.rules == []
+    assert destination._snapshot().read().value.rules == []
     with pytest.raises(AttributeError):
         _ = InvalidDefault.FIRST
 

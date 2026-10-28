@@ -85,14 +85,16 @@ def _required_data(frames: list[pb.RunProgramResponse], field: str) -> pb.RunPro
 
 
 def _program_rules(program: pb.Program) -> list[pb.Rule]:
-    """Inspect inline registrations in authored command order, including nested controls."""
-    rules = []
+    """Inspect setup definitions and literal selections, including nested controls."""
+    rules = [rule for binding in program.rulesets if binding.value is not None for rule in binding.value.rules]
     pending = list(reversed(program.commands))
     while pending:
         kind = pending.pop().kind
         assert kind is not None
-        if kind.field == "add_rules":
-            rules.extend(kind.value.rules)
+        if kind.field == "run":
+            for selection in kind.value.rulesets:
+                if selection.kind is not None and selection.kind.field == "ruleset":
+                    rules.extend(selection.kind.value.rules)
         elif kind.field == "loop":
             pending.extend(reversed(kind.value.body))
         elif kind.field == "fail":
@@ -1152,15 +1154,11 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
                 ),
             )
         )
+    program.rulesets = [
+        pb.RulesetBinding(name=name, value=pb.Ruleset(rules=[authored_rules[index]]))
+        for index, name in enumerate(("handoff_first", "handoff_later"))
+    ]
     program.commands = [
-        *(
-            pb.Command(
-                kind=Oneof[Literal["add_rules"], pb.AddRules](
-                    "add_rules", pb.AddRules(group=name, rules=[authored_rules[index]])
-                )
-            )
-            for index, name in enumerate(("handoff_first", "handoff_later"))
-        ),
         pb.Command(
             kind=Oneof[Literal["action"], pb.Action](
                 "action",
@@ -1199,7 +1197,12 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
                         "extract", pb.Extract(roots=[first + 2], variants=1, extractor=pb.Extractor.TREE)
                     )
                     if extracting
-                    else Oneof[Literal["run"], pb.Run]("run", pb.Run(groups=["handoff_first"]))
+                    else Oneof[Literal["run"], pb.Run](
+                        "run",
+                        pb.Run(
+                            rulesets=[pb.RulesetSelection(kind=Oneof[Literal["name"], str]("name", "handoff_first"))]
+                        ),
+                    )
                 )
             ),
         )
@@ -1210,7 +1213,12 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
                         "action", pb.Action(kind=Oneof[Literal["panic"], str]("panic", "native after callback"))
                     )
                     if case == "later_native_error"
-                    else Oneof[Literal["run"], pb.Run]("run", pb.Run(groups=["handoff_later"]))
+                    else Oneof[Literal["run"], pb.Run](
+                        "run",
+                        pb.Run(
+                            rulesets=[pb.RulesetSelection(kind=Oneof[Literal["name"], str]("name", "handoff_later"))]
+                        ),
+                    )
                 )
             )
         )
@@ -1921,30 +1929,23 @@ def test_schedule_additions_are_ordered_once_before_control_loops(monkeypatch, c
     elif control == "unbounded":
         schedule = schedule.saturate()
     resolved = pack(commands=[schedule._resolve(None)]).program
-    prelude = resolved.commands[0].kind
-    assert prelude is not None
-    assert prelude.field == "loop"
-    assert prelude.value.max_iterations == 1
-    assert [command.kind.field for command in prelude.value.body if command.kind is not None] == [
-        "add_rules",
-        "add_rules",
-        "add_rules",
-        "loop",
-    ]
+    assert len(resolved.rulesets) == 1
+    binding = resolved.rulesets[0]
+    assert binding.name == str(first.__egg_ident__)
+    assert binding.value is not None
+    assert [rule.name for rule in binding.value.rules] == ["first", "last"]
     pending = list(reversed(resolved.commands))
-    operations: list[tuple[str, str | list[str]]] = []
+    selections = []
     while pending:
         command = pending.pop()
         assert command.kind is not None
         if command.kind.field == "loop":
             pending.extend(reversed(command.kind.value.body))
-        elif command.kind.field == "add_rules":
-            operations.append(("add", command.kind.value.group))
         elif command.kind.field == "run":
-            operations.append(("run", command.kind.value.groups))
-    group = str(first.__egg_ident__)
-    assert operations == [("add", group)] * 3 + [("run", [group])] * 3
-    assert [rule.name for rule in _program_rules(resolved)] == ["first", "last", "first"]
+            selections.append([
+                selection.kind.value for selection in command.kind.value.rulesets if selection.kind is not None
+            ])
+    assert selections == [[binding.name]] * 3
 
 
 @pytest.mark.parametrize(
@@ -2030,13 +2031,53 @@ def test_mixed_registration_is_one_ordered_input_program(monkeypatch):
     assert program is not None
     assert [command.kind.field for command in program.commands if command.kind is not None] == [
         "action",
-        "add_rules",
         "action",
     ]
-    addition = program.commands[1].kind
-    assert addition is not None
-    assert addition.field == "add_rules"
-    assert addition.value.group == ""
+    assert len(program.rulesets) == 1
+    assert program.rulesets[0].name == ""
+    assert program.rulesets[0].value is not None
+    assert len(program.rulesets[0].value.rules) == 1
+
+
+def test_default_registration_accumulates_complete_definitions_with_clone_scope(monkeypatch):
+    from egglog import rule  # noqa: PLC0415
+
+    requests: list[pb.RunProgramRequest] = []
+
+    class Transport:
+        def create(self, encoded):
+            return pb.CreateEGraphResponse(egraph_id=1, threads=1).to_binary()
+
+        def run(self, encoded):
+            requests.append(pb.RunProgramRequest.from_binary(encoded))
+            return output_frames(), None
+
+        def clone_graph(self, encoded):
+            return pb.CloneEGraphResponse(egraph_id=2).to_binary()
+
+        def destroy(self, encoded):
+            return pb.DestroyEGraphResponse().to_binary()
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", Transport)
+    graph = EGraph()
+    graph.register(rule(name="first").then())
+    graph.push()
+    graph.register(rule(name="child").then())
+    graph.pop()
+    graph.register(rule(name="parent").then())
+    graph.register(i64(1))
+    names = []
+    for request in requests[:3]:
+        assert request.program is not None
+        assert not request.program.commands
+        assert len(request.program.rulesets) == 1
+        binding = request.program.rulesets[0]
+        assert binding.name == ""
+        assert binding.value is not None
+        names.append([member.name for member in binding.value.rules])
+    assert names == [["first"], ["first", "child"], ["first", "parent"]]
+    assert requests[-1].program is not None
+    assert not requests[-1].program.rulesets
 
 
 @pytest.mark.parametrize("reuse", ["separate", "same", "copy"])
@@ -2297,7 +2338,7 @@ def native_rule_program():
     return Seed, First, Second, first, second
 
 
-def test_native_same_ident_retains_all_completed_memberships(native_rule_program):
+def test_native_named_replacement_preserves_effects_and_matching_progress(native_rule_program):
     from egglog import ruleset  # noqa: PLC0415
 
     Seed, First, Second, first, second = native_rule_program
@@ -2308,8 +2349,17 @@ def test_native_same_ident_retains_all_completed_memberships(native_rule_program
     assert _run_ruleset_step(graph, r2) == [1]
     assert _run_ruleset_step(graph, r1) == []
     graph.register(Seed(2))
-    assert _run_ruleset_step(graph, r1) == [1, 1]
-    graph.check(First(1), Second(1), First(2), Second(2))
+    assert _run_ruleset_step(graph, r1) == [1]
+    graph.check(First(1), Second(1), First(2))
+    graph.check_fail(Second(2))
+    assert _run_ruleset_step(graph, r2) == [1]
+    graph.check(Second(2))
+    graph.register(Seed(3))
+    assert _run_ruleset_step(graph, ruleset(name="same")) == []
+    graph.check_fail(First(3), Second(3))
+    assert _run_ruleset_step(graph, r1) == [1]
+    graph.check(First(3))
+    graph.check_fail(Second(3))
 
 
 @pytest.mark.parametrize("reverse", [False, True])
@@ -2321,6 +2371,16 @@ def test_native_combined_same_group_adds_both_bodies_in_order(native_rule_progra
     graph = EGraph()
     graph.register(Seed(1))
     assert _run_ruleset_step(graph, r2 | r1 if reverse else r1 | r2) == [1, 1]
+    graph.check(First(1), Second(1))
+
+
+def test_native_direct_rule_and_named_object_compose_as_one_step(native_rule_program):
+    from egglog import ruleset, run  # noqa: PLC0415
+
+    Seed, First, Second, first, second = native_rule_program
+    named = ruleset(second, name="named-composition")
+    graph = EGraph(Seed(1))
+    graph.run(run(ruleset(first) | named))
     graph.check(First(1), Second(1))
 
 
@@ -2385,7 +2445,7 @@ def test_native_mixed_registration_keeps_runtime_failure_prefix(native_rule_prog
         graph.register(Seed(1))
     with pytest.raises(EggSmolError, match="mixed runtime marker") as caught:
         graph.register(first if prefix_rule else Seed(1), panic("mixed runtime marker"), Second(2))
-    assert caught.value.__dict__["_egglog_proto_error"].location == pb.CommandLocation(path=[1])
+    assert caught.value.__dict__["_egglog_proto_error"].location == pb.CommandLocation(path=[0 if prefix_rule else 1])
     graph.check(Seed(1))
     graph.check_fail(First(1))
     graph.check_fail(Second(2))

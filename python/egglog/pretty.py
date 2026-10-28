@@ -76,7 +76,7 @@ def _name_expr(tp_name: str, expr: str, *, copy_identifier: bool, statements: li
     return name
 
 
-_RefFrame: TypeAlias = str | Ref | tuple[Ref, bool, bool] | tuple[Ref, pb.Action | pb.Command]
+_RefFrame: TypeAlias = str | Ref | tuple[Ref, bool, bool] | tuple[Ref, pb.Action | pb.Command | pb.Ruleset]
 
 
 @dataclass
@@ -203,8 +203,8 @@ def pretty_ref(  # noqa: C901, PLR0912
             active.remove(frame)
             continue
         if len(frame) == 2:
-            # Inline Rule.head actions borrow the rule owner, not its arena
-            # identity: re-entering that Ref would falsely signal a cycle.
+            # Inline actions and collection literals borrow their owner's
+            # arenas; re-entering that Ref would falsely signal a cycle.
             reference, record = frame
             bare = parentheses = False
         else:
@@ -233,40 +233,68 @@ def pretty_ref(  # noqa: C901, PLR0912
         if isinstance(record, pb.Command) and record.kind is not None and record.kind.field == "action":
             record = record.kind.value
         pieces: list[_RefFrame]
-        if isinstance(record, pb.Command):
+        if isinstance(record, pb.RulesetBinding | pb.Ruleset):
+            value = record.value if isinstance(record, pb.RulesetBinding) else record
+            if value is None:
+                msg_0 = "Cannot print a ruleset binding without a value"
+                raise ValueError(msg_0)
+            pieces = ["ruleset("]
+            builder = Builder()
+            builder.import_context(owner)
+            rule_indices = [
+                builder.add(
+                    "rules",
+                    _copy_record(
+                        rule,
+                        relocate=lambda role, index: builder.import_ref(owner.ref(role, index)),  # noqa: B023
+                    ),
+                )
+                for rule in value.rules
+            ]
+            rule_owner = builder.publish()
+            for index, rule_index in enumerate(rule_indices):
+                if index:
+                    pieces.append(", ")
+                pieces.append((rule_owner.ref("rules", rule_index), False, False))
+            if isinstance(record, pb.RulesetBinding) and record.name:
+                pieces.append((", " if value.rules else "") + f"name={record.name!r}")
+            pieces.append(")")
+        elif isinstance(record, pb.Command):
             if record.kind is None:
                 msg_0 = "Cannot print a command without a kind"
                 raise ValueError(msg_0)
             if record.kind.field == "run":
-                run = record.kind.value
-                groups = ", ".join(repr(name) for name in run.groups)
-                if run.groups == [""]:
-                    groups = ""
-                if run.scheduler:
-                    groups += (", " if groups else "") + f"scheduler={run.scheduler!r}"
-                pieces = [f"run({groups})"]
-            elif record.kind.field == "add_rules":
-                addition = record.kind.value
-                pieces = ["ruleset("]
-                builder = Builder()
-                builder.import_context(owner)
-                rule_indices = [
-                    builder.add(
-                        "rules",
-                        _copy_record(
-                            rule,
-                            relocate=lambda role, index: builder.import_ref(owner.ref(role, index)),  # noqa: B023 -- relocation consumes this callback synchronously
-                        ),
-                    )
-                    for rule in addition.rules
-                ]
-                rule_owner = builder.publish()
-                for index, rule_index in enumerate(rule_indices):
+                selected = record.kind.value
+                pieces = ["run("]
+                if len(selected.rulesets) > 1:
+                    pieces.append("unstable_combine_rulesets(")
+                for index, selection in enumerate(selected.rulesets):
+                    if selection.kind is None:
+                        msg_0 = "Cannot print a ruleset selection without a kind"
+                        raise ValueError(msg_0)
                     if index:
                         pieces.append(", ")
-                    pieces.append((rule_owner.ref("rules", rule_index), False, False))
-                if addition.group:
-                    pieces.append((", " if addition.rules else "") + f"name={addition.group!r}")
+                    if selection.kind.field == "name":
+                        binding = next(
+                            (
+                                owner.ref("rulesets", index)
+                                for index in range(len(owner._slots["rulesets"]))
+                                if owner.ref("rulesets", index).read().name == selection.kind.value
+                            ),
+                            None,
+                        )
+                        if binding is not None:
+                            pieces.append((binding, False, False))
+                        elif len(selected.rulesets) != 1 or selection.kind.value:
+                            pieces.append(repr(selection.kind.value))
+                    else:
+                        pieces.append((reference, selection.kind.value))
+                if len(selected.rulesets) > 1:
+                    pieces.append(")")
+                if selected.scheduler:
+                    if len(pieces) > 1:
+                        pieces.append(", ")
+                    pieces.append(f"scheduler={selected.scheduler!r}")
                 pieces.append(")")
             elif record.kind.field == "bind_scheduler":
                 binding = record.kind.value

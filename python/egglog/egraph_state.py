@@ -110,6 +110,7 @@ class EGraphState:
         if save_egglog_string:
             self.transport.enable_recording()
         self.definitions = dict(builtin_catalog().definitions)
+        self.rulesets: dict[str, Ref] = {}
         # Exact acknowledged configs, or None after an unacknowledged attempt.
         # Scope ownership follows this handle, never the shared transport.
         self._scheduler_bindings: dict[str, pb.BindScheduler | None] = {}
@@ -200,6 +201,7 @@ class EGraphState:
                     program.sorts,
                     program.declarations,
                     program.files,
+                    program.rulesets,
                 ))
             )
             if not snapshot_only:
@@ -216,6 +218,8 @@ class EGraphState:
                 msg = "Execution frame has no result"
                 raise ValueError(msg)
             if chunk.result.field == "output" or chunk.result.value.location is not None:
+                for reference in packed.rulesets:
+                    self.rulesets[reference.read().name] = reference
                 for reference in packed.definitions:
                     key = _definition_key(reference.read())
                     if key is not None:
@@ -252,6 +256,8 @@ class EGraphState:
                     failure = frame.result.value
                 # An output or command location acknowledges installation.
                 if frame.result.field == "output" or frame.result.value.location is not None:
+                    for reference in packed.rulesets:
+                        self.rulesets[reference.read().name] = reference
                     for reference in packed.definitions:
                         key = _definition_key(reference.read())
                         if key is not None:
@@ -367,6 +373,7 @@ class EGraphState:
         result.handle = response.egraph_id
         result._recording = self._recording
         result.definitions = self.definitions.copy()
+        result.rulesets = self.rulesets.copy()
         result.threads = self.threads
         result.no_decomp = self.no_decomp
         result._scheduler_bindings = self._scheduler_bindings.copy()

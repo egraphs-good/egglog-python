@@ -2348,22 +2348,31 @@ class EGraph:
         self._register_commands(commands)
 
     def _register_commands(self, cmds: list[Command]) -> None:
-        commands = []
-        for command in cmds:
-            if isinstance(command, Action):
-                commands.append(command.__egg_ref__)
-            else:
-                builder = Builder()
-                index = builder.add(
-                    "commands",
-                    pb.Command(
-                        kind=Oneof[Literal["add_rules"], pb.AddRules](
-                            "add_rules", pb.AddRules(group="", rules=[builder.import_rule(command.__egg_ref__)])
-                        )
-                    ),
-                )
-                commands.append(builder.publish().ref("commands", index))
-        self._state.run_program(commands)
+        commands = [command.__egg_ref__ for command in cmds if isinstance(command, Action)]
+        additions = [command for command in cmds if isinstance(command, RewriteOrRule)]
+        if not additions:
+            self._state.run_program(commands)
+            return
+        builder = Builder()
+        previous = self._state.rulesets.get("")
+        rules = []
+        if previous is not None:
+            builder.import_context(previous.owner)
+            binding: pb.RulesetBinding = _copy_record(
+                previous.read(),
+                relocate=lambda role, index: builder.import_ref(previous.owner.ref(role, index)),
+            )
+            assert binding.value is not None
+            rules.extend(binding.value.rules)
+        rules.extend(builder.import_rule(rule.__egg_ref__) for rule in additions)
+        binding_index = builder.add("rulesets", pb.RulesetBinding(value=pb.Ruleset(rules=rules)))
+        self._state.run_program(
+            pack(
+                commands=commands,
+                rulesets=[builder.publish().ref("rulesets", binding_index)],
+                ambient=self._state.definitions,
+            )
+        )
 
     def function_size(self, fn: ExprCallable) -> int:
         """
@@ -2701,7 +2710,7 @@ class Schedule:
         self._schedulers = {} if schedulers is None else schedulers.copy()
 
     def _resolve(self, state: EGraphState | None) -> Ref:  # noqa: C901, PLR0912
-        """Resolve live authoring to ordered additions and group selections."""
+        """Snapshot live authoring into setup bindings and direct selections."""
         builder = Builder()
         builder.import_context(self._command.owner)
         command: pb.Command = _copy_record(
@@ -2710,7 +2719,8 @@ class Schedule:
         )
         pending = [command]
         leaves: list[pb.Command] = []
-        additions: list[pb.Command] = []
+        snapshots: dict[Ruleset | UnstableCombinedRuleset, Ref] = {}
+        named: dict[str, list[Ref]] = {}
         local_schedulers: dict[str, BackOff] = {}
         persistent_schedulers: dict[str, BackOff] = {}
         while pending:
@@ -2731,48 +2741,73 @@ class Schedule:
                     msg = "can't convert schedule count to unsigned native size"
                     raise OverflowError(msg)
                 pending.extend(reversed(control.body))
-            elif current.kind.field not in {"bind_scheduler", "add_rules", "freeze"}:
+            elif current.kind.field not in {"bind_scheduler", "freeze"}:
                 msg = f"Schedule command is not migrated: {current.kind.field}"
                 raise NotImplementedError(msg)
         for leaf in leaves:
             assert leaf.kind is not None
             assert leaf.kind.field == "run"
             run_command = leaf.kind.value
-            groups: list[str] = []
-            for token in run_command.groups:
+            selections: list[pb.RulesetSelection] = []
+            for selection in run_command.rulesets:
+                if selection.kind is None or selection.kind.field != "name":
+                    selections.append(selection)
+                    continue
+                token = selection.kind.value
                 source = self._bindings.get(token)
                 if source is None:
-                    groups.append(token)
+                    selections.append(selection)
                     continue
-                reference = source._snapshot()
-                builder.import_context(reference.owner)
-                addition: pb.Command = _copy_record(
+                sources = [source]
+                while sources:
+                    selected_source = sources.pop()
+                    if isinstance(selected_source, UnstableCombinedRuleset) and selected_source.ident is None:
+                        sources.extend(reversed(selected_source.rulesets))
+                        continue
+                    reference = snapshots.get(selected_source)
+                    if reference is None:
+                        reference = selected_source._snapshot()
+                        snapshots[selected_source] = reference
+                    origin = reference.owner
+                    builder.import_context(origin)
+                    binding: pb.RulesetBinding = _copy_record(
+                        reference.read(),
+                        # Relocation consumes this callback synchronously.
+                        relocate=lambda role, index: builder.import_ref(origin.ref(role, index)),  # noqa: B023
+                    )
+                    assert binding.value is not None
+                    if selected_source.ident is None:
+                        selections.append(
+                            pb.RulesetSelection(kind=Oneof[Literal["ruleset"], pb.Ruleset]("ruleset", binding.value))
+                        )
+                    else:
+                        members = named.setdefault(binding.name, [])
+                        if reference not in members:
+                            members.append(reference)
+                        selections.append(pb.RulesetSelection(kind=Oneof[Literal["name"], str]("name", binding.name)))
+            run_command.rulesets = selections
+        for name, references in named.items():
+            rules = []
+            for reference in references:
+                binding = _copy_record(
                     reference.read(),
-                    # The visitor is synchronous and does not retain this callback.
                     relocate=lambda role, index: builder.import_ref(reference.owner.ref(role, index)),  # noqa: B023
                 )
-                additions.append(addition)
-                todo = [addition]
-                while todo:
-                    item = todo.pop()
-                    if item.kind is not None and item.kind.field == "add_rules":
-                        groups.append(item.kind.value.group)
-                    elif item.kind is not None and item.kind.field == "loop":
-                        todo.extend(reversed(item.kind.value.body))
-            run_command.groups = groups
+                assert binding.value is not None
+                rules.extend(binding.value.rules)
+            builder.add("rulesets", pb.RulesetBinding(name=name, value=pb.Ruleset(rules=rules)))
         if state is not None:
             for scheduler in persistent_schedulers.values():
                 state.bind_scheduler(scheduler.__egg_ref__)
         # Authoring snapshots are fixed setup, installed once before any loop.
         # Keep their authored leaf order and the schedule's lexical scopes.
-        if additions or local_schedulers:
+        if local_schedulers:
             command = pb.Command(
                 kind=Oneof[Literal["loop"], pb.Loop](
                     "loop",
                     pb.Loop(
                         max_iterations=1,
                         body=[
-                            *additions,
                             *(_copy_record(scheduler.__egg_ref__.read()) for scheduler in local_schedulers.values()),
                             command,
                         ],
@@ -2866,13 +2901,8 @@ class Ruleset(Schedule):
         self.ident = ident
         self.deferred_rule_gens: list[Callable[[], Iterable[RewriteOrRule]]] = []
         builder = Builder()
-        index = builder.add(
-            "commands",
-            pb.Command(
-                kind=Oneof[Literal["add_rules"], pb.AddRules]("add_rules", pb.AddRules(group=str(self.__egg_ident__)))
-            ),
-        )
-        self.__egg_ref__ = builder.publish().ref("commands", index)
+        index = builder.add("rulesets", pb.RulesetBinding(name=str(self.__egg_ident__), value=pb.Ruleset()))
+        self.__egg_ref__ = builder.publish().ref("rulesets", index)
 
     @property
     def __egg_decls__(self) -> Never:
@@ -2895,19 +2925,16 @@ class Ruleset(Schedule):
         if not isinstance(cast("object", rule), RewriteOrRule):
             msg = "Rulesets require canonical rules or rewrites"
             raise TypeError(msg)
-        record: pb.Command = self.__egg_ref__.read()
-        assert record.kind is not None
-        assert record.kind.field == "add_rules"
         builder = Builder()
         builder.import_context(self.__egg_ref__.owner)
-        record = _copy_record(
-            record, relocate=lambda role, index: builder.import_ref(self.__egg_ref__.owner.ref(role, index))
+        record: pb.RulesetBinding = _copy_record(
+            self.__egg_ref__.read(),
+            relocate=lambda role, index: builder.import_ref(self.__egg_ref__.owner.ref(role, index)),
         )
-        assert record.kind is not None
-        assert record.kind.field == "add_rules"
-        record.kind.value.rules.append(builder.import_rule(rule.__egg_ref__))
-        index = builder.add("commands", record)
-        self.__egg_ref__ = builder.publish().ref("commands", index)
+        assert record.value is not None
+        record.value.rules.append(builder.import_rule(rule.__egg_ref__))
+        index = builder.add("rulesets", record)
+        self.__egg_ref__ = builder.publish().ref("rulesets", index)
 
     def register(
         self,
@@ -2974,22 +3001,19 @@ class UnstableCombinedRuleset(Schedule):
 
     def _snapshot(self) -> Ref:
         builder = Builder()
-        commands = []
+        rules = []
         for source in self.rulesets:
             reference = source._snapshot()
             builder.import_context(reference.owner)
-            commands.append(
-                _copy_record(
-                    reference.read(),
-                    # The visitor is synchronous and does not retain this callback.
-                    relocate=lambda role, index: builder.import_ref(reference.owner.ref(role, index)),  # noqa: B023
-                )
+            binding: pb.RulesetBinding = _copy_record(
+                reference.read(),
+                # Relocation consumes this callback synchronously.
+                relocate=lambda role, index: builder.import_ref(reference.owner.ref(role, index)),  # noqa: B023
             )
-        index = builder.add(
-            "commands",
-            pb.Command(kind=Oneof[Literal["loop"], pb.Loop]("loop", pb.Loop(max_iterations=1, body=commands))),
-        )
-        return builder.publish().ref("commands", index)
+            assert binding.value is not None
+            rules.extend(binding.value.rules)
+        index = builder.add("rulesets", pb.RulesetBinding(name=str(self.__egg_ident__), value=pb.Ruleset(rules=rules)))
+        return builder.publish().ref("rulesets", index)
 
     def __str__(self) -> str:
         return pretty_ref(self._snapshot(), custom_literal=_format_pyobject)
@@ -3648,8 +3672,9 @@ def run(
     """
     Create a one-step run schedule.
 
-    ``run()`` runs the default ruleset once. ``run(ruleset)`` runs one named
-    ruleset once. Additional facts are conjunctive pre-check stop conditions.
+    ``run()`` runs the default ruleset once. ``run(ruleset)`` runs the
+    supplied collection once, snapshotting its current contents on submission.
+    Additional facts are conjunctive pre-check stop conditions.
     Scheduler configuration and conditions are authored without an engine;
     their execution still requires the shared adapter scheduler/loop bridge.
     """
@@ -3666,7 +3691,7 @@ def run(
         kind=Oneof[Literal["run"], pb.Run](
             "run",
             pb.Run(
-                groups=[name],
+                rulesets=[pb.RulesetSelection(kind=Oneof[Literal["name"], str]("name", name))],
                 scheduler=scheduler_name,
             ),
         )

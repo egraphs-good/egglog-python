@@ -1137,3 +1137,18 @@ The experimental `set_array_api_egraph` and `set_any_expr_egraph` contexts affec
 all threads: other threads must not use the corresponding API while a context
 is active. See the [low-level bindings](bindings.md#thread-safety) for their
 thread-safety requirements.
+
+## Ruleset snapshots
+
+Pass ruleset objects directly to `run(...)` or `EGraph.run(...)`. A schedule
+reads each mutable ruleset when it is submitted, so later `append` and
+`register` calls are included in subsequent runs. Anonymous collections become
+literal selections; named collections replace the corresponding engine binding
+with their complete current contents. Anonymous combinations select their component literals and names in order.
+A named combined collection captures its current members, without installing
+a live dependency between its name and its components.
+
+`EGraph.register(...)` keeps accumulating rules in its default collection across
+calls. Registering actions preserves their order, while rule definitions are
+installed as setup before those actions. Replacing a collection changes future
+membership; it preserves effects and matching progress from earlier runs.

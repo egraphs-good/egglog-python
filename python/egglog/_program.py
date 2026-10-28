@@ -15,11 +15,11 @@ from math import isnan
 from struct import unpack
 from threading import RLock
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, cast
 from weakref import WeakKeyDictionary
 
 from egglog_proto.egglog.v1 import egglog_pb as pb
-from protobuf import DescFieldValueList, DescFieldValueMessage, DescMessage, Message, Oneof, ScalarType
+from protobuf import DescFieldValueList, DescFieldValueMessage, DescMessage, Message, ScalarType
 
 if TYPE_CHECKING:
     from ._catalog import Catalog
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 # address; '@' means a named definition dependency. Other fields are copied,
 # recursively for inline messages. Binder positions are deliberately NOT indices.
 _FIELDS = {
-    "Program": "nodes sorts declarations commands files",
+    "Program": "nodes sorts declarations commands files rulesets",
     "Node": "sort_id:sorts var primitive_value call apply union get_cost span",
     "BuiltinCatalog": "sorts primitive_sorts primitives files",
     "Sort": "eq@eq_sort application func var span",
@@ -68,12 +68,14 @@ _FIELDS = {
     "RuleBody": "query:nodes head",
     "Rewrite": "lhs:nodes rhs:nodes conditions:nodes subsume",
     "BiRewrite": "lhs:nodes rhs:nodes conditions:nodes",
-    "Command": "action check prove prove_exists run bind_scheduler keep_best extract freeze table_sizes table_rows table_stats loop fail stats add_rules explain span",
+    "Command": "action check prove prove_exists run bind_scheduler keep_best extract freeze table_sizes table_rows table_stats loop fail stats explain span",
     "Check": "facts:nodes",
     "Prove": "facts:nodes",
     "ProveExists": "constructor@callable",
-    "Run": "groups scheduler",
-    "AddRules": "group rules",
+    "Run": "rulesets scheduler",
+    "Ruleset": "rules",
+    "RulesetBinding": "name value",
+    "RulesetSelection": "ruleset name",
     "Explain": "groups",
     "BindScheduler": "name back_off",
     "BackOff": "match_limit ban_length node_limit",
@@ -90,12 +92,13 @@ _ROLES: dict[str, type[Message]] = {
     "sorts": pb.Sort,
     "declarations": pb.Declaration,
     "rules": pb.Rule,
+    "rulesets": pb.RulesetBinding,
     "files": pb.SourceFile,
     "commands": pb.Command,
     "primitive_sorts": pb.PrimitiveSort,
     "primitives": pb.Primitive,
 }
-_PROGRAM_ROLES = ("nodes", "sorts", "declarations", "files", "commands")
+_PROGRAM_ROLES = ("nodes", "sorts", "declarations", "files", "rulesets", "commands")
 _BUILTIN_ROLES = ("sorts", "primitive_sorts", "primitives", "files")
 _FIELD_ROLES = {
     name: dict(token.replace("@", ":@").partition(":")[::2] for token in fields.split())
@@ -405,15 +408,9 @@ def _rule_key(root: Ref) -> tuple[object, ...]:  # noqa: C901
         msg = "Rule comparison requires rule references"
         raise TypeError(msg)
     builder = Builder()
-    command = builder.add(
-        "commands",
-        pb.Command(
-            kind=Oneof[Literal["add_rules"], pb.AddRules]("add_rules", pb.AddRules(rules=[builder.import_rule(root)]))
-        ),
-    )
+    binding = builder.add("rulesets", pb.RulesetBinding(value=pb.Ruleset(rules=[builder.import_rule(root)])))
     closure = {
-        _definition_key(ref.read()): ref
-        for ref in pack(commands=[builder.publish().ref("commands", command)]).definitions
+        _definition_key(ref.read()): ref for ref in pack([builder.publish().ref("rulesets", binding)]).definitions
     }
     ordered = sorted(closure, key=repr)
     roots: list[tuple[Ref, object, bool]] = [(closure[key], key, False) for key in ordered] + [(root, "rule", False)]
@@ -682,6 +679,7 @@ class Packed:
     # Canonical source declarations let response owners retain the same
     # presentations without manufacturing another semantic declaration copy.
     definitions: tuple[Ref, ...]
+    rulesets: tuple[Ref, ...] = ()
 
 
 def clone_nodes(roots: Iterable[Ref]) -> tuple[Ref, ...]:  # noqa: C901
@@ -761,6 +759,7 @@ def pack(  # noqa: C901, PLR0912
     *,
     commands: Iterable[Ref] = (),
     definitions: Iterable[Ref] = (),
+    rulesets: Iterable[Ref] = (),
     ambient: Collection[tuple[str, str]] = (),
 ) -> Packed:
     """
@@ -780,6 +779,7 @@ def pack(  # noqa: C901, PLR0912
     demands: set[tuple[str, str]] = set()
     emitted: dict[tuple[str, str], Ref] = {}
     builtin_keys: set[tuple[str, str]] = set()
+    ruleset_names: dict[str, Ref] = {}
 
     def index_owner(owner: Owner) -> None:
         if owner in indexed:
@@ -816,10 +816,10 @@ def pack(  # noqa: C901, PLR0912
             if len(matches) == count:
                 return reference
 
-    def allocate(reference: Ref) -> int:
+    def allocate(reference: Ref) -> int:  # noqa: C901
         ref = reference.owner.ref(reference.role, reference.index)
         if ref.role == "rules":
-            msg = "Rules must be embedded in AddRules commands"
+            msg = "Rules must be embedded in Ruleset collections"
             raise TypeError(msg)
         if ref.role in {"primitive_sorts", "primitives"}:
             msg = "Builtin descriptors are ambient references, not Program roots"
@@ -828,6 +828,22 @@ def pack(  # noqa: C901, PLR0912
             msg = "Commands must be passed as ordered command roots"
             raise ValueError(msg)
         if ref not in mapped:
+            # Collections are setup records; member addresses relocate through
+            # the same owned arenas as command syntax.
+            if ref.role == "rulesets":
+                record = cast("pb.RulesetBinding", ref.read())
+                previous = ruleset_names.get(record.name)
+                if previous is not None:
+                    if not _structural_equal(previous, ref, exact_literals=True):
+                        raise ValueError(f"Conflicting ruleset bindings: {record.name!r}")
+                    mapped[ref] = mapped[previous]
+                    return mapped[ref]
+                ruleset_names[record.name] = ref
+                mapped[ref] = len(program.rulesets)
+                program.rulesets.append(pb.RulesetBinding())
+                pending.append(ref)
+                index_owner(ref.owner)
+                return mapped[ref]
             index_owner(ref.owner)
             if ref.role == "declarations":
                 key = _definition_key(ref.read())
@@ -858,6 +874,11 @@ def pack(  # noqa: C901, PLR0912
             msg = "Definitions must refer to declarations"
             raise TypeError(msg)
         index_owner(ref.owner)
+    for reference in rulesets:
+        if reference.role != "rulesets":
+            msg = "Expected a ruleset binding reference"
+            raise TypeError(msg)
+        allocate(reference)
     indices = tuple(allocate(ref) for ref in roots)
     for reference in commands:
         ref = reference.owner.ref(reference.role, reference.index)
@@ -865,6 +886,8 @@ def pack(  # noqa: C901, PLR0912
             msg = "Expected a command reference"
             raise TypeError(msg)
         index_owner(ref.owner)
+        for index in range(len(ref.owner._slots["rulesets"])):
+            allocate(ref.owner.ref("rulesets", index))
         program.commands.append(cast("pb.Command", rewrite(ref)))
 
     while True:
@@ -888,7 +911,7 @@ def pack(  # noqa: C901, PLR0912
             if missing:
                 raise ValueError(f"missing definitions: {sorted(missing)}")
             break
-    return Packed(program, indices, tuple(emitted.values()))
+    return Packed(program, indices, tuple(emitted.values()), tuple(ruleset_names.values()))
 
 
 _check_inventory()

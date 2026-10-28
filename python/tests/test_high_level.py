@@ -537,11 +537,7 @@ def test_saved_transcript_preserves_unparseable_ruleset_name(name: str) -> None:
     assert recorded.function_size(destination) == 2
     snapshot = pb.EGraphSnapshot.from_binary(recorded.freeze().to_binary())
     assert snapshot.program is not None
-    names = [
-        command.kind.value.group
-        for command in snapshot.program.commands
-        if command.kind is not None and command.kind.field == "add_rules"
-    ]
+    names = [binding.name for binding in snapshot.program.rulesets]
     assert len(names) >= 2
     assert len(set(names)) == len(names)
     _replay_recorded_source(recorded.as_egglog_string)
@@ -1926,18 +1922,16 @@ def test_polynomial_theory_authoring_snapshots_without_engine(monkeypatch, name:
     retained = array_api.Boolean(True)
     namespace = runpy.run_path(array_api.__file__, run_name=array_api.__name__)
     snapshot = namespace[name]._snapshot()
-    packed = pack(commands=[snapshot])
+    packed = pack([snapshot])
     decoded = pb.Program.from_binary(packed.program.to_binary())
-    addition = decoded.commands[0].kind
+    addition = decoded.rulesets[0].value
     assert addition is not None
-    assert addition.field == "add_rules"
-    assert len(addition.value.rules) == rule_count
+    assert len(addition.rules) == rule_count
     assert decoded.nodes
     assert decoded.declarations
-    restored = Builder.from_program(decoded).publish().ref("commands", 0).read()
-    assert restored.kind is not None
-    assert restored.kind.field == "add_rules"
-    assert len(restored.kind.value.rules) == rule_count
+    restored = Builder.from_program(decoded).publish().ref("rulesets", 0).read()
+    assert restored.value is not None
+    assert len(restored.value.rules) == rule_count
     assert retained.value is True
     engine.assert_not_called()
 
@@ -4748,7 +4742,7 @@ class TestScheduler:
                 elif command.kind.field == "loop":
                     pending.extend(reversed(command.kind.value.body))
                 else:
-                    assert command.kind.field == "add_rules"
+                    pytest.fail(f"Unexpected recorded command: {command.kind.field}")
         assert len(bindings) == 1
         assert len(runs) == 2
         assert len(actions) == 2
@@ -4785,7 +4779,7 @@ class TestScheduler:
                 bindings.append((kind.value, depth))
             elif kind.field == "run":
                 runs.append((kind.value, depth))
-            elif kind.field != "add_rules":
+            else:
                 assert kind.field == "loop"
                 pending.extend((child, depth + 1) for child in reversed(kind.value.body))
         assert len(bindings) == len(runs) == 2
@@ -4800,7 +4794,7 @@ class TestScheduler:
         assert runs[0][1] >= inner_depth
         assert runs[1][0].scheduler == outer.name
         assert runs[1][1] < inner_depth
-        assert runs[0][0].groups == runs[1][0].groups
+        assert runs[0][0].rulesets == runs[1][0].rulesets
         _replay_recorded_source(transcript)
 
     def test_persistent_scheduler_child_binding_is_redeployed_after_pop(self):
