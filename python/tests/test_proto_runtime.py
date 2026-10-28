@@ -1706,7 +1706,7 @@ def test_set_empty_converter_and_formed_pretty_use_retained_presentation(
     set_catalog_program, python_presentation_mapping, request
 ):
     python_presentation_mapping["types"]["Set"]["path"][-1] = "FiniteSet"
-    python_presentation_mapping["callables"]["egglog.core.set.empty"][0]["path"][-1] = "vacant"
+    python_presentation_mapping["callables"]["egglog.core.set.empty"][0]["path"] = ["vacant"]
     generated = request.getfixturevalue("set_runtime")
     Set, integer = generated["FiniteSet"], generated["i64"]
     assert str(convert(set(), Set[integer])) == "FiniteSet[i64].vacant()"
@@ -2018,10 +2018,13 @@ def test_exact_pretty_uses_retained_classmethod_presentation(
 ):
     from egglog.pretty import pretty_ref  # noqa: PLC0415
 
-    python_presentation_mapping["callables"]["egglog.core.bigint.from_string"][0]["path"][0] = "decimal"
+    python_presentation_mapping["callables"]["egglog.core.bigint.from_string"][0]["path"] = ["decimal"]
     python_presentation_mapping["types"]["BigInt"]["path"][-1] = "Integer"
     for name in ("egglog.core.bigrat.make", "egglog.experimental.rational.make"):
-        python_presentation_mapping["callables"][name][0]["params"].reverse()
+        params = python_presentation_mapping["callables"][name][0]["params"]
+        for position, parameter in enumerate(params):
+            parameter["coreInput"] = position
+        params.reverse()
     catalog_owner = builtin_owner(rational_catalog_program, mapping=python_presentation_mapping)
     for name, arm, payload, expected in (
         ("BigInt", "big_int", "123", "Integer.decimal('123')"),
@@ -2814,6 +2817,8 @@ def test_map_insert_view_parameter_permutation_preserves_core_order(
 ):
     view = python_presentation_mapping["callables"]["egglog.core.map.insert"][0]
     view["path"] = ["put"]
+    for position, parameter in enumerate(view["params"], start=1):
+        parameter["coreInput"] = position
     view["params"].reverse()
     view["params"][0]["name"], view["params"][1]["name"] = "item", "at"
     request.getfixturevalue("vec_runtime")

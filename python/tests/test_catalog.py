@@ -2,6 +2,7 @@
 
 import builtins
 import copy
+import json
 import runpy
 import subprocess
 import sys
@@ -22,6 +23,7 @@ from egglog._presentation import (
     Presentation,
     TypePresentation,
     builtin_owner,
+    mapping_views,
     presentation,
 )
 from egglog._program import Builder, StructuralView, pack
@@ -86,6 +88,39 @@ def _permute_local_owner(mapping, primitive, order):
     view = local_mapping["callables"][primitive][0]
     view["owner"] = local_sort(view["owner"])
     return local_mapping
+
+
+def test_sparse_builtin_views_preserve_explicit_layout_and_enrollment():
+    source = pb.BuiltinCatalog.from_binary(
+        (Path(__file__).resolve().parents[1] / "egglog/_builtin_catalog.pb").read_bytes()
+    )
+    semantic = Builder.from_builtins(source).publish()
+    templates = Builder.from_program(
+        pb.Program.from_json(json.dumps(DATA["fragment"])), environment=(semantic,)
+    ).publish()
+    expected = mapping_views(source, templates, DATA)
+    explicit = copy.deepcopy(DATA)
+    sparse = copy.deepcopy(DATA)
+    for name, rows in explicit["callables"].items():
+        for row, compact, view in zip(rows, sparse["callables"][name], expected["callable", name].views, strict=True):
+            row["path"] = list(view.path)
+            row["receiver"] = view.receiver
+            for parameter, resolved in zip(row.get("params", ()), view.params, strict=True):
+                parameter["coreInput"] = resolved.core_input
+            if view.kind in {CallKind.METHOD, CallKind.PROPERTY} and view.receiver == 0:
+                compact.pop("receiver", None)
+            if view.kind in {CallKind.METHOD, CallKind.CLASS_METHOD, CallKind.PROPERTY} and view.path == (
+                name.rsplit(".", 1)[-1],
+            ):
+                compact.pop("path", None)
+            for position, (parameter, resolved) in enumerate(zip(compact.get("params", ()), view.params, strict=True)):
+                slot = position + (view.receiver is not None and position >= view.receiver)
+                if resolved.core_input == slot:
+                    parameter.pop("coreInput", None)
+    assert mapping_views(source, templates, explicit) == expected
+    assert mapping_views(source, templates, sparse) == expected
+    del sparse["callables"]["egglog.core.i64.abs"]
+    assert ("callable", "egglog.core.i64.abs") not in mapping_views(source, templates, sparse)
 
 
 def test_pyobject_generated_surface_uses_real_defaults_and_host_policy():
@@ -308,7 +343,7 @@ def test_scalar_specialized_stub_rejects_invalid_views(mutation):
     elif mutation == "missing":
         view["params"].clear()
     elif mutation == "duplicate":
-        view["params"][0]["coreInput"] = view["receiver"]
+        view["params"][0]["coreInput"] = 0
     elif mutation == "owner":
         assert "owner" in view
         view["owner"] = next(
@@ -423,19 +458,20 @@ def test_vec_map_view_and_static_signature_come_from_actual_catalog():
     declaration = next(primitive for primitive in program.primitives if primitive.name == "egglog.core.vec.map")
     signature = _primitive_signature(declaration)
     view = mapping["callables"][declaration.name][0]
+    owner = builtin_owner(program, mapping=mapping)
+    reference = owner.ref("primitives", program.primitives.index(declaration))
+    resolved = presentation(reference).views[0]
     assert view["form"] == "METHOD"
-    assert view["path"] == ["map"]
-    assert view["receiver"] == 1
-    assert [(p["coreInput"], p["name"]) for p in view["params"]] == [(0, signature.inputs[0].name)]
+    assert resolved.path == ("map",)
+    assert resolved.receiver == 1
+    assert [(p.core_input, p.name) for p in resolved.params] == [(0, signature.inputs[0].name)]
     assert "mutates" not in view
     assert "default" not in view["params"][0]
     callback_kind = program.sorts[signature.inputs[0].sort].kind
     assert callback_kind is not None
     assert callback_kind.field == "func"
     assert "owner" in view
-    owner = builtin_owner(program, mapping=mapping)
-    reference = owner.ref("primitives", program.primitives.index(declaration))
-    local_owner = presentation(reference).views[0].owner
+    local_owner = resolved.owner
     assert local_owner is not None
     assert StructuralView(owner.ref("sorts", signature.inputs[1].sort)) == StructuralView(local_owner)
     render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
@@ -717,7 +753,7 @@ def test_pair_stub_rejects_invalid_or_unadmitted_generic_views(pair_catalog_prog
     if mutation == "output":
         signature.output = signature.inputs[0].sort
     elif mutation == "receiver":
-        mapping["callables"][first.name][0].pop("receiver")
+        mapping["callables"][first.name][0]["receiver"] = None
     elif mutation == "params":
         mapping["callables"][first.name][0]["params"] = [{"name": "extra", "coreInput": 0}]
     elif mutation == "owner_duplicate":
@@ -817,6 +853,7 @@ def test_stub_generation_rejects_invalid_or_unmigrated_shapes(mutation, message)
     view = mapping["callables"][addition.name][0]
     if mutation == "receiver":
         view["receiver"] = 1
+        view["params"][0]["coreInput"] = 1
     elif mutation == "tail":
         signature.varargs = [pb.Arg(sort=1), pb.Arg(sort=0)]
         view["params"].append({"coreInput": len(signature.inputs), "name": "rest"})
@@ -878,11 +915,12 @@ def test_bignum_generated_surface_uses_actual_forward_signatures(rational_catalo
     stub = renderer(rational_catalog_program, mapping=mapping)
     integer = stub.split("class BigInt(", 1)[1].split("\nclass ", 1)[0]
     ratio = stub.split("class BigRat(", 1)[1].split("\nclass ", 1)[0]
+    catalog = Catalog(builtin_owner(rational_catalog_program, mapping=mapping))
     for member in ("numer", "denom"):
         assert f"@property\n    def {member}(self) -> BigInt:" in ratio
-        view = mapping["callables"][declarations[f"egglog.core.bigrat.{member}"].name][0]
-        assert view["form"] == "PROPERTY"
-        assert view["receiver"] == 0
+        view = presentation(catalog.definitions["callable", declarations[f"egglog.core.bigrat.{member}"].name]).views[0]
+        assert view.kind == CallKind.PROPERTY
+        assert view.receiver == 0
     for member in ("__lshift__", "__rshift__"):
         assert f"def {member}(self, other: i64Like) -> BigInt:" in integer
         assert f"def __r{member[2:]}(" not in integer
@@ -1553,7 +1591,7 @@ def test_multiset_method_local_binders_from_actual_catalog():
     assert owner["name"] == "MultiSet"
     assert len(owner["args"]) == 1
     assert mapping["fragment"]["sorts"][owner["args"][0]] == {"var": 0}
-    callback = program.sorts[signature.inputs[view["params"][0]["coreInput"]].sort]
+    callback = program.sorts[signature.inputs[0].sort]
     assert callback.kind is not None
     assert callback.kind.field == "func"
     assert len(callback.kind.value.params) == 1

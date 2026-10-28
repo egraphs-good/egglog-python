@@ -314,27 +314,34 @@ def mapping_views(
                 ):
                     msg = "Default root has an invalid index"
                     raise ValueError(msg)
-        result[identity] = Presentation(
-            views=tuple(
+        views = []
+        for row in rows[key]:
+            kind = CallKind[row["form"]]
+            receiver = row.get("receiver", 0 if kind in {CallKind.METHOD, CallKind.PROPERTY} else None)
+            path = (
+                (key.rsplit(".", 1)[-1],) if kind in {CallKind.METHOD, CallKind.CLASS_METHOD, CallKind.PROPERTY} else ()
+            )
+            views.append(
                 CallPresentation(
-                    kind=CallKind[row["form"]],
-                    path=tuple(row.get("path", ())),
+                    kind=kind,
+                    path=tuple(row.get("path", path)),
                     owner=templates.ref("sorts", row["owner"]) if "owner" in row else None,
-                    receiver=row.get("receiver"),
+                    receiver=receiver,
                     params=tuple(
                         Parameter(
-                            core_input=parameter["coreInput"],
+                            core_input=parameter.get(
+                                "coreInput", position + (receiver is not None and position >= receiver)
+                            ),
                             name=parameter["name"],
                             default=templates.ref("nodes", parameter["default"]) if "default" in parameter else None,
                         )
-                        for parameter in row.get("params", ())
+                        for position, parameter in enumerate(row.get("params", ()))
                     ),
                     mutates=row.get("mutates"),
                     tail_repetitions=row.get("tailRepetitions"),
                 )
-                for row in rows[key]
             )
-        )
+        result[identity] = Presentation(views=tuple(views))
     missing = {(True, key) for key in type_rows} | {(False, key) for key in callable_rows}
     if missing - admitted:
         raise ValueError(f"Python mapping names absent native definitions: {sorted(missing - admitted)}")

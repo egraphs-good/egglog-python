@@ -11,14 +11,12 @@ DATA = json.loads(r"""{
         "owner": 0,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__add__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigint.bitand": [
@@ -27,14 +25,12 @@ DATA = json.loads(r"""{
         "owner": 0,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__and__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigint.bitor": [
@@ -43,24 +39,18 @@ DATA = json.loads(r"""{
         "owner": 0,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__or__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigint.bits": [
       {
         "form": "METHOD",
-        "owner": 0,
-        "path": [
-          "bits"
-        ],
-        "receiver": 0
+        "owner": 0
       }
     ],
     "egglog.core.bigint.bitxor": [
@@ -69,14 +59,12 @@ DATA = json.loads(r"""{
         "owner": 0,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__xor__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigint.bool_eq": [
@@ -85,14 +73,9 @@ DATA = json.loads(r"""{
         "owner": 0,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
-        ],
-        "path": [
-          "bool_eq"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigint.bool_ge": [
@@ -101,14 +84,9 @@ DATA = json.loads(r"""{
         "owner": 0,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
-        ],
-        "path": [
-          "bool_ge"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigint.bool_gt": [
@@ -117,14 +95,9 @@ DATA = json.loads(r"""{
         "owner": 0,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
-        ],
-        "path": [
-          "bool_gt"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigint.bool_le": [
@@ -133,14 +106,9 @@ DATA = json.loads(r"""{
         "owner": 0,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
-        ],
-        "path": [
-          "bool_le"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigint.bool_lt": [
@@ -149,14 +117,9 @@ DATA = json.loads(r"""{
         "owner": 0,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
-        ],
-        "path": [
-          "bool_lt"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigint.div": [
@@ -165,14 +128,12 @@ DATA = json.loads(r"""{
         "owner": 0,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__truediv__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigint.from_i64": [
@@ -181,7 +142,6 @@ DATA = json.loads(r"""{
         "owner": 0,
         "params": [
           {
-            "coreInput": 0,
             "name": "value"
           }
         ]
@@ -193,12 +153,8 @@ DATA = json.loads(r"""{
         "owner": 0,
         "params": [
           {
-            "coreInput": 0,
             "name": "s"
           }
-        ],
-        "path": [
-          "from_string"
         ]
       }
     ],
@@ -208,14 +164,12 @@ DATA = json.loads(r"""{
         "owner": 0,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__ge__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigint.gt": [
@@ -224,14 +178,12 @@ DATA = json.loads(r"""{
         "owner": 0,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__gt__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigint.le": [
@@ -240,14 +192,12 @@ DATA = json.loads(r"""{
         "owner": 0,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__le__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigint.lt": [
@@ -256,14 +206,12 @@ DATA = json.loads(r"""{
         "owner": 0,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__lt__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigint.max": [
@@ -272,14 +220,9 @@ DATA = json.loads(r"""{
         "owner": 0,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
-        ],
-        "path": [
-          "max"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigint.min": [
@@ -288,14 +231,9 @@ DATA = json.loads(r"""{
         "owner": 0,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
-        ],
-        "path": [
-          "min"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigint.mul": [
@@ -304,14 +242,12 @@ DATA = json.loads(r"""{
         "owner": 0,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__mul__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigint.not": [
@@ -320,8 +256,7 @@ DATA = json.loads(r"""{
         "owner": 0,
         "path": [
           "__invert__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigint.rem": [
@@ -330,14 +265,12 @@ DATA = json.loads(r"""{
         "owner": 0,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__mod__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigint.shl": [
@@ -346,14 +279,12 @@ DATA = json.loads(r"""{
         "owner": 0,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__lshift__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigint.shr": [
@@ -362,14 +293,12 @@ DATA = json.loads(r"""{
         "owner": 0,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__rshift__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigint.sub": [
@@ -378,24 +307,18 @@ DATA = json.loads(r"""{
         "owner": 0,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__sub__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigint.to_string": [
       {
         "form": "METHOD",
-        "owner": 0,
-        "path": [
-          "to_string"
-        ],
-        "receiver": 0
+        "owner": 0
       }
     ],
     "egglog.core.bigrat.abs": [
@@ -404,8 +327,7 @@ DATA = json.loads(r"""{
         "owner": 1,
         "path": [
           "__abs__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigrat.add": [
@@ -414,44 +336,30 @@ DATA = json.loads(r"""{
         "owner": 1,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__add__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigrat.cbrt": [
       {
         "form": "METHOD",
-        "owner": 1,
-        "path": [
-          "cbrt"
-        ],
-        "receiver": 0
+        "owner": 1
       }
     ],
     "egglog.core.bigrat.ceil": [
       {
         "form": "METHOD",
-        "owner": 1,
-        "path": [
-          "ceil"
-        ],
-        "receiver": 0
+        "owner": 1
       }
     ],
     "egglog.core.bigrat.denom": [
       {
         "form": "PROPERTY",
-        "owner": 1,
-        "path": [
-          "denom"
-        ],
-        "receiver": 0
+        "owner": 1
       }
     ],
     "egglog.core.bigrat.div": [
@@ -460,24 +368,18 @@ DATA = json.loads(r"""{
         "owner": 1,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__truediv__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigrat.floor": [
       {
         "form": "METHOD",
-        "owner": 1,
-        "path": [
-          "floor"
-        ],
-        "receiver": 0
+        "owner": 1
       }
     ],
     "egglog.core.bigrat.ge": [
@@ -486,14 +388,12 @@ DATA = json.loads(r"""{
         "owner": 1,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__ge__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigrat.gt": [
@@ -502,14 +402,12 @@ DATA = json.loads(r"""{
         "owner": 1,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__gt__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigrat.le": [
@@ -518,24 +416,18 @@ DATA = json.loads(r"""{
         "owner": 1,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__le__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigrat.log": [
       {
         "form": "METHOD",
-        "owner": 1,
-        "path": [
-          "log"
-        ],
-        "receiver": 0
+        "owner": 1
       }
     ],
     "egglog.core.bigrat.lt": [
@@ -544,14 +436,12 @@ DATA = json.loads(r"""{
         "owner": 1,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__lt__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigrat.make": [
@@ -560,11 +450,9 @@ DATA = json.loads(r"""{
         "owner": 1,
         "params": [
           {
-            "coreInput": 0,
             "name": "num"
           },
           {
-            "coreInput": 1,
             "name": "den"
           }
         ]
@@ -576,14 +464,9 @@ DATA = json.loads(r"""{
         "owner": 1,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
-        ],
-        "path": [
-          "max"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigrat.min": [
@@ -592,14 +475,9 @@ DATA = json.loads(r"""{
         "owner": 1,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
-        ],
-        "path": [
-          "min"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigrat.mul": [
@@ -608,14 +486,12 @@ DATA = json.loads(r"""{
         "owner": 1,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__mul__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigrat.neg": [
@@ -624,18 +500,13 @@ DATA = json.loads(r"""{
         "owner": 1,
         "path": [
           "__neg__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigrat.numer": [
       {
         "form": "PROPERTY",
-        "owner": 1,
-        "path": [
-          "numer"
-        ],
-        "receiver": 0
+        "owner": 1
       }
     ],
     "egglog.core.bigrat.pow": [
@@ -644,34 +515,24 @@ DATA = json.loads(r"""{
         "owner": 1,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__pow__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigrat.round": [
       {
         "form": "METHOD",
-        "owner": 1,
-        "path": [
-          "round"
-        ],
-        "receiver": 0
+        "owner": 1
       }
     ],
     "egglog.core.bigrat.sqrt": [
       {
         "form": "METHOD",
-        "owner": 1,
-        "path": [
-          "sqrt"
-        ],
-        "receiver": 0
+        "owner": 1
       }
     ],
     "egglog.core.bigrat.sub": [
@@ -680,34 +541,24 @@ DATA = json.loads(r"""{
         "owner": 1,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__sub__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bigrat.to_f64": [
       {
         "form": "METHOD",
-        "owner": 1,
-        "path": [
-          "to_f64"
-        ],
-        "receiver": 0
+        "owner": 1
       }
     ],
     "egglog.core.bigrat.to_i64": [
       {
         "form": "METHOD",
-        "owner": 1,
-        "path": [
-          "to_i64"
-        ],
-        "receiver": 0
+        "owner": 1
       }
     ],
     "egglog.core.bool.and": [
@@ -716,14 +567,12 @@ DATA = json.loads(r"""{
         "owner": 2,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__and__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bool.implies": [
@@ -732,14 +581,9 @@ DATA = json.loads(r"""{
         "owner": 2,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
-        ],
-        "path": [
-          "implies"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bool.not": [
@@ -748,8 +592,7 @@ DATA = json.loads(r"""{
         "owner": 2,
         "path": [
           "__invert__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.bool.or": [
@@ -758,14 +601,12 @@ DATA = json.loads(r"""{
         "owner": 2,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__or__"
         ],
-        "receiver": 0,
         "tailRepetitions": 2
       }
     ],
@@ -775,14 +616,12 @@ DATA = json.loads(r"""{
         "owner": 2,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__xor__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.f64.abs": [
@@ -791,8 +630,7 @@ DATA = json.loads(r"""{
         "owner": 3,
         "path": [
           "__abs__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.f64.add": [
@@ -801,14 +639,12 @@ DATA = json.loads(r"""{
         "owner": 3,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__add__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.f64.div": [
@@ -817,24 +653,18 @@ DATA = json.loads(r"""{
         "owner": 3,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__truediv__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.f64.exp": [
       {
         "form": "METHOD",
-        "owner": 3,
-        "path": [
-          "exp"
-        ],
-        "receiver": 0
+        "owner": 3
       }
     ],
     "egglog.core.f64.from_i64": [
@@ -843,12 +673,8 @@ DATA = json.loads(r"""{
         "owner": 3,
         "params": [
           {
-            "coreInput": 0,
             "name": "i"
           }
-        ],
-        "path": [
-          "from_i64"
         ]
       }
     ],
@@ -858,14 +684,12 @@ DATA = json.loads(r"""{
         "owner": 3,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__ge__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.f64.gt": [
@@ -874,14 +698,12 @@ DATA = json.loads(r"""{
         "owner": 3,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__gt__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.f64.le": [
@@ -890,24 +712,18 @@ DATA = json.loads(r"""{
         "owner": 3,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__le__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.f64.log": [
       {
         "form": "METHOD",
-        "owner": 3,
-        "path": [
-          "log"
-        ],
-        "receiver": 0
+        "owner": 3
       }
     ],
     "egglog.core.f64.lt": [
@@ -916,14 +732,12 @@ DATA = json.loads(r"""{
         "owner": 3,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__lt__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.f64.max": [
@@ -932,14 +746,9 @@ DATA = json.loads(r"""{
         "owner": 3,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
-        ],
-        "path": [
-          "max"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.f64.min": [
@@ -948,14 +757,9 @@ DATA = json.loads(r"""{
         "owner": 3,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
-        ],
-        "path": [
-          "min"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.f64.mul": [
@@ -964,14 +768,12 @@ DATA = json.loads(r"""{
         "owner": 3,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__mul__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.f64.neg": [
@@ -980,8 +782,7 @@ DATA = json.loads(r"""{
         "owner": 3,
         "path": [
           "__neg__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.f64.pow": [
@@ -990,14 +791,12 @@ DATA = json.loads(r"""{
         "owner": 3,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__pow__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.f64.rem": [
@@ -1006,24 +805,18 @@ DATA = json.loads(r"""{
         "owner": 3,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__mod__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.f64.sqrt": [
       {
         "form": "METHOD",
-        "owner": 3,
-        "path": [
-          "sqrt"
-        ],
-        "receiver": 0
+        "owner": 3
       }
     ],
     "egglog.core.f64.sub": [
@@ -1032,34 +825,24 @@ DATA = json.loads(r"""{
         "owner": 3,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__sub__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.f64.to_i64": [
       {
         "form": "METHOD",
-        "owner": 3,
-        "path": [
-          "to_i64"
-        ],
-        "receiver": 0
+        "owner": 3
       }
     ],
     "egglog.core.f64.to_string": [
       {
         "form": "METHOD",
-        "owner": 3,
-        "path": [
-          "to_string"
-        ],
-        "receiver": 0
+        "owner": 3
       }
     ],
     "egglog.core.i64.abs": [
@@ -1068,8 +851,7 @@ DATA = json.loads(r"""{
         "owner": 4,
         "path": [
           "__abs__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.i64.add": [
@@ -1078,14 +860,12 @@ DATA = json.loads(r"""{
         "owner": 4,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__add__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.i64.bitand": [
@@ -1094,14 +874,12 @@ DATA = json.loads(r"""{
         "owner": 4,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__and__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.i64.bitor": [
@@ -1110,14 +888,12 @@ DATA = json.loads(r"""{
         "owner": 4,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__or__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.i64.bitxor": [
@@ -1126,14 +902,12 @@ DATA = json.loads(r"""{
         "owner": 4,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__xor__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.i64.bool_ge": [
@@ -1142,14 +916,9 @@ DATA = json.loads(r"""{
         "owner": 4,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
-        ],
-        "path": [
-          "bool_ge"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.i64.bool_gt": [
@@ -1158,14 +927,9 @@ DATA = json.loads(r"""{
         "owner": 4,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
-        ],
-        "path": [
-          "bool_gt"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.i64.bool_le": [
@@ -1174,14 +938,9 @@ DATA = json.loads(r"""{
         "owner": 4,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
-        ],
-        "path": [
-          "bool_le"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.i64.bool_lt": [
@@ -1190,14 +949,9 @@ DATA = json.loads(r"""{
         "owner": 4,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
-        ],
-        "path": [
-          "bool_lt"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.i64.div": [
@@ -1206,14 +960,12 @@ DATA = json.loads(r"""{
         "owner": 4,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__truediv__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.i64.ge": [
@@ -1222,14 +974,12 @@ DATA = json.loads(r"""{
         "owner": 4,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__ge__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.i64.gt": [
@@ -1238,14 +988,12 @@ DATA = json.loads(r"""{
         "owner": 4,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__gt__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.i64.le": [
@@ -1254,24 +1002,18 @@ DATA = json.loads(r"""{
         "owner": 4,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__le__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.i64.log2": [
       {
         "form": "METHOD",
-        "owner": 4,
-        "path": [
-          "log2"
-        ],
-        "receiver": 0
+        "owner": 4
       }
     ],
     "egglog.core.i64.lt": [
@@ -1280,14 +1022,12 @@ DATA = json.loads(r"""{
         "owner": 4,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__lt__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.i64.max": [
@@ -1296,14 +1036,9 @@ DATA = json.loads(r"""{
         "owner": 4,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
-        ],
-        "path": [
-          "max"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.i64.min": [
@@ -1312,14 +1047,9 @@ DATA = json.loads(r"""{
         "owner": 4,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
-        ],
-        "path": [
-          "min"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.i64.mul": [
@@ -1328,14 +1058,12 @@ DATA = json.loads(r"""{
         "owner": 4,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__mul__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.i64.not": [
@@ -1344,8 +1072,7 @@ DATA = json.loads(r"""{
         "owner": 4,
         "path": [
           "__invert__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.i64.rem": [
@@ -1354,14 +1081,12 @@ DATA = json.loads(r"""{
         "owner": 4,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__mod__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.i64.shl": [
@@ -1370,14 +1095,12 @@ DATA = json.loads(r"""{
         "owner": 4,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__lshift__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.i64.shr": [
@@ -1386,14 +1109,12 @@ DATA = json.loads(r"""{
         "owner": 4,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__rshift__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.i64.sub": [
@@ -1402,24 +1123,18 @@ DATA = json.loads(r"""{
         "owner": 4,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__sub__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.i64.to_string": [
       {
         "form": "METHOD",
-        "owner": 4,
-        "path": [
-          "to_string"
-        ],
-        "receiver": 0
+        "owner": 4
       }
     ],
     "egglog.core.map.contains": [
@@ -1428,23 +1143,15 @@ DATA = json.loads(r"""{
         "owner": 5,
         "params": [
           {
-            "coreInput": 1,
             "name": "key"
           }
-        ],
-        "path": [
-          "contains"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.map.empty": [
       {
         "form": "CLASS_METHOD",
-        "owner": 5,
-        "path": [
-          "empty"
-        ]
+        "owner": 5
       }
     ],
     "egglog.core.map.get": [
@@ -1453,14 +1160,12 @@ DATA = json.loads(r"""{
         "owner": 5,
         "params": [
           {
-            "coreInput": 1,
             "name": "key"
           }
         ],
         "path": [
           "__getitem__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.map.insert": [
@@ -1469,28 +1174,18 @@ DATA = json.loads(r"""{
         "owner": 5,
         "params": [
           {
-            "coreInput": 1,
             "name": "key"
           },
           {
-            "coreInput": 2,
             "name": "value"
           }
-        ],
-        "path": [
-          "insert"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.map.length": [
       {
         "form": "METHOD",
-        "owner": 5,
-        "path": [
-          "length"
-        ],
-        "receiver": 0
+        "owner": 5
       }
     ],
     "egglog.core.map.not_contains": [
@@ -1499,14 +1194,9 @@ DATA = json.loads(r"""{
         "owner": 5,
         "params": [
           {
-            "coreInput": 1,
             "name": "key"
           }
-        ],
-        "path": [
-          "not_contains"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.map.of": [
@@ -1515,7 +1205,6 @@ DATA = json.loads(r"""{
         "owner": 5,
         "params": [
           {
-            "coreInput": 0,
             "name": "entries"
           }
         ],
@@ -1530,14 +1219,9 @@ DATA = json.loads(r"""{
         "owner": 5,
         "params": [
           {
-            "coreInput": 1,
             "name": "key"
           }
-        ],
-        "path": [
-          "remove"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.multiset.clear_index": [
@@ -1546,14 +1230,9 @@ DATA = json.loads(r"""{
         "owner": 6,
         "params": [
           {
-            "coreInput": 1,
             "name": "f"
           }
-        ],
-        "path": [
-          "clear_index"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.multiset.contains": [
@@ -1562,14 +1241,9 @@ DATA = json.loads(r"""{
         "owner": 6,
         "params": [
           {
-            "coreInput": 1,
             "name": "value"
           }
-        ],
-        "path": [
-          "contains"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.multiset.contains_swapped": [
@@ -1577,11 +1251,9 @@ DATA = json.loads(r"""{
         "form": "FUNCTION",
         "params": [
           {
-            "coreInput": 0,
             "name": "x"
           },
           {
-            "coreInput": 1,
             "name": "xs"
           }
         ],
@@ -1598,14 +1270,9 @@ DATA = json.loads(r"""{
         "owner": 6,
         "params": [
           {
-            "coreInput": 1,
             "name": "value"
           }
-        ],
-        "path": [
-          "count"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.multiset.fill_index": [
@@ -1614,14 +1281,9 @@ DATA = json.loads(r"""{
         "owner": 6,
         "params": [
           {
-            "coreInput": 1,
             "name": "f"
           }
-        ],
-        "path": [
-          "fill_index"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.multiset.filter": [
@@ -1630,12 +1292,8 @@ DATA = json.loads(r"""{
         "owner": 6,
         "params": [
           {
-            "coreInput": 0,
             "name": "f"
           }
-        ],
-        "path": [
-          "filter"
         ],
         "receiver": 1
       }
@@ -1646,12 +1304,8 @@ DATA = json.loads(r"""{
         "owner": 6,
         "params": [
           {
-            "coreInput": 0,
             "name": "f"
           }
-        ],
-        "path": [
-          "filter_not"
         ],
         "receiver": 1
       }
@@ -1661,11 +1315,9 @@ DATA = json.loads(r"""{
         "form": "FUNCTION",
         "params": [
           {
-            "coreInput": 0,
             "name": "f"
           },
           {
-            "coreInput": 1,
             "name": "xs"
           }
         ],
@@ -1682,14 +1334,9 @@ DATA = json.loads(r"""{
         "owner": 6,
         "params": [
           {
-            "coreInput": 1,
             "name": "value"
           }
-        ],
-        "path": [
-          "insert"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.multiset.intersection": [
@@ -1698,24 +1345,18 @@ DATA = json.loads(r"""{
         "owner": 6,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__and__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.multiset.length": [
       {
         "form": "METHOD",
-        "owner": 6,
-        "path": [
-          "length"
-        ],
-        "receiver": 0
+        "owner": 6
       }
     ],
     "egglog.core.multiset.map": [
@@ -1724,12 +1365,8 @@ DATA = json.loads(r"""{
         "owner": 6,
         "params": [
           {
-            "coreInput": 0,
             "name": "f"
           }
-        ],
-        "path": [
-          "map"
         ],
         "receiver": 1
       }
@@ -1740,14 +1377,9 @@ DATA = json.loads(r"""{
         "owner": 6,
         "params": [
           {
-            "coreInput": 1,
             "name": "value"
           }
-        ],
-        "path": [
-          "not_contains"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.multiset.not_contains_swapped": [
@@ -1755,11 +1387,9 @@ DATA = json.loads(r"""{
         "form": "FUNCTION",
         "params": [
           {
-            "coreInput": 0,
             "name": "x"
           },
           {
-            "coreInput": 1,
             "name": "xs"
           }
         ],
@@ -1776,7 +1406,6 @@ DATA = json.loads(r"""{
         "owner": 6,
         "params": [
           {
-            "coreInput": 0,
             "name": "args"
           }
         ]
@@ -1785,21 +1414,13 @@ DATA = json.loads(r"""{
     "egglog.core.multiset.pick": [
       {
         "form": "METHOD",
-        "owner": 6,
-        "path": [
-          "pick"
-        ],
-        "receiver": 0
+        "owner": 6
       }
     ],
     "egglog.core.multiset.pick_max": [
       {
         "form": "METHOD",
-        "owner": 6,
-        "path": [
-          "pick_max"
-        ],
-        "receiver": 0
+        "owner": 6
       }
     ],
     "egglog.core.multiset.reduce": [
@@ -1807,15 +1428,12 @@ DATA = json.loads(r"""{
         "form": "FUNCTION",
         "params": [
           {
-            "coreInput": 0,
             "name": "f"
           },
           {
-            "coreInput": 1,
             "name": "initial"
           },
           {
-            "coreInput": 2,
             "name": "xs"
           }
         ],
@@ -1832,14 +1450,9 @@ DATA = json.loads(r"""{
         "owner": 6,
         "params": [
           {
-            "coreInput": 1,
             "name": "value"
           }
-        ],
-        "path": [
-          "remove"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.multiset.remove_swapped": [
@@ -1847,11 +1460,9 @@ DATA = json.loads(r"""{
         "form": "FUNCTION",
         "params": [
           {
-            "coreInput": 0,
             "name": "x"
           },
           {
-            "coreInput": 1,
             "name": "xs"
           }
         ],
@@ -1865,11 +1476,7 @@ DATA = json.loads(r"""{
     "egglog.core.multiset.reset_counts": [
       {
         "form": "METHOD",
-        "owner": 6,
-        "path": [
-          "reset_counts"
-        ],
-        "receiver": 0
+        "owner": 6
       }
     ],
     "egglog.core.multiset.single": [
@@ -1878,16 +1485,11 @@ DATA = json.loads(r"""{
         "owner": 6,
         "params": [
           {
-            "coreInput": 0,
             "name": "x"
           },
           {
-            "coreInput": 1,
             "name": "i"
           }
-        ],
-        "path": [
-          "single"
         ]
       }
     ],
@@ -1897,14 +1499,12 @@ DATA = json.loads(r"""{
         "owner": 6,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__sub__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.multiset.subtract_swapped": [
@@ -1912,11 +1512,9 @@ DATA = json.loads(r"""{
         "form": "FUNCTION",
         "params": [
           {
-            "coreInput": 0,
             "name": "x"
           },
           {
-            "coreInput": 1,
             "name": "xs"
           }
         ],
@@ -1933,14 +1531,12 @@ DATA = json.loads(r"""{
         "owner": 6,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__add__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.multiset.sum_multisets": [
@@ -1949,23 +1545,15 @@ DATA = json.loads(r"""{
         "owner": 6,
         "params": [
           {
-            "coreInput": 0,
             "name": "xs"
           }
-        ],
-        "path": [
-          "sum_multisets"
         ]
       }
     ],
     "egglog.core.multiset.union_values": [
       {
         "form": "METHOD",
-        "owner": 6,
-        "path": [
-          "union_values"
-        ],
-        "receiver": 0
+        "owner": 6
       }
     ],
     "egglog.core.pair.first": [
@@ -1974,8 +1562,7 @@ DATA = json.loads(r"""{
         "owner": 7,
         "path": [
           "left"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.pair.make": [
@@ -1984,11 +1571,9 @@ DATA = json.loads(r"""{
         "owner": 7,
         "params": [
           {
-            "coreInput": 0,
             "name": "left"
           },
           {
-            "coreInput": 1,
             "name": "right"
           }
         ]
@@ -2000,8 +1585,7 @@ DATA = json.loads(r"""{
         "owner": 7,
         "path": [
           "right"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.set.contains": [
@@ -2010,14 +1594,9 @@ DATA = json.loads(r"""{
         "owner": 8,
         "params": [
           {
-            "coreInput": 1,
             "name": "value"
           }
-        ],
-        "path": [
-          "contains"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.set.diff": [
@@ -2026,23 +1605,18 @@ DATA = json.loads(r"""{
         "owner": 8,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__sub__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.set.empty": [
       {
         "form": "CLASS_METHOD",
-        "owner": 8,
-        "path": [
-          "empty"
-        ]
+        "owner": 8
       }
     ],
     "egglog.core.set.insert": [
@@ -2051,14 +1625,9 @@ DATA = json.loads(r"""{
         "owner": 8,
         "params": [
           {
-            "coreInput": 1,
             "name": "value"
           }
-        ],
-        "path": [
-          "insert"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.set.intersect": [
@@ -2067,24 +1636,18 @@ DATA = json.loads(r"""{
         "owner": 8,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__and__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.set.length": [
       {
         "form": "METHOD",
-        "owner": 8,
-        "path": [
-          "length"
-        ],
-        "receiver": 0
+        "owner": 8
       }
     ],
     "egglog.core.set.not_contains": [
@@ -2093,14 +1656,9 @@ DATA = json.loads(r"""{
         "owner": 8,
         "params": [
           {
-            "coreInput": 1,
             "name": "value"
           }
-        ],
-        "path": [
-          "not_contains"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.set.of": [
@@ -2109,7 +1667,6 @@ DATA = json.loads(r"""{
         "owner": 8,
         "params": [
           {
-            "coreInput": 0,
             "name": "args"
           }
         ]
@@ -2121,14 +1678,9 @@ DATA = json.loads(r"""{
         "owner": 8,
         "params": [
           {
-            "coreInput": 1,
             "name": "value"
           }
-        ],
-        "path": [
-          "remove"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.set.union": [
@@ -2137,14 +1689,12 @@ DATA = json.loads(r"""{
         "owner": 8,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__or__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.string.concat": [
@@ -2152,7 +1702,6 @@ DATA = json.loads(r"""{
         "form": "FUNCTION",
         "params": [
           {
-            "coreInput": 0,
             "name": "strings"
           }
         ],
@@ -2167,14 +1716,12 @@ DATA = json.loads(r"""{
         "owner": 9,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__add__"
         ],
-        "receiver": 0,
         "tailRepetitions": 2
       }
     ],
@@ -2183,11 +1730,9 @@ DATA = json.loads(r"""{
         "form": "FUNCTION",
         "params": [
           {
-            "coreInput": 0,
             "name": "s"
           },
           {
-            "coreInput": 1,
             "name": "pattern"
           }
         ],
@@ -2204,18 +1749,12 @@ DATA = json.loads(r"""{
         "owner": 9,
         "params": [
           {
-            "coreInput": 1,
             "name": "old"
           },
           {
-            "coreInput": 2,
             "name": "new"
           }
-        ],
-        "path": [
-          "replace"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.vec.append": [
@@ -2224,14 +1763,9 @@ DATA = json.loads(r"""{
         "owner": 10,
         "params": [
           {
-            "coreInput": 1,
             "name": "others"
           }
-        ],
-        "path": [
-          "append"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.vec.contains": [
@@ -2240,23 +1774,15 @@ DATA = json.loads(r"""{
         "owner": 10,
         "params": [
           {
-            "coreInput": 1,
             "name": "value"
           }
-        ],
-        "path": [
-          "contains"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.vec.empty": [
       {
         "form": "CLASS_METHOD",
-        "owner": 10,
-        "path": [
-          "empty"
-        ]
+        "owner": 10
       }
     ],
     "egglog.core.vec.get": [
@@ -2265,24 +1791,18 @@ DATA = json.loads(r"""{
         "owner": 10,
         "params": [
           {
-            "coreInput": 1,
             "name": "index"
           }
         ],
         "path": [
           "__getitem__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.vec.length": [
       {
         "form": "METHOD",
-        "owner": 10,
-        "path": [
-          "length"
-        ],
-        "receiver": 0
+        "owner": 10
       }
     ],
     "egglog.core.vec.map": [
@@ -2291,12 +1811,8 @@ DATA = json.loads(r"""{
         "owner": 10,
         "params": [
           {
-            "coreInput": 0,
             "name": "f"
           }
-        ],
-        "path": [
-          "map"
         ],
         "receiver": 1
       }
@@ -2307,14 +1823,9 @@ DATA = json.loads(r"""{
         "owner": 10,
         "params": [
           {
-            "coreInput": 1,
             "name": "value"
           }
-        ],
-        "path": [
-          "not_contains"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.vec.of": [
@@ -2323,7 +1834,6 @@ DATA = json.loads(r"""{
         "owner": 10,
         "params": [
           {
-            "coreInput": 0,
             "name": "args"
           }
         ]
@@ -2332,11 +1842,7 @@ DATA = json.loads(r"""{
     "egglog.core.vec.pop": [
       {
         "form": "METHOD",
-        "owner": 10,
-        "path": [
-          "pop"
-        ],
-        "receiver": 0
+        "owner": 10
       }
     ],
     "egglog.core.vec.push": [
@@ -2345,24 +1851,15 @@ DATA = json.loads(r"""{
         "owner": 10,
         "params": [
           {
-            "coreInput": 1,
             "name": "value"
           }
-        ],
-        "path": [
-          "push"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.vec.range": [
       {
         "form": "METHOD",
-        "owner": 4,
-        "path": [
-          "range"
-        ],
-        "receiver": 0
+        "owner": 4
       }
     ],
     "egglog.core.vec.remove": [
@@ -2371,14 +1868,9 @@ DATA = json.loads(r"""{
         "owner": 10,
         "params": [
           {
-            "coreInput": 1,
             "name": "index"
           }
-        ],
-        "path": [
-          "remove"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.vec.set": [
@@ -2387,18 +1879,12 @@ DATA = json.loads(r"""{
         "owner": 10,
         "params": [
           {
-            "coreInput": 1,
             "name": "index"
           },
           {
-            "coreInput": 2,
             "name": "value"
           }
-        ],
-        "path": [
-          "set"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.core.vec.union": [
@@ -2407,24 +1893,18 @@ DATA = json.loads(r"""{
         "owner": 10,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__or__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.experimental.f64.is_finite": [
       {
         "form": "METHOD",
-        "owner": 3,
-        "path": [
-          "is_finite"
-        ],
-        "receiver": 0
+        "owner": 3
       }
     ],
     "egglog.experimental.map.fold_kv": [
@@ -2432,15 +1912,12 @@ DATA = json.loads(r"""{
         "form": "FUNCTION",
         "params": [
           {
-            "coreInput": 0,
             "name": "f"
           },
           {
-            "coreInput": 1,
             "name": "initial"
           },
           {
-            "coreInput": 2,
             "name": "xs"
           }
         ],
@@ -2456,7 +1933,6 @@ DATA = json.loads(r"""{
         "form": "FUNCTION",
         "params": [
           {
-            "coreInput": 0,
             "name": "f"
           }
         ],
@@ -2473,27 +1949,18 @@ DATA = json.loads(r"""{
         "owner": 11,
         "params": [
           {
-            "coreInput": 1,
             "name": "f"
           },
           {
-            "coreInput": 2,
             "name": "n"
           }
-        ],
-        "path": [
-          "match"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.experimental.maybe.none": [
       {
         "form": "CLASS_METHOD",
-        "owner": 11,
-        "path": [
-          "none"
-        ]
+        "owner": 11
       }
     ],
     "egglog.experimental.maybe.some": [
@@ -2502,23 +1969,15 @@ DATA = json.loads(r"""{
         "owner": 11,
         "params": [
           {
-            "coreInput": 0,
             "name": "value"
           }
-        ],
-        "path": [
-          "some"
         ]
       }
     ],
     "egglog.experimental.maybe.unwrap": [
       {
         "form": "METHOD",
-        "owner": 11,
-        "path": [
-          "unwrap"
-        ],
-        "receiver": 0
+        "owner": 11
       }
     ],
     "egglog.experimental.maybe.unwrap_or": [
@@ -2527,14 +1986,9 @@ DATA = json.loads(r"""{
         "owner": 11,
         "params": [
           {
-            "coreInput": 1,
             "name": "default"
           }
-        ],
-        "path": [
-          "unwrap_or"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.experimental.rational.abs": [
@@ -2543,8 +1997,7 @@ DATA = json.loads(r"""{
         "owner": 12,
         "path": [
           "__abs__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.experimental.rational.add": [
@@ -2553,44 +2006,30 @@ DATA = json.loads(r"""{
         "owner": 12,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__add__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.experimental.rational.cbrt": [
       {
         "form": "METHOD",
-        "owner": 12,
-        "path": [
-          "cbrt"
-        ],
-        "receiver": 0
+        "owner": 12
       }
     ],
     "egglog.experimental.rational.ceil": [
       {
         "form": "METHOD",
-        "owner": 12,
-        "path": [
-          "ceil"
-        ],
-        "receiver": 0
+        "owner": 12
       }
     ],
     "egglog.experimental.rational.denom": [
       {
         "form": "PROPERTY",
-        "owner": 12,
-        "path": [
-          "denom"
-        ],
-        "receiver": 0
+        "owner": 12
       }
     ],
     "egglog.experimental.rational.div": [
@@ -2599,24 +2038,18 @@ DATA = json.loads(r"""{
         "owner": 12,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__truediv__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.experimental.rational.floor": [
       {
         "form": "METHOD",
-        "owner": 12,
-        "path": [
-          "floor"
-        ],
-        "receiver": 0
+        "owner": 12
       }
     ],
     "egglog.experimental.rational.ge": [
@@ -2625,14 +2058,12 @@ DATA = json.loads(r"""{
         "owner": 12,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__ge__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.experimental.rational.gt": [
@@ -2641,14 +2072,12 @@ DATA = json.loads(r"""{
         "owner": 12,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__gt__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.experimental.rational.le": [
@@ -2657,24 +2086,18 @@ DATA = json.loads(r"""{
         "owner": 12,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__le__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.experimental.rational.log": [
       {
         "form": "METHOD",
-        "owner": 12,
-        "path": [
-          "log"
-        ],
-        "receiver": 0
+        "owner": 12
       }
     ],
     "egglog.experimental.rational.lt": [
@@ -2683,14 +2106,12 @@ DATA = json.loads(r"""{
         "owner": 12,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__lt__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.experimental.rational.make": [
@@ -2699,11 +2120,9 @@ DATA = json.loads(r"""{
         "owner": 12,
         "params": [
           {
-            "coreInput": 0,
             "name": "num"
           },
           {
-            "coreInput": 1,
             "name": "den"
           }
         ]
@@ -2715,14 +2134,9 @@ DATA = json.loads(r"""{
         "owner": 12,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
-        ],
-        "path": [
-          "max"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.experimental.rational.min": [
@@ -2731,14 +2145,9 @@ DATA = json.loads(r"""{
         "owner": 12,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
-        ],
-        "path": [
-          "min"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.experimental.rational.mul": [
@@ -2747,14 +2156,12 @@ DATA = json.loads(r"""{
         "owner": 12,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__mul__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.experimental.rational.neg": [
@@ -2763,18 +2170,13 @@ DATA = json.loads(r"""{
         "owner": 12,
         "path": [
           "__neg__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.experimental.rational.numer": [
       {
         "form": "PROPERTY",
-        "owner": 12,
-        "path": [
-          "numer"
-        ],
-        "receiver": 0
+        "owner": 12
       }
     ],
     "egglog.experimental.rational.pow": [
@@ -2783,34 +2185,24 @@ DATA = json.loads(r"""{
         "owner": 12,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__pow__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.experimental.rational.round": [
       {
         "form": "METHOD",
-        "owner": 12,
-        "path": [
-          "round"
-        ],
-        "receiver": 0
+        "owner": 12
       }
     ],
     "egglog.experimental.rational.sqrt": [
       {
         "form": "METHOD",
-        "owner": 12,
-        "path": [
-          "sqrt"
-        ],
-        "receiver": 0
+        "owner": 12
       }
     ],
     "egglog.experimental.rational.sub": [
@@ -2819,24 +2211,18 @@ DATA = json.loads(r"""{
         "owner": 12,
         "params": [
           {
-            "coreInput": 1,
             "name": "other"
           }
         ],
         "path": [
           "__sub__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.experimental.rational.to_f64": [
       {
         "form": "METHOD",
-        "owner": 12,
-        "path": [
-          "to_f64"
-        ],
-        "receiver": 0
+        "owner": 12
       }
     ],
     "egglog.python.pyobject.call": [
@@ -2845,14 +2231,12 @@ DATA = json.loads(r"""{
         "owner": 13,
         "params": [
           {
-            "coreInput": 1,
             "name": "args"
           }
         ],
         "path": [
           "__call__"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.python.pyobject.call_extended": [
@@ -2861,18 +2245,12 @@ DATA = json.loads(r"""{
         "owner": 13,
         "params": [
           {
-            "coreInput": 1,
             "name": "args"
           },
           {
-            "coreInput": 2,
             "name": "kwargs"
           }
-        ],
-        "path": [
-          "call_extended"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.python.pyobject.dict": [
@@ -2881,12 +2259,8 @@ DATA = json.loads(r"""{
         "owner": 13,
         "params": [
           {
-            "coreInput": 0,
             "name": "keys_and_values"
           }
-        ],
-        "path": [
-          "dict"
         ]
       }
     ],
@@ -2896,14 +2270,9 @@ DATA = json.loads(r"""{
         "owner": 13,
         "params": [
           {
-            "coreInput": 1,
             "name": "keys_and_values"
           }
-        ],
-        "path": [
-          "dict_update"
-        ],
-        "receiver": 0
+        ]
       }
     ],
     "egglog.python.pyobject.eval": [
@@ -2911,16 +2280,13 @@ DATA = json.loads(r"""{
         "form": "FUNCTION",
         "params": [
           {
-            "coreInput": 0,
             "name": "code"
           },
           {
-            "coreInput": 1,
             "default": 0,
             "name": "globals_"
           },
           {
-            "coreInput": 2,
             "default": 0,
             "name": "locals_"
           }
@@ -2937,16 +2303,13 @@ DATA = json.loads(r"""{
         "form": "FUNCTION",
         "params": [
           {
-            "coreInput": 0,
             "name": "code"
           },
           {
-            "coreInput": 1,
             "default": 1,
             "name": "globals_"
           },
           {
-            "coreInput": 2,
             "default": 1,
             "name": "locals_"
           }
@@ -2964,12 +2327,8 @@ DATA = json.loads(r"""{
         "owner": 13,
         "params": [
           {
-            "coreInput": 0,
             "name": "i"
           }
-        ],
-        "path": [
-          "from_int"
         ]
       }
     ],
@@ -2979,33 +2338,21 @@ DATA = json.loads(r"""{
         "owner": 13,
         "params": [
           {
-            "coreInput": 0,
             "name": "s"
           }
-        ],
-        "path": [
-          "from_string"
         ]
       }
     ],
     "egglog.python.pyobject.to_bool": [
       {
         "form": "METHOD",
-        "owner": 13,
-        "path": [
-          "to_bool"
-        ],
-        "receiver": 0
+        "owner": 13
       }
     ],
     "egglog.python.pyobject.to_string": [
       {
         "form": "METHOD",
-        "owner": 13,
-        "path": [
-          "to_string"
-        ],
-        "receiver": 0
+        "owner": 13
       }
     ]
   },
