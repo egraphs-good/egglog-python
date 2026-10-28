@@ -544,13 +544,9 @@ class _ClassContext:
 
 def _definition_at(origin: Ref, namespace: str, name: str) -> Ref:
     """Resolve owned definitions before consulting the ambient native catalog."""
-    matches: set[Ref] = set()
-    for index in range(len(origin.owner._slots["declarations"])):
-        candidate = origin.owner.ref("declarations", index)
-        # Inspect immutable keys without detaching unrelated bodies/bindings.
-        record = cast("pb.Declaration", candidate.owner._slots[candidate.role][candidate.index])
-        if _definition_key(record) == (namespace, name):
-            matches.add(candidate)
+    matches = {
+        origin.owner.ref("declarations", index) for index in origin.owner.declaration_indices.get((namespace, name), ())
+    }
     if len(matches) > 1:
         raise ValueError(f"Ambiguous local definition: {namespace} {name!r}")
     if matches:

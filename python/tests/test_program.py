@@ -1335,8 +1335,10 @@ def test_rules_rulesets_commands_files_and_command_multiplicity():
     assert result.program.nodes[0].span.file == 0
 
 
-def test_inline_rules_import_shared_context_once_and_pack_only_demanded_definitions(monkeypatch):
-    available, repetitions = 32, 64
+@pytest.mark.parametrize(("available", "repetitions"), [(32, 64), (64, 128)])
+def test_inline_rules_import_shared_context_once_and_pack_only_demanded_definitions(
+    monkeypatch, available, repetitions
+):
     source = Builder(environment=(builtin_catalog().owner,))
     unit = source.add(
         "sorts",
@@ -1353,13 +1355,22 @@ def test_inline_rules_import_shared_context_once_and_pack_only_demanded_definiti
     )
     reference = source.publish().ref("rules", rule_index)
     visits: list[str] = []
+    copies = 0
     import_ref = Builder.import_ref
+    copy_record = _program._copy_record
 
     def counted_import_ref(builder: Builder, reference: _program.Ref) -> int:
         visits.append(reference.role)
         return import_ref(builder, reference)
 
+    def counted_copy_record(record, **kwargs):
+        nonlocal copies
+        if isinstance(record, pb.Rule):
+            copies += 1
+        return copy_record(record, **kwargs)
+
     monkeypatch.setattr(Builder, "import_ref", counted_import_ref)
+    monkeypatch.setattr(_program, "_copy_record", counted_copy_record)
     destination = Builder()
     command = destination.add(
         "rulesets",
@@ -1369,6 +1380,7 @@ def test_inline_rules_import_shared_context_once_and_pack_only_demanded_definiti
     )
     assert visits.count("declarations") == available
     assert len(visits) <= available + 2 * repetitions
+    assert copies == repetitions
     program = pack([destination.publish().ref("rulesets", command)]).program
     assert not program.commands
     addition = program.rulesets[0].value

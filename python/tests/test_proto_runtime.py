@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import copy
 from fractions import Fraction
 from functools import partial
+from itertools import pairwise
 from threading import Event
 from time import sleep
 from typing import ClassVar, Literal, TypeVar, cast, get_type_hints
@@ -3661,6 +3662,66 @@ def test_owned_definition_lookup_keeps_exact_refs_without_detaching(monkeypatch,
             with pytest.raises(LookupError, match="No owned canonical definition"):
                 runtime._definition_at(query, "callable", missing)
     assert expected["callable"].read().kind.value.name == name
+
+
+def test_owned_definition_lookup_and_deconstruction_are_linear(monkeypatch):
+    from egglog import _program  # noqa: PLC0415
+
+    environment = builtin_catalog().owner
+    measurements = []
+    for size in (32, 64, 128):
+        builder = Builder(environment=(environment,))
+        unit = builder.add(
+            "sorts",
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="Unit"))
+            ),
+        )
+        for index in range(size):
+            builder.add(
+                "declarations",
+                pb.Declaration(kind=Oneof[Literal["relation"], pb.Relation]("relation", pb.Relation(name=f"r{index}"))),
+            )
+            builder.add(
+                "nodes", pb.Node(sort_id=unit, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func=f"r{index}")))
+            )
+        visits = 0
+
+        def counted_key(record):
+            nonlocal visits
+            visits += 1
+            return _definition_key(record)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(_program, "_definition_key", counted_key)
+            patch.setattr(runtime, "_definition_key", counted_key)
+            owner = builder.publish()
+            assert visits == 0
+            assert getattr(owner, "_declaration_indices", None) is None
+            for _ in range(2):
+                for index in range(size):
+                    expression = RuntimeExpr(owner.ref("nodes", index))
+                    expected = owner.ref("declarations", index)
+                    assert runtime._definition_at(expression.__egg_ref__, "callable", f"r{index}") == expected
+                    recovered = get_callable_fn(expression)
+                    assert isinstance(recovered, RuntimeFunction)
+                    assert recovered.__egg_ref__ == expected
+        indices = getattr(owner, "_declaration_indices", None) or {}
+        retained = sum(len(slots) for slots in indices.values())
+        assert all(type(slot) is int for slots in indices.values() for slot in slots)
+        measurements.append((size, visits, retained))
+        released = weakref(owner)
+        del owner, expected, expression, recovered
+        gc.collect()
+        assert released() is None
+
+    # Include cold indexing and public deconstruction, without timing thresholds.
+    # Providers stay shared; only this owner's immediate slot numbers are cached.
+    assert all(visits <= 4 * size and retained == size for size, visits, retained in measurements), measurements
+    assert all(
+        visits <= 2 * previous_visits and retained == 2 * previous_retained
+        for (_, previous_visits, previous_retained), (_, visits, retained) in pairwise(measurements)
+    ), measurements
 
 
 def test_free_function_identity_uses_python_name_not_signature_or_owner():

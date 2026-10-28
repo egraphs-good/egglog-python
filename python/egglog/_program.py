@@ -490,6 +490,7 @@ class Owner:
     __slots__ = (
         "__weakref__",
         "_builtin_indices",
+        "_declaration_indices",
         "_environment",
         "_keepalive",
         "_presentation_catalog",
@@ -513,6 +514,7 @@ class Owner:
         # The frontend index is derived once from this immutable owned context.
         # Keeping it here avoids both global retention and repeated catalog scans.
         self._presentation_catalog: Catalog | None = None
+        self._declaration_indices: Mapping[tuple[str, str], tuple[int, ...]] | None = None
         self._environment = environment
         self._builtin_indices = MappingProxyType({
             _definition_key(record): (role, index)
@@ -520,6 +522,19 @@ class Owner:
             for index, record in enumerate(self._slots[role])
             if isinstance(record, Message)
         })
+
+    @property
+    def declaration_indices(self) -> Mapping[tuple[str, str], tuple[int, ...]]:
+        """Index immediate slots once, without copying transitive contexts or retaining self refs."""
+        if self._declaration_indices is None:
+            indices: dict[tuple[str, str], list[int]] = {}
+            for index in range(len(self._slots["declarations"])):
+                ref = self.ref("declarations", index)
+                key = _definition_key(cast("Message", ref.owner._slots[ref.role][ref.index]))
+                if key is not None:
+                    indices.setdefault(key, []).append(index)
+            self._declaration_indices = MappingProxyType({key: tuple(slots) for key, slots in indices.items()})
+        return self._declaration_indices
 
     def ref(self, role: str, index: int) -> Ref:
         if (
@@ -610,7 +625,7 @@ class Builder:
             msg = "Inline rules require an owned Rule reference"
             raise TypeError(msg)
         self.import_context(canonical.owner)
-        record = canonical.read()
+        record = canonical.owner._slots[canonical.role][canonical.index]
         assert isinstance(record, pb.Rule)
         return _copy_record(record, relocate=lambda role, index: self.import_ref(canonical.owner.ref(role, index)))
 
@@ -693,7 +708,6 @@ def clone_nodes(roots: Iterable[Ref]) -> tuple[Ref, ...]:  # noqa: C901
     builder = Builder()
     indices: dict[Ref, int] = {}
     pending: list[Ref] = []
-    definitions: dict[Owner, dict[tuple[str, str], set[Ref]]] = {}
 
     def allocate(source: Ref) -> int:
         source = source.owner.ref(source.role, source.index)
@@ -713,19 +727,12 @@ def clone_nodes(roots: Iterable[Ref]) -> tuple[Ref, ...]:  # noqa: C901
         source = pending.pop()
 
         def dependency(namespace: str, name: str, origin: Owner = source.owner) -> None:
-            if origin not in definitions:
-                table: dict[tuple[str, str], set[Ref]] = {}
-                for index in range(len(origin._slots["declarations"])):
-                    ref = origin.ref("declarations", index)
-                    key = _definition_key(ref.read())
-                    if key is not None:
-                        table.setdefault(key, set()).add(ref)
-                for environment in (*origin._environment, origin):
-                    for key, slot in environment._builtin_indices.items():
-                        assert key is not None
-                        table.setdefault(key, set()).add(environment.ref(*slot))
-                definitions[origin] = table
-            matches = definitions[origin].get((namespace, name), set())
+            matches = {
+                origin.ref("declarations", index) for index in origin.declaration_indices.get((namespace, name), ())
+            }
+            for environment in (*origin._environment, origin):
+                if (slot := environment._builtin_indices.get((namespace, name))) is not None:
+                    matches.add(environment.ref(*slot))
             if len(matches) != 1:
                 raise ValueError(f"Template requires one canonical definition for {namespace} {name!r}")
             builder.import_ref(next(iter(matches)))
@@ -787,13 +794,9 @@ def pack(  # noqa: C901, PLR0912
         indexed.add(owner)
         for provider in (*owner._environment, owner):
             builtin_keys.update(key for key in provider._builtin_indices if key is not None)
-        for role in ("declarations",):
-            for index in range(len(owner._slots[role])):
-                ref = owner.ref(role, index)
-                record = cast("Message", ref.owner._slots[ref.role][ref.index])
-                key = _definition_key(record)
-                if key is None:
-                    continue
+        for key, slots in owner.declaration_indices.items():
+            for index in slots:
+                ref = owner.ref("declarations", index)
                 matches = candidates.setdefault(key, set())
                 if ref not in matches:
                     matches.add(ref)
