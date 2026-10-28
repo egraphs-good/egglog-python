@@ -2,22 +2,20 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from decimal import Decimal
-from fractions import Fraction
 from functools import partial
 from types import FunctionType, GenericAlias, MethodType
-from typing import Any, Protocol, TypeVar, cast
+from typing import Any, Literal, Protocol, TypeVar, cast
 
 from egglog_proto.egglog.v1 import egglog_pb as pb
+from protobuf import Oneof
 from typing_extensions import deprecated
 
 from ._builtin_protocols import SCALAR_PROTOCOLS
 from ._catalog import builtin_catalog
 from ._presentation import CallKind, presentation
-from ._program import Ref, StructuralView, _copy_record
+from ._program import Builder, Ref, StructuralView
 from .conversion import converter, get_type_args, resolve_literal
 from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction, _Intrinsic
 
@@ -46,67 +44,6 @@ def _scalar_value(expr: RuntimeExpr) -> object:
     raise ExprValueError(expr, str(cls))
 
 
-def _exact_value(expr: RuntimeExpr) -> int | Fraction:  # noqa: C901
-    """Inspect inert exact values or the legacy constructor value forms locally."""
-    from .deconstruct import get_literal_value  # noqa: PLC0415
-    from .runtime import _definition_at  # noqa: PLC0415
-    from .type_constraint_solver import infer_sort  # noqa: PLC0415
-
-    value = get_literal_value(expr)
-    if value is not None:
-        return cast("int | Fraction", value)
-    reference = expr.__egg_ref__
-    node: pb.Node = reference.read()
-    sort = reference.owner.ref("sorts", node.sort_id)
-    family: pb.Sort = sort.read()
-    assert family.kind is not None
-    allowed = "a literal value or a locally inspectable exact constructor"
-    if node.kind is None or node.kind.field != "call" or family.kind.field != "application":
-        raise ExprValueError(expr, allowed)
-    call = node.kind.value
-    if (family.kind.value.name, call.func) not in {
-        ("Rational", "egglog.experimental.rational.make"),
-        ("BigInt", "egglog.core.bigint.from_string"),
-        ("BigRat", "egglog.core.bigrat.make"),
-    }:
-        raise ExprValueError(expr, allowed)
-    declaration = _definition_at(reference, "callable", call.func)
-    record: pb.Declaration | pb.Primitive = declaration.read()
-    if not isinstance(record, pb.Primitive):
-        raise ExprValueError(expr, allowed)
-    primitive = record
-    if primitive.signature is None:
-        raise ExprValueError(expr, allowed)
-    signature = primitive.signature
-    if signature.type_param_count or signature.varargs or not signature.has_field("output"):
-        msg = "Exact constructor inspection requires a closed fixed signature"
-        raise ValueError(msg)
-    infer_sort(declaration.owner.ref("sorts", signature.output), sort, 0, {})
-    if len(call.args) != len(signature.inputs):
-        msg = "Exact constructor has invalid canonical argument count"
-        raise ValueError(msg)
-    children = [reference.owner.ref("nodes", index) for index in call.args]
-    for child, parameter in zip(children, signature.inputs, strict=True):
-        infer_sort(
-            declaration.owner.ref("sorts", parameter.sort), child.owner.ref("sorts", child.read().sort_id), 0, {}
-        )
-    if family.kind.value.name == "BigInt":
-        (text,) = children
-        text_value = RuntimeExpr(text).value
-        if not isinstance(text_value, str):
-            raise ExprValueError(expr, allowed)
-        # Inert BigInts print as these existing symbolic Calls. Inspect their
-        # canonical decimals exactly at arbitrary magnitude; keep int's legacy
-        # handling/errors for every other spelling (not Decimal's exponent or
-        # fractional syntax).
-        return int(Decimal(text_value)) if re.fullmatch(r"0|-?[1-9][0-9]*", text_value) else int(text_value)
-    numerator, denominator = children
-    numerator_value, denominator_value = RuntimeExpr(numerator).value, RuntimeExpr(denominator).value
-    if not isinstance(numerator_value, int) or not isinstance(denominator_value, int):
-        raise ExprValueError(expr, allowed)
-    return Fraction(numerator_value, denominator_value)
-
-
 @deprecated("use .value")
 def _eval(expr: RuntimeExpr) -> object:
     return expr.value
@@ -118,45 +55,6 @@ def _integer(expr: RuntimeExpr) -> int:
 
 def _float(expr: RuntimeExpr) -> float:
     return float(cast("Any", expr.value))
-
-
-def _pair_call_children(reference: Ref, sort: Ref) -> tuple[Ref, Ref]:
-    """Validate codec provenance and the actual canonical constructor scheme."""
-    from .runtime import _definition_at  # noqa: PLC0415
-    from .type_constraint_solver import infer_sort  # noqa: PLC0415
-
-    node: pb.Node = reference.read()
-    assert node.kind is not None
-    assert node.kind.field == "call"
-    declaration = _definition_at(reference, "callable", node.kind.value.func)
-    callable_record: pb.Declaration | pb.Primitive = declaration.read()
-    if not isinstance(callable_record, pb.Primitive):
-        raise ExprValueError(RuntimeExpr(reference), "Pair(left, right)")
-    primitive = callable_record
-    if primitive.signature is None:
-        raise ExprValueError(RuntimeExpr(reference), "Pair(left, right)")
-    signature = primitive.signature
-    if signature.varargs or len(signature.inputs) != 2 or not signature.has_field("output"):
-        msg = "Invalid canonical Pair constructor signature"
-        raise ValueError(msg)
-    if len(node.kind.value.args) != 2:
-        msg = "Pair inspection requires two children"
-        raise ValueError(msg)
-    substitutions: dict[int, Ref] = {}
-    infer_sort(declaration.owner.ref("sorts", signature.output), sort, signature.type_param_count, substitutions)
-    children = tuple(reference.owner.ref("nodes", index) for index in node.kind.value.args)
-    for child, parameter in zip(children, signature.inputs, strict=True):
-        payload: pb.Node = child.read()
-        infer_sort(
-            declaration.owner.ref("sorts", parameter.sort),
-            child.owner.ref("sorts", payload.sort_id),
-            signature.type_param_count,
-            substitutions,
-        )
-    if len(substitutions) != signature.type_param_count:
-        msg = "Pair inspection has unresolved signature parameters"
-        raise ValueError(msg)
-    return children[0], children[1]
 
 
 def _pair_value(expr: RuntimeExpr) -> tuple[RuntimeExpr, RuntimeExpr]:
@@ -171,9 +69,7 @@ def _pair_value(expr: RuntimeExpr) -> tuple[RuntimeExpr, RuntimeExpr]:
     if len(arguments) != 2:
         msg = "Pair inspection requires two sort arguments"
         raise ValueError(msg)
-    if node.kind is not None and node.kind.field == "call" and node.kind.value.func == "egglog.core.pair.make":
-        children = _pair_call_children(reference, sort)
-    elif (
+    if (
         node.kind is not None
         and node.kind.field == "primitive_value"
         and node.kind.value.value is not None
@@ -199,7 +95,6 @@ def _pair_value(expr: RuntimeExpr) -> tuple[RuntimeExpr, RuntimeExpr]:
 def _maybe_value(expr: RuntimeExpr) -> RuntimeExpr | None:
     """Inspect exact optional presence while leaving a present child symbolic."""
     from .runtime import _definition_at  # noqa: PLC0415
-    from .type_constraint_solver import infer_call_bindings  # noqa: PLC0415
 
     reference = expr.__egg_ref__
     node: pb.Node = reference.read()
@@ -225,48 +120,6 @@ def _maybe_value(expr: RuntimeExpr) -> RuntimeExpr | None:
     ):
         payload = node.kind.value.value.value
         child = reference.owner.ref("nodes", payload.value) if payload.has_field("value") else None
-    elif (
-        node.kind is not None
-        and node.kind.field == "call"
-        and node.kind.value.func in {"egglog.experimental.maybe.none", "egglog.experimental.maybe.some"}
-    ):
-        call = node.kind.value
-        declaration = _definition_at(reference, "callable", call.func)
-        declared: pb.Declaration | pb.Primitive = declaration.read()
-        if not isinstance(declared, pb.Primitive) or declared.signature is None:
-            msg = "Maybe inspection requires native callable provenance"
-            raise ValueError(msg)
-        signature = declared.signature
-        expected_ref = builtin_catalog().definitions["callable", call.func]
-        expected_record = expected_ref.read()
-        assert isinstance(expected_record, pb.Primitive)
-        expected = expected_record.signature
-        assert expected is not None
-        if (
-            signature.type_param_count != expected.type_param_count
-            or len(signature.inputs) != len(expected.inputs)
-            or signature.varargs
-            or not signature.has_field("output")
-            or len(call.args) != len(signature.inputs)
-            or any(
-                StructuralView(declaration.owner.ref("sorts", actual))
-                != StructuralView(expected_ref.owner.ref("sorts", canonical))
-                for actual, canonical in zip(
-                    [*(arg.sort for arg in signature.inputs), signature.output],
-                    [*(arg.sort for arg in expected.inputs), expected.output],
-                    strict=True,
-                )
-            )
-        ):
-            msg = "Maybe constructor differs from the canonical optional-child signature"
-            raise ValueError(msg)
-        children = [reference.owner.ref("nodes", index) for index in call.args]
-        infer_call_bindings(
-            declaration,
-            [child.owner.ref("sorts", child.read().sort_id) for child in children],
-            sort,
-        )
-        child = children[0] if children else None
     else:
         raise ExprValueError(expr, "Maybe.none() or Maybe.some(value)")
     if child is None:
@@ -295,11 +148,8 @@ def _tuple_to_pair(value: tuple[object, ...]) -> RuntimeExpr:
     return result
 
 
-def _container_items(expr: RuntimeExpr) -> tuple[RuntimeExpr, ...]:  # noqa: C901
+def _container_items(expr: RuntimeExpr) -> tuple[RuntimeExpr, ...]:
     """Validate ordered collection children without evaluating or normalizing them."""
-    from .runtime import _definition_at  # noqa: PLC0415
-    from .type_constraint_solver import infer_sort  # noqa: PLC0415
-
     reference = expr.__egg_ref__
     node: pb.Node = reference.read()
     sort = reference.owner.ref("sorts", node.sort_id)
@@ -315,47 +165,7 @@ def _container_items(expr: RuntimeExpr) -> tuple[RuntimeExpr, ...]:  # noqa: C90
     if len(record.kind.value.args) != 1:
         msg = f"{family} inspection requires one sort argument"
         raise ValueError(msg)
-    constructor = f"egglog.core.{family.lower()}.of"
     if (
-        node.kind is not None
-        and node.kind.field == "call"
-        and (
-            node.kind.value.func == constructor or (family == "Vec" and node.kind.value.func == "egglog.core.vec.empty")
-        )
-    ):
-        call = node.kind.value
-        declaration = _definition_at(reference, "callable", call.func)
-        callable_record: pb.Declaration | pb.Primitive = declaration.read()
-        if not isinstance(callable_record, pb.Primitive):
-            raise ExprValueError(expr, allowed)
-        primitive = callable_record
-        if primitive.signature is None:
-            raise ExprValueError(expr, allowed)
-        signature = primitive.signature
-        variadic = call.func == constructor
-        if (
-            signature.inputs
-            or len(signature.varargs) != int(variadic)
-            or not signature.has_field("output")
-            or (not variadic and call.args)
-        ):
-            msg = f"Invalid canonical {family} constructor signature or arguments"
-            raise ValueError(msg)
-        substitutions: dict[int, Ref] = {}
-        infer_sort(declaration.owner.ref("sorts", signature.output), sort, signature.type_param_count, substitutions)
-        children = tuple(reference.owner.ref("nodes", index) for index in call.args)
-        for child in children:
-            payload: pb.Node = child.read()
-            infer_sort(
-                declaration.owner.ref("sorts", signature.varargs[0].sort),
-                child.owner.ref("sorts", payload.sort_id),
-                signature.type_param_count,
-                substitutions,
-            )
-        if len(substitutions) != signature.type_param_count:
-            msg = f"{family} inspection has unresolved signature parameters"
-            raise ValueError(msg)
-    elif (
         node.kind is not None
         and node.kind.field == "primitive_value"
         and node.kind.value.value is not None
@@ -393,48 +203,15 @@ def _collection_to_expr(value: list[object] | tuple[object, ...] | set[object], 
     (element,) = get_type_args()
     assert element.__egg_sort__ is not None
     target = _BASE_CLASSES[family][element]
-    result = (
-        target(*(resolve_literal(element.__egg_sort__, item) for item in value))
-        if value or family == "MultiSet"
-        else _container_member(target, f"egglog.core.{family.lower()}.empty", CallKind.CLASS_METHOD)()
-    )
+    result = target(*(resolve_literal(element.__egg_sort__, item) for item in value))
     assert isinstance(result, RuntimeExpr)
     return result
 
 
-def _map_entries(expr: RuntimeExpr) -> tuple[tuple[Ref, Ref], ...]:  # noqa: C901, PLR0912
-    """Inspect finite Map records in order, without normalizing or making Calls."""
-    from .runtime import _definition_at  # noqa: PLC0415
-    from .type_constraint_solver import TypeConstraintError, infer_sort  # noqa: PLC0415
-
+def _map_entries(expr: RuntimeExpr) -> tuple[tuple[Ref, Ref], ...]:
+    """Inspect immediate ordered Map children without traversing their graphs."""
     try:
         reference = expr.__egg_ref__
-        # Equality treats Unions as opaque identities; validation must still
-        # visit their children. Reuse the canonical field-role visitor without
-        # storing another expression model or changing comparison semantics.
-        pending = [(reference, False)]
-        active: set[Ref] = set()
-        complete: set[Ref] = set()
-        while pending:
-            current, leaving = pending.pop()
-            if current in complete:
-                continue
-            if leaving:
-                active.remove(current)
-                complete.add(current)
-                continue
-            if current in active:
-                raise ExprValueError(expr, "an acyclic Map value graph")
-            active.add(current)
-            children: list[Ref] = []
-
-            def visit(role: str, index: int, origin=current.owner, found=children) -> int:
-                found.append(origin.ref(role, index))
-                return index
-
-            _copy_record(current.read(), relocate=visit)
-            pending.append((current, True))
-            pending.extend((child, False) for child in children)
         node: pb.Node = reference.read()
         sort = reference.owner.ref("sorts", node.sort_id)
         record: pb.Sort = sort.read()
@@ -447,78 +224,19 @@ def _map_entries(expr: RuntimeExpr) -> tuple[tuple[Ref, Ref], ...]:  # noqa: C90
             msg = "Map inspection requires the canonical two-argument family"
             raise ExprValueError(expr, msg)
         arguments = [sort.owner.ref("sorts", index) for index in record.kind.value.args]
-        inserted: list[tuple[Ref, Ref]] = []
-        entries: list[tuple[Ref, Ref]] = []
-        while True:
-            node = reference.read()
-            if StructuralView(reference.owner.ref("sorts", node.sort_id)) != StructuralView(sort):
-                msg = "Map insert base has the wrong sort"
+        if (
+            node.kind is None
+            or node.kind.field != "primitive_value"
+            or node.kind.value.value is None
+            or node.kind.value.value.field != "map"
+        ):
+            raise ExprValueError(expr, "a Map value payload")
+        entries = []
+        for entry in node.kind.value.value.value.entries:
+            if not entry.has_field("key") or not entry.has_field("value"):
+                msg = "Map entry requires key and value references"
                 raise ExprValueError(expr, msg)
-            if (
-                node.kind is not None
-                and node.kind.field == "primitive_value"
-                and node.kind.value.value is not None
-                and node.kind.value.value.field == "map"
-            ):
-                for entry in node.kind.value.value.value.entries:
-                    if not entry.has_field("key") or not entry.has_field("value"):
-                        msg = "Map entry requires key and value references"
-                        raise ExprValueError(expr, msg)
-                    entries.append((reference.owner.ref("nodes", entry.key), reference.owner.ref("nodes", entry.value)))
-                break
-            if (
-                node.kind is None
-                or node.kind.field != "call"
-                or node.kind.value.func not in {"egglog.core.map.empty", "egglog.core.map.of", "egglog.core.map.insert"}
-            ):
-                raise ExprValueError(expr, "Map.empty(), Map.insert() or Map.from_pairs(finite entries)")
-            call = node.kind.value
-            declaration = _definition_at(reference, "callable", call.func)
-            declared: pb.Declaration | pb.Primitive = declaration.read()
-            if not isinstance(declared, pb.Primitive) or declared.signature is None:
-                msg = "Map inspection requires native callable provenance"
-                raise ExprValueError(expr, msg)
-            signature = declared.signature
-            if signature.varargs or not signature.has_field("output") or len(call.args) != len(signature.inputs):
-                msg = "Invalid canonical Map signature or call arity"
-                raise ExprValueError(expr, msg)
-            substitutions: dict[int, Ref] = {}
-            infer_sort(
-                declaration.owner.ref("sorts", signature.output), sort, signature.type_param_count, substitutions
-            )
-            children = [reference.owner.ref("nodes", index) for index in call.args]
-            for child, parameter in zip(children, signature.inputs, strict=True):
-                payload: pb.Node = child.read()
-                infer_sort(
-                    declaration.owner.ref("sorts", parameter.sort),
-                    child.owner.ref("sorts", payload.sort_id),
-                    signature.type_param_count,
-                    substitutions,
-                )
-            if len(substitutions) != signature.type_param_count:
-                msg = "Map inspection has unresolved signature parameters"
-                raise ExprValueError(expr, msg)
-            if call.func == "egglog.core.map.empty":
-                if children:
-                    msg = "Map empty must have no children"
-                    raise ExprValueError(expr, msg)
-                break
-            if call.func == "egglog.core.map.of":
-                (vector,) = children
-                vector_sort: pb.Sort = vector.owner.ref("sorts", vector.read().sort_id).read()
-                if (
-                    vector_sort.kind is None
-                    or vector_sort.kind.field != "application"
-                    or vector_sort.kind.value.name != "Vec"
-                ):
-                    raise ExprValueError(expr, "Map.from_pairs(Vec(*pairs))")
-                for pair in _container_items(RuntimeExpr(vector)):
-                    left, right = _pair_value(pair)
-                    entries.append((left.__egg_ref__, right.__egg_ref__))
-                break
-            reference, key, value = children
-            inserted.append((key, value))
-        entries.extend(reversed(inserted))
+            entries.append((reference.owner.ref("nodes", entry.key), reference.owner.ref("nodes", entry.value)))
         for entry in entries:
             for child, expected in zip(entry, arguments, strict=True):
                 payload = child.read()
@@ -526,8 +244,8 @@ def _map_entries(expr: RuntimeExpr) -> tuple[tuple[Ref, Ref], ...]:  # noqa: C90
                     msg = "Map entry has the wrong canonical sort"
                     raise ExprValueError(expr, msg)
         return tuple(entries)
-    except (LookupError, ValueError, TypeConstraintError) as error:
-        raise ExprValueError(expr, "a finite Map.empty(), Map.insert(), Map.from_pairs(...) or Map value") from error
+    except (LookupError, ValueError) as error:
+        raise ExprValueError(expr, "a Map value payload") from error
 
 
 def _dict_to_map(value: dict[object, object]) -> RuntimeExpr:
@@ -537,19 +255,28 @@ def _dict_to_map(value: dict[object, object]) -> RuntimeExpr:
     assert key.__egg_sort__ is not None
     assert item.__egg_sort__ is not None
     target = _BASE_CLASSES["Map"][key, item]
-    result = _container_member(target, "egglog.core.map.empty", CallKind.CLASS_METHOD)()
-    assert isinstance(result, RuntimeExpr)
+    assert target.__egg_sort__ is not None
+    builder = Builder()
+    entries = []
     for source_key, source_value in value.items():
-        insert = _container_member(result, "egglog.core.map.insert", CallKind.METHOD)
-        assert insert.__egg_view__ is not None
-        view = presentation(insert.__egg_ref__).views[insert.__egg_view__]
-        arguments = {
-            1: resolve_literal(key.__egg_sort__, source_key),
-            2: resolve_literal(item.__egg_sort__, source_value),
-        }
-        result = insert(**{parameter.name: arguments[parameter.core_input] for parameter in view.params})
-        assert isinstance(result, RuntimeExpr)
-    return result
+        converted_key = resolve_literal(key.__egg_sort__, source_key)
+        converted_value = resolve_literal(item.__egg_sort__, source_value)
+        entries.append(
+            pb.MapEntry(
+                key=builder.import_ref(converted_key.__egg_ref__), value=builder.import_ref(converted_value.__egg_ref__)
+            )
+        )
+    root = builder.add(
+        "nodes",
+        pb.Node(
+            sort_id=builder.import_ref(target.__egg_sort__),
+            kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                "primitive_value",
+                pb.PrimitiveValue(value=Oneof[Literal["map"], pb.MapValue]("map", pb.MapValue(entries=entries))),
+            ),
+        ),
+    )
+    return RuntimeExpr(builder.publish().ref("nodes", root))
 
 
 def _function_value(expr: RuntimeExpr) -> object:
@@ -661,8 +388,8 @@ for _definition in _catalog.definitions.values():
             dict, (_host_key, _host_value)
         )
         __all__ += [f"{_name}Like"]  # noqa: PLE0604
-    if _protocol is not None and (_protocol.literal_types or not _protocol.literal_constructor):
-        _value_protocol = _scalar_value if _protocol.literal_constructor else _exact_value
+    if _protocol is not None and _protocol.literal_types:
+        _value_protocol = _scalar_value
         if _protocol.literal_arm == "custom":
             from .deconstruct import _pyobject_value
 
@@ -672,11 +399,7 @@ for _definition in _catalog.definitions.values():
         _like: Any = _class
         for _literal_type in _literal_types:
             _like = _like | _literal_type
-            if not _protocol.literal_constructor:
-                converter(
-                    _literal_type, _class, lambda value, target=_class: target(value.numerator, value.denominator)
-                )
-            elif _protocol.value_type is float:
+            if _protocol.value_type is float:
                 converter(_literal_type, _class, lambda value, target=_class: target(float(value)))
             else:
                 converter(_literal_type, _class, _class)
@@ -689,8 +412,7 @@ for _definition in _catalog.definitions.values():
 
         _class.__egg_hooks__["__bool__"] = lambda expr: bool(expr_fact(expr))
 
-# Expression conversion policy is separate from formed-value decoding. In
-# particular, Python ints/Fractions still pass through bounded i64 Calls.
+# Symbolic i64 conversions remain native calls; host literals encode directly.
 for _family, _protocol in SCALAR_PROTOCOLS.items():
     if _protocol.conversion_sort is None or ("primitive_sort", _family) not in _catalog.definitions:
         continue

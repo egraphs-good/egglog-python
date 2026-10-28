@@ -14,7 +14,6 @@ class ScalarProtocol(NamedTuple):
     value_type: type[object]
     literal_types: tuple[type[object], ...]
     hooks: tuple[tuple[str, type[object]], ...] = ()
-    literal_constructor: bool = True
     conversion_sort: str | None = None
 
 
@@ -25,11 +24,9 @@ SCALAR_PROTOCOLS = {
     "bool": ScalarProtocol("bool", bool, (bool,), (("__bool__", bool),)),
     "Unit": ScalarProtocol("unit", type(None), (), (("__bool__", bool),)),
     "PyObject": ScalarProtocol("custom", object, (object,)),
-    "Rational": ScalarProtocol(
-        "rational", Fraction, (Fraction,), (("__int__", int), ("__float__", float)), False, "i64"
-    ),
-    "BigInt": ScalarProtocol("big_int", int, (), (("__int__", int), ("__index__", int)), False, "i64"),
-    "BigRat": ScalarProtocol("big_rat", Fraction, (Fraction,), (("__int__", int), ("__float__", float)), False, "i64"),
+    "Rational": ScalarProtocol("rational", Fraction, (int, Fraction), (("__int__", int), ("__float__", float)), "i64"),
+    "BigInt": ScalarProtocol("big_int", int, (int,), (("__int__", int), ("__index__", int)), "i64"),
+    "BigRat": ScalarProtocol("big_rat", Fraction, (int, Fraction), (("__int__", int), ("__float__", float)), "i64"),
 }
 
 # Runtime forwarding policy, not evidence that a particular native method exists.

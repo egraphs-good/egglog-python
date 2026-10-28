@@ -8,7 +8,20 @@ from typing import ClassVar
 
 import pytest
 
-from egglog import Expr, Map, Unit, expr_parts, function, get_callable_args, get_callable_fn, get_literal_value, i64
+from egglog import (
+    Expr,
+    Map,
+    Pair,
+    Unit,
+    Vec,
+    expr_parts,
+    function,
+    get_callable_args,
+    get_callable_fn,
+    get_literal_value,
+    i64,
+)
+from egglog.egraph import to_runtime_expr
 from egglog.exp import array_api
 from egglog.type_constraint_solver import TypeConstraintError
 
@@ -36,8 +49,14 @@ def test_classmethod_call():
     selected: type[Map[i64, Unit]] = Map[i64, Unit]
     value = selected.empty()
     assert isinstance(value, selected)
-    assert get_callable_fn(value) == selected.empty
-    assert get_callable_args(value) == ()
+    assert value.value == {}
+    assert get_callable_fn(value) is None
+    assert get_callable_args(value) is None
+    entries = Vec[Pair[i64, Unit]].empty()
+    operation = selected.from_pairs(entries)
+    assert isinstance(operation, selected)
+    assert get_callable_fn(operation) == selected.from_pairs
+    assert get_callable_args(operation) == (to_runtime_expr(entries),)
 
 
 def test_expr_special():

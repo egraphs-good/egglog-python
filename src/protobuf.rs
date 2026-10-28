@@ -19,6 +19,110 @@ use std::ops::ControlFlow;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
 
+// Host conversion uses integer bytes rather than a second decimal wire parser.
+fn python_integer(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<egglog_experimental::protobuf::value::BigInt> {
+    let integer = value.cast::<pyo3::types::PyInt>()?;
+    let length = (integer.call_method0("bit_length")?.extract::<usize>()? + 8) / 8;
+    let kwargs = pyo3::types::PyDict::new(value.py());
+    kwargs.set_item("signed", true)?;
+    let bytes = integer.call_method("to_bytes", (length, "little"), Some(&kwargs))?;
+    Ok(
+        egglog_experimental::protobuf::value::BigInt::from_signed_bytes_le(
+            bytes.cast::<PyBytes>()?.as_bytes(),
+        ),
+    )
+}
+
+fn host_integer<'py>(
+    py: Python<'py>,
+    value: &egglog_experimental::protobuf::value::BigInt,
+) -> PyResult<Bound<'py, PyAny>> {
+    let kwargs = pyo3::types::PyDict::new(py);
+    kwargs.set_item("signed", true)?;
+    py.get_type::<pyo3::types::PyInt>().call_method(
+        "from_bytes",
+        (PyBytes::new(py, &value.to_signed_bytes_le()), "little"),
+        Some(&kwargs),
+    )
+}
+
+/// Encode host scalar data with the shared native codec; no e-graph is involved.
+#[pyfunction]
+pub(crate) fn _encode_scalar<'py>(
+    py: Python<'py>,
+    sort: &str,
+    value: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    use egglog_experimental::protobuf::value::{BigInt, Scalar};
+    let scalar = match sort {
+        "i64" => Scalar::I64(value.extract()?),
+        "f64" => Scalar::F64Bits(value.extract::<f64>()?.to_bits()),
+        "String" => Scalar::String(value.extract()?),
+        "bool" => Scalar::Bool(value.extract()?),
+        "Unit" if value.is_none() => Scalar::Unit,
+        "BigInt" => Scalar::BigInt(python_integer(value)?),
+        "BigRat" | "Rational" => {
+            let (numerator, denominator) = if let Ok(pair) = value.cast::<pyo3::types::PyTuple>() {
+                if pair.len() != 2 {
+                    return Err(PyValueError::new_err(
+                        "fraction requires two integer components",
+                    ));
+                }
+                (
+                    python_integer(&pair.get_item(0)?)?,
+                    python_integer(&pair.get_item(1)?)?,
+                )
+            } else if value.is_instance_of::<pyo3::types::PyInt>() {
+                (python_integer(value)?, BigInt::from(1))
+            } else {
+                (
+                    python_integer(&value.getattr("numerator")?)?,
+                    python_integer(&value.getattr("denominator")?)?,
+                )
+            };
+            Scalar::from_fraction(sort, numerator, denominator).map_err(PyValueError::new_err)?
+        }
+        _ => {
+            return Err(PyValueError::new_err(
+                "unsupported scalar sort or host value",
+            ));
+        }
+    };
+    let value = scalar.encode().map_err(PyValueError::new_err)?;
+    Ok(PyBytes::new(py, &value.encode_to_vec()))
+}
+
+/// Decode an owned scalar payload through the shared native semantic authority.
+#[pyfunction]
+pub(crate) fn _decode_scalar<'py>(
+    py: Python<'py>,
+    sort: &str,
+    payload: &Bound<'py, PyBytes>,
+) -> PyResult<Bound<'py, PyAny>> {
+    use egglog_experimental::protobuf::value::{BigInt, Scalar};
+    let value = pb::PrimitiveValue::decode(payload.as_bytes())
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    let value = Scalar::decode(Some(sort), &value).map_err(PyValueError::new_err)?;
+    Ok(match value {
+        Scalar::I64(value) => value.into_pyobject(py)?.into_any(),
+        Scalar::F64Bits(bits) => f64::from_bits(bits).into_pyobject(py)?.into_any(),
+        Scalar::String(value) => value.into_pyobject(py)?.into_any(),
+        Scalar::Bool(value) => value.into_pyobject(py)?.to_owned().into_any(),
+        Scalar::Unit => py.None().into_bound(py),
+        Scalar::BigInt(value) => host_integer(py, &value)?,
+        Scalar::BigRat(value) => py.import("fractions")?.getattr("Fraction")?.call1((
+            host_integer(py, value.numer())?,
+            host_integer(py, value.denom())?,
+        ))?,
+        Scalar::Rational(value) => py.import("fractions")?.getattr("Fraction")?.call1((
+            host_integer(py, &BigInt::from(*value.numer()))?,
+            host_integer(py, &BigInt::from(*value.denom()))?,
+        ))?,
+    })
+}
+
 /// Generation-time export from the actual registrar, not a parallel catalog.
 #[pyfunction]
 pub(crate) fn _export_pyobject_catalog(py: Python<'_>) -> PyResult<Bound<'_, PyBytes>> {
@@ -356,6 +460,56 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
+    fn shared_scalar_host_bridge_preserves_large_values_and_rejects_malformed_data() {
+        Python::initialize();
+        Python::attach(|py| {
+            for (family, expression) in [
+                ("i64", c"-(1 << 63)"),
+                ("f64", c"-0.0"),
+                ("String", c"'host value'"),
+                ("bool", c"False"),
+                ("Unit", c"None"),
+                ("BigInt", c"10**6000 + 7"),
+                (
+                    "BigRat",
+                    c"__import__('fractions').Fraction(10**6000 + 7, 17)",
+                ),
+                (
+                    "Rational",
+                    c"__import__('fractions').Fraction(-(1 << 63), 3)",
+                ),
+            ] {
+                let host = py.eval(expression, None, None).unwrap();
+                let bytes = _encode_scalar(py, family, &host).unwrap();
+                let decoded = _decode_scalar(py, family, &bytes).unwrap();
+                assert!(decoded.eq(&host).unwrap(), "{family}");
+                if family == "f64" {
+                    assert_eq!(decoded.extract::<f64>().unwrap().to_bits(), 1 << 63);
+                }
+            }
+            let malformed = pb::PrimitiveValue {
+                value: Some(pb::primitive_value::Value::BigRat(pb::BigRat {
+                    numerator: "2".into(),
+                    denominator: "4".into(),
+                })),
+            };
+            let bytes = PyBytes::new(py, &malformed.encode_to_vec());
+            assert!(
+                _decode_scalar(py, "BigRat", &bytes)
+                    .unwrap_err()
+                    .is_instance_of::<PyValueError>(py)
+            );
+            let wrong_family =
+                _encode_scalar(py, "i64", &7i64.into_pyobject(py).unwrap().into_any()).unwrap();
+            assert!(
+                _decode_scalar(py, "String", &wrong_family)
+                    .unwrap_err()
+                    .is_instance_of::<PyValueError>(py)
+            );
+        });
+    }
+
+    #[test]
     fn recording_stages_commits_scopes_and_invalidates() {
         let mut engine = ProtoEngine::default();
         engine.enable_recording().unwrap();
@@ -672,13 +826,14 @@ mod tests {
                 resume_unwind(Box::new(PythonCostError))
             }
 
-            fn encode_custom_value(
+            fn encode_observed_custom_value(
                 &self,
+                graph: &egglog::EGraph,
                 sort: &egglog::ArcSort,
-                terms: &egglog::TermDag,
-                term: egglog::TermId,
+                value: egglog::Value,
             ) -> Result<Option<pb::CustomValue>, String> {
-                self.extension.encode_custom_value(sort, terms, term)
+                self.extension
+                    .encode_observed_custom_value(graph, sort, value)
             }
         }
 

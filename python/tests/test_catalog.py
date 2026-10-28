@@ -255,19 +255,19 @@ def test_set_stub_uses_relocated_actual_sort_records(set_catalog_program):
             assert line in reordered
 
 
-def test_exact_generated_surface_keeps_native_constructors(rational_catalog_program):
+def test_exact_generated_surface_includes_host_and_symbolic_constructors(rational_catalog_program):
     mapping = copy.deepcopy(DATA)
     render = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
         "render_stubs"
     ]
     stub = render(rational_catalog_program, mapping=mapping)
     for signature in (
-        "def __init__(self, num: i64Like, den: i64Like) -> None:",
+        "def __init__(self, num: i64Like, den: i64Like, /) -> None:",
         "def __add__(self, other: RationalLike) -> Rational:",
         "def __radd__(self, other: RationalLike) -> Rational:",
-        "def __init__(self, value: i64Like) -> None:",
+        "def __init__(self, value: i64Like, /) -> None:",
         "def from_string(cls, s: StringLike) -> BigInt:",
-        "def __init__(self, num: BigIntLike, den: BigIntLike) -> None:",
+        "def __init__(self, num: BigIntLike, den: BigIntLike, /) -> None:",
         "RationalLike: TypeAlias = Rational | Fraction | i64Like",
         "BigIntLike: TypeAlias = BigInt | i64Like",
         "BigRatLike: TypeAlias = BigRat | Fraction | i64Like",
@@ -279,14 +279,18 @@ def test_exact_generated_surface_keeps_native_constructors(rational_catalog_prog
         ("BigInt", "int", "__index__"),
     ):
         body = stub.split(f"class {family}(", 1)[1].split("\nclass ", 1)[0]
-        assert body.count("def __init__(") == 1
+        assert body.count("def __init__(") == (1 if family == "BigInt" else 2)
         assert f"def value(self) -> {value}:" in body
         assert f"def eval(self) -> {value}:" in body
         assert f"def {hook}(self) ->" in body
+        if family != "BigInt":
+            assert "def __init__(self, value: int | Fraction, /)" in body
         assert "from_value" not in body
     declaration = next(d for d in rational_catalog_program.primitives if d.name == "egglog.experimental.rational.make")
     mapping["callables"][declaration.name][0]["params"][0]["name"] = "numerator"
-    assert "def __init__(self, numerator: i64Like, den: i64Like)" in render(rational_catalog_program, mapping=mapping)
+    assert "def __init__(self, numerator: i64Like, den: i64Like, /)" in render(
+        rational_catalog_program, mapping=mapping
+    )
 
 
 def test_scalar_generated_surface_uses_actual_variadic_providers():
@@ -650,7 +654,8 @@ def test_function_generated_surface_uses_intrinsic_application_without_a_descrip
         "def eval(self) -> Callable[[Unpack[_UnstableFn_TS]], _UnstableFn_T]:",
     ):
         assert signature in stub
-    assert stub.count("    @overload\n") == 3
+    function_body = stub.split("class UnstableFn(", 1)[1].split("\nclass ", 1)[0]
+    assert function_body.count("    @overload\n") == 3
     assert "Any" not in stub
     indexed = Catalog(builtin_owner(program, mapping=mapping))
     assert (("function", ""), "__call__") not in indexed.members

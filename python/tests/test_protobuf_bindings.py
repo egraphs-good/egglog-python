@@ -26,6 +26,8 @@ def test_native_surface_contains_only_encoded_transport_and_host_provider():
     assert {name for name in vars(bindings) if not name.startswith("_")} == {"PrimitiveFailure"}
     assert callable(bindings._export_pyobject_catalog)
     assert callable(bindings._ProtoEngine)
+    assert callable(bindings._encode_scalar)
+    assert callable(bindings._decode_scalar)
 
 
 def test_table_cell_reader_preserves_availability_and_ownership_without_engine(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -313,6 +315,14 @@ def test_binary_proof_modes_requested_outputs_and_control(proof_engine):
             assert proof.has_field("root")
             assert proof.root < len(proof.proofs)
             assert proof.terms
+            literals = []
+            for term in proof.terms:
+                assert term.kind is not None
+                assert term.kind.field in {"primitive_value", "var", "app"}
+                if term.kind.field == "primitive_value":
+                    literals.append(term.kind.value)
+            literal = next(value for value in literals if value.value == Oneof("i64", 1))
+            assert bindings._decode_scalar("i64", literal.to_binary()) == 1
             for step in proof.proofs:
                 assert step.has_field("lhs")
                 assert step.lhs < len(proof.terms)

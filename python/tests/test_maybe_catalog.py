@@ -18,6 +18,7 @@ from egglog import (
     ExprValueError,
     Map,
     Maybe,
+    Pair,
     String,
     Vec,
     bindings,
@@ -42,6 +43,12 @@ def test_maybe_local_value_inspection_is_inert(monkeypatch):
     symbolic = i64(1) / i64(0)
     some = Maybe[i64].some(symbolic)
     nested = Maybe[Maybe[i64]].some(none)
+    zero = Maybe[i64].some(i64(0))
+    assert zero.__egg_ref__.read().kind.value.value.value.has_field("value")
+    assert zero.__egg_ref__.read().kind.value.value.value.value == 0
+    assert zero.value is not None
+    assert zero.value.value == 0
+    assert some.__egg_ref__.read().kind.value.value.field == "maybe"
     indirect = Vec[Maybe[i64]](some)[i64(0)]
 
     def unexpected(*args, **kwargs):
@@ -134,15 +141,20 @@ def test_maybe_none_conversion_and_constructor_deconstruction(native_catalog_pro
     converted = conversion.convert(None, Maybe[i64])
     assert isinstance(converted, RuntimeExpr)
     assert converted.value is None
-    for call in [Maybe[i64].none(), Maybe[i64].some(i64(4)), Maybe[Maybe[i64]].some(Maybe[i64].none())]:
-        assert isinstance(call, RuntimeExpr)
-        args, fn = get_callable_args(call), get_callable_fn(call)
-        assert args is not None
-        assert fn is not None
-        assert isinstance(fn, RuntimeFunction)
-        rebuilt_call = fn(*args)
-        assert rebuilt_call is not None
-        assert StructuralView(rebuilt_call.__egg_ref__) == StructuralView(call.__egg_ref__)
+    for value in [Maybe[i64].none(), Maybe[i64].some(i64(4)), Maybe[Maybe[i64]].some(Maybe[i64].none())]:
+        assert isinstance(value, RuntimeExpr)
+        assert get_callable_args(value) is None
+        assert get_callable_fn(value) is None
+        packet = pack([value.__egg_ref__])
+        imported = RuntimeExpr(
+            Builder
+            .from_program(
+                pb.Program.from_binary(packet.program.to_binary()), environment=value.__egg_ref__.owner._environment
+            )
+            .publish()
+            .ref("nodes", packet.indices[0])
+        )
+        assert StructuralView(imported.__egg_ref__) == StructuralView(value.__egg_ref__)
     declaration = builtin_catalog().definitions["callable", "egglog.experimental.maybe.none"]
     builder = Builder.from_builtins(native_catalog_program)
     builder.presentations.update(builtin_catalog().owner._presentations)
@@ -157,23 +169,18 @@ def test_maybe_none_conversion_and_constructor_deconstruction(native_catalog_pro
         Builder.from_program(packet.program, environment=(native,)).publish().ref("nodes", packet.indices[0])
     )
     assert rebuilt.value is None
-    args, fn = get_callable_args(rebuilt), get_callable_fn(rebuilt)
-    assert args == ()
-    assert fn is not None
-    assert isinstance(fn, RuntimeFunction)
-    rebuilt_call = fn()
-    assert rebuilt_call is not None
-    assert StructuralView(rebuilt_call.__egg_ref__) == StructuralView(rebuilt.__egg_ref__)
+    assert get_callable_args(rebuilt) is None
+    assert get_callable_fn(rebuilt) is None
 
 
 def test_generic_classmethod_reconstruction_preserves_bound_callable_identity(monkeypatch):
     cases: list[tuple[Callable[..., object], tuple[object, ...]]] = [
-        (Vec[i64].empty, ()),
-        (Map[i64, String].empty, ()),
-        (Maybe[i64].none, ()),
-        (Maybe[String].none, ()),
-        (Maybe[i64].some, (i64(4),)),
-        (Maybe[Maybe[i64]].some, (Maybe[i64].none(),)),
+        (Map[i64, String].from_pairs, (Vec(Pair(i64(1), String("one"))),)),
+        (Map[String, i64].from_pairs, (Vec(Pair(String("one"), i64(1))),)),
+        (Map[i64, Maybe[i64]].from_pairs, (Vec(Pair(i64(1), Maybe[i64].none())),)),
+        (Map[i64, Maybe[String]].from_pairs, (Vec(Pair(i64(1), Maybe[String].none())),)),
+        (Map[i64, String].from_pairs, (Vec[Pair[i64, String]].empty(),)),
+        (Map[String, i64].from_pairs, (Vec[Pair[String, i64]].empty(),)),
     ]
     calls = []
     for fn, args in cases:
@@ -344,7 +351,7 @@ def test_maybe_formed_and_call_defaults_execute_without_changing_representation(
                 assert result.value.value == 0
 
 
-@pytest.mark.parametrize("mutation", ["wrong_child", "missing_child", "wrong_family", "arity", "scheme", "provenance"])
+@pytest.mark.parametrize("mutation", ["wrong_child", "wrong_family", "arity", "missing_payload"])
 def test_maybe_inspection_rejects_malformed_local_values(mutation, native_catalog_program):
     original = Maybe[i64].some(i64(0)).__egg_ref__
     packet = pack([original])
@@ -353,34 +360,21 @@ def test_maybe_inspection_rejects_malformed_local_values(mutation, native_catalo
     node = program.nodes[packet.indices[0]]
     node_kind = node.kind
     assert node_kind is not None
-    assert node_kind.field == "call"
+    assert node_kind.field == "primitive_value"
     sort_kind = program.sorts[node.sort_id].kind
     assert sort_kind is not None
     assert sort_kind.field == "application"
     if mutation == "wrong_child":
-        program.nodes[node_kind.value.args[0]].sort_id = node.sort_id
-    elif mutation == "missing_child":
-        node_kind.value.args.clear()
+        payload = node_kind.value.value
+        assert payload is not None
+        assert payload.field == "maybe"
+        program.nodes[payload.value.value].sort_id = node.sort_id
     elif mutation == "wrong_family":
         sort_kind.value.name = "Vec"
     elif mutation == "arity":
         sort_kind.value.args.clear()
     else:
-        primitive = next(p for p in native_catalog_program.primitives if p.name == "egglog.experimental.maybe.some")
-        if mutation == "scheme":
-            signature = primitive.signature
-            assert signature is not None
-            signature.output = signature.inputs[0].sort
-        else:
-            native_catalog_program.primitives.remove(primitive)
-            program.declarations.append(
-                pb.Declaration(
-                    kind=Oneof[Literal["constructor"], pb.Constructor](
-                        "constructor", pb.Constructor(name=primitive.name, inputs=[], output=node.sort_id)
-                    )
-                )
-            )
-        environment = (Builder.from_builtins(native_catalog_program).publish(),)
+        node_kind.value.value = None
     with pytest.raises((ValueError, TypeError, TypeConstraintError, ExprValueError)):
         _ = RuntimeExpr(
             Builder.from_program(program, environment=environment).publish().ref("nodes", packet.indices[0])

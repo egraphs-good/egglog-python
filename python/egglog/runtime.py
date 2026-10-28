@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import struct
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -19,6 +18,7 @@ import cloudpickle
 from egglog_proto.egglog.v1 import egglog_pb as pb
 from protobuf import Oneof
 
+from . import bindings
 from ._builtin_protocols import NUMERIC_BINARY_METHODS, SCALAR_PROTOCOLS
 from ._catalog import Catalog
 from ._presentation import CallKind, CallPresentation, Presentation, presentation
@@ -446,21 +446,65 @@ def _author_call(  # noqa: C901, PLR0912
         raise TypeConstraintError(msg)
     builder = Builder()
     builder.import_ref(declaration)
-    node_index = builder.add(
-        "nodes",
-        pb.Node(
-            sort_id=builder.import_ref(result_sort),
-            kind=Oneof[Literal["call"], pb.Call](
-                "call", pb.Call(func=kind.name, args=[builder.import_ref(node) for node in converted])
-            ),
-        ),
+    arguments = [builder.import_ref(node) for node in converted]
+    primitive: pb.PrimitiveValue | None = None
+    if isinstance(kind, pb.Primitive) and kind.name in {
+        "egglog.core.pair.make",
+        "egglog.core.vec.of",
+        "egglog.core.vec.empty",
+        "egglog.core.set.of",
+        "egglog.core.set.empty",
+        "egglog.core.multiset.of",
+        "egglog.core.multiset.empty",
+        "egglog.core.map.empty",
+        "egglog.experimental.maybe.none",
+        "egglog.experimental.maybe.some",
+    }:
+        from ._catalog import builtin_catalog  # noqa: PLC0415
+
+        canonical = builtin_catalog().definitions.get(("callable", kind.name))
+        if canonical is None or StructuralView(declaration) != StructuralView(canonical):
+            msg = "Data construction requires its canonical native declaration"
+            raise TypeConstraintError(msg)
+        match kind.name:
+            case "egglog.core.pair.make":
+                primitive = pb.PrimitiveValue(
+                    value=Oneof[Literal["pair"], pb.PairValue](
+                        "pair", pb.PairValue(first=arguments[0], second=arguments[1])
+                    )
+                )
+            case "egglog.core.vec.of" | "egglog.core.vec.empty":
+                primitive = pb.PrimitiveValue(
+                    value=Oneof[Literal["vec"], pb.ValueList]("vec", pb.ValueList(items=arguments))
+                )
+            case "egglog.core.set.of" | "egglog.core.set.empty":
+                primitive = pb.PrimitiveValue(
+                    value=Oneof[Literal["set"], pb.ValueList]("set", pb.ValueList(items=arguments))
+                )
+            case "egglog.core.multiset.of" | "egglog.core.multiset.empty":
+                primitive = pb.PrimitiveValue(
+                    value=Oneof[Literal["multiset"], pb.ValueList]("multiset", pb.ValueList(items=arguments))
+                )
+            case "egglog.core.map.empty":
+                primitive = pb.PrimitiveValue(value=Oneof[Literal["map"], pb.MapValue]("map", pb.MapValue()))
+            case "egglog.experimental.maybe.none" | "egglog.experimental.maybe.some":
+                primitive = pb.PrimitiveValue(
+                    value=Oneof[Literal["maybe"], pb.MaybeValue](
+                        "maybe", pb.MaybeValue(value=arguments[0] if arguments else None)
+                    )
+                )
+    node_kind = (
+        Oneof[Literal["primitive_value"], pb.PrimitiveValue]("primitive_value", primitive)
+        if primitive is not None
+        else Oneof[Literal["call"], pb.Call]("call", pb.Call(func=kind.name, args=arguments))
     )
+    node_index = builder.add("nodes", pb.Node(sort_id=builder.import_ref(result_sort), kind=node_kind))
     return builder.publish().ref("nodes", node_index), core_values[view.mutates] if (view.mutates is not None) else None
 
 
 # These are Python codecs/protocol hooks, not callable signatures. Sort and
 # callable definitions still come from the native-generated catalog.
-LIT_IDENTS = frozenset(name for name, protocol in SCALAR_PROTOCOLS.items() if protocol.literal_constructor)
+LIT_IDENTS = frozenset(SCALAR_PROTOCOLS)
 DUMMY_VALUE = object()
 _CLASS_CACHE: WeakKeyDictionary[Owner, WeakValueDictionary[int, RuntimeClass]] = WeakKeyDictionary()
 _BASE_CLASSES: dict[str, RuntimeClass] = {}
@@ -788,39 +832,53 @@ class RuntimeClass(type):
         else:
             kind = declaration
         name = kind.name
-        if isinstance(kind, pb.PrimitiveSort) and name in LIT_IDENTS:
-            if kwargs or len(args) != (0 if name == "Unit" else 1):
-                raise TypeError(f"{cls} expects {'zero' if name == 'Unit' else 'one'} positional literal argument")
-            if args and not isinstance(args[0], SCALAR_PROTOCOLS[name].literal_types):
-                raise TypeError(f"{cls} expects a {SCALAR_PROTOCOLS[name].value_type.__name__} literal")
+        if (
+            isinstance(kind, pb.PrimitiveSort)
+            and name in SCALAR_PROTOCOLS
+            and SCALAR_PROTOCOLS[name].conversion_sort
+            and kwargs
+        ):
+            raise TypeError(f"{cls} expects positional constructor arguments")
+        if (
+            isinstance(kind, pb.PrimitiveSort)
+            and name in LIT_IDENTS
+            and not (
+                SCALAR_PROTOCOLS[name].conversion_sort
+                and any(isinstance(arg, RuntimeExpr) for arg in (*args, *kwargs.values()))
+            )
+        ):
+            protocol = SCALAR_PROTOCOLS[name]
+            if kwargs:
+                raise TypeError(f"{cls} expects positional literal arguments")
+            if protocol.conversion_sort and protocol.value_type is not int:
+                if len(args) == 1 and isinstance(args[0], protocol.literal_types):
+                    value = args[0]
+                elif len(args) == 2 and all(isinstance(arg, int) for arg in args):
+                    value = args
+                else:
+                    raise TypeError(f"{cls} expects an int/Fraction literal or two int literals")
+            else:
+                if len(args) != (0 if name == "Unit" else 1):
+                    raise TypeError(f"{cls} expects {'zero' if name == 'Unit' else 'one'} positional literal argument")
+                if args and not isinstance(args[0], protocol.literal_types):
+                    raise TypeError(f"{cls} expects a {protocol.value_type.__name__} literal")
+                value = args[0] if args else None
             if cls.__egg_sort__ is None:
                 msg = "Literal constructor has an unresolved sort"
                 raise TypeError(msg)
-            primitive = pb.PrimitiveValue()
-            match SCALAR_PROTOCOLS[name].literal_arm:
-                case "i64":
-                    primitive.value = Oneof[Literal["i64"], int]("i64", cast("int", args[0]))
-                case "f64_bits":
-                    bits = struct.unpack("!Q", struct.pack("!d", args[0]))[0]
-                    primitive.value = Oneof[Literal["f64_bits"], int]("f64_bits", bits)
-                case "string":
-                    primitive.value = Oneof[Literal["string"], str]("string", cast("str", args[0]))
-                case "bool":
-                    primitive.value = Oneof[Literal["bool"], bool]("bool", cast("bool", args[0]))
-                case "unit":
-                    primitive.value = Oneof[Literal["unit"], pb.Unit]("unit", pb.Unit())
-                case "custom":
-                    try:
-                        payload = cloudpickle.dumps(args[0])
-                    except Exception as error:
-                        # Both formatting the diagnostic and add_note may run
-                        # user code; neither may replace the serialization error.
-                        with suppress(BaseException):
-                            error.add_note(f"Failed to pickle object of type {type(args[0])}")
-                        raise
-                    primitive.value = Oneof[Literal["custom"], pb.CustomValue](
-                        "custom", pb.CustomValue(payload=payload)
-                    )
+            if protocol.literal_arm == "custom":
+                try:
+                    payload = cloudpickle.dumps(value)
+                except Exception as error:
+                    # Neither user formatting nor add_note may hide the error.
+                    with suppress(BaseException):
+                        error.add_note(f"Failed to pickle object of type {type(value)}")
+                    raise
+                primitive = pb.PrimitiveValue(
+                    value=Oneof[Literal["custom"], pb.CustomValue]("custom", pb.CustomValue(payload=payload))
+                )
+            else:
+                primitive = pb.PrimitiveValue.from_binary(bindings._encode_scalar(name, value))
             builder = Builder()
             builder.import_ref(cls.__egg_definition__)
             index = builder.add(

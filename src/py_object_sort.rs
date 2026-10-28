@@ -1,7 +1,7 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use core::fmt;
 use egglog::{
-    ArcSort, BaseValue, Term, TermDag, TermId, Value, add_primitive,
+    ArcSort, BaseValue, TermDag, TermId, Value, add_primitive,
     ast::Literal,
     prelude::{BaseSort, EGraph},
     sort::{BaseValues, S},
@@ -278,39 +278,6 @@ impl egglog_experimental::protobuf::NativeExtension for PyObjectExtension {
         })
     }
 
-    fn encode_custom_value(
-        &self,
-        native_sort: &ArcSort,
-        terms: &TermDag,
-        term: TermId,
-    ) -> Result<Option<pb::CustomValue>, String> {
-        if native_sort.value_type() != Some(TypeId::of::<PyPickledValue>()) {
-            return Ok(None);
-        }
-        if native_sort.name() != "PyObject"
-            || native_sort.is_eq_sort()
-            || native_sort.is_container_sort()
-        {
-            return Err("PyObject native sort provenance mismatch".into());
-        }
-        let Term::App(name, children) = terms.get(term) else {
-            return Err("invalid PyObject reconstruction".into());
-        };
-        if name != "py-object" || children.len() != 1 {
-            return Err("invalid PyObject reconstruction".into());
-        }
-        let Term::Lit(Literal::String(encoded)) = terms.get(children[0]) else {
-            return Err("invalid PyObject payload term".into());
-        };
-        let payload = STANDARD
-            .decode(encoded)
-            .map_err(|error| format!("invalid PyObject base64: {error}"))?;
-        Ok(Some(pb::CustomValue {
-            payload,
-            args: vec![],
-        }))
-    }
-
     fn encode_observed_custom_value(
         &self,
         graph: &EGraph,
@@ -409,84 +376,54 @@ mod tests {
     }
 
     #[test]
-    fn custom_codec_requires_actual_type_and_exact_reconstruction() {
+    fn custom_codec_reads_actual_native_payload_and_checks_provenance() {
         use egglog_experimental::protobuf::NativeExtension;
         let extension = PyObjectExtension::default();
         let mut graph = egglog_experimental::new_experimental_egraph();
         extension.initialize(&mut graph).unwrap();
-        let mut terms = TermDag::default();
-        let encoded = terms.lit(Literal::String(STANDARD.encode(b"inert")));
-        let valid = terms.app("py-object".into(), vec![encoded]);
-        let integer = terms.lit(Literal::Int(0));
-        let bad_base64 = terms.lit(Literal::String("!".into()));
-        let malformed = [
-            integer,
-            terms.app("other".into(), vec![encoded]),
-            terms.app("py-object".into(), vec![]),
-            terms.app("py-object".into(), vec![integer]),
-            terms.app("py-object".into(), vec![bad_base64]),
-        ];
-        for term in malformed {
-            assert!(
-                extension
-                    .encode_custom_value(graph.get_sort_by_name("PyObject").unwrap(), &terms, term)
-                    .is_err()
-            );
-        }
-        let value = pb::CustomValue {
-            payload: b"inert".to_vec(),
-            args: vec![],
-        };
+        let sort = graph.get_sort_by_name("PyObject").unwrap();
+        let native = graph.base_to_value(PyPickledValue(b"inert\0payload".to_vec()));
+        let value = extension
+            .encode_observed_custom_value(&graph, sort, native)
+            .unwrap()
+            .unwrap();
+        assert_eq!(value.payload, b"inert\0payload");
+        assert!(value.args.is_empty());
+        let string = graph.get_sort_by_name("String").unwrap();
+        assert!(
+            extension
+                .encode_observed_custom_value(
+                    &graph,
+                    string,
+                    graph.base_to_value(S::new("different type".into()))
+                )
+                .unwrap()
+                .is_none()
+        );
         let original = pb::Program::default();
         let mut destination = original.clone();
         assert!(
             extension
-                .lower_custom_value(
-                    &graph,
-                    graph.get_sort_by_name("String").unwrap(),
-                    &value,
-                    None,
-                    &mut destination
-                )
+                .lower_custom_value(&graph, string, &value, None, &mut destination)
                 .is_err()
         );
         assert_eq!(destination, original);
+        let child_bearing = pb::CustomValue {
+            args: vec![0],
+            ..value.clone()
+        };
         assert!(
             extension
-                .encode_custom_value(graph.get_sort_by_name("String").unwrap(), &terms, valid)
-                .unwrap()
-                .is_none()
-        );
-
-        #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-        struct ForeignValue;
-        impl BaseValue for ForeignValue {}
-        #[derive(Debug)]
-        struct ForeignSort;
-        impl BaseSort for ForeignSort {
-            type Base = ForeignValue;
-            fn name(&self) -> &str {
-                "PyObject"
-            }
-            fn register_primitives(&self, _: &mut EGraph) {}
-            fn reconstruct_termdag(&self, _: &BaseValues, _: Value, _: &mut TermDag) -> TermId {
-                unreachable!()
-            }
-        }
-        let mut foreign = egglog_experimental::new_experimental_egraph();
-        egglog::prelude::add_base_sort(&mut foreign, ForeignSort, egglog::span!()).unwrap();
-        let wrong_type = foreign.get_sort_by_name("PyObject").unwrap();
-        assert!(
-            extension
-                .lower_custom_value(&foreign, wrong_type, &value, None, &mut destination)
+                .lower_custom_value(&graph, sort, &child_bearing, None, &mut destination)
                 .is_err()
         );
         assert_eq!(destination, original);
+        let mut other = egglog_experimental::new_experimental_egraph();
+        extension.initialize(&mut other).unwrap();
         assert!(
             extension
-                .encode_custom_value(wrong_type, &terms, valid)
-                .unwrap()
-                .is_none()
+                .encode_observed_custom_value(&other, sort, native)
+                .is_err()
         );
     }
 

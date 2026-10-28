@@ -585,7 +585,8 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
         "from typing import Generic, Never"
         + (", Protocol" if pyobject_protocol else "")
         + ", TypeAlias, TypeVar"
-        + (", TypeVarTuple, Unpack, overload" if function_protocol else ""),
+        + (", TypeVarTuple, Unpack" if function_protocol else "")
+        + (", overload" if function_protocol or any(p.conversion_sort for p in _SCALARS.values()) else ""),
         "",
         "from typing_extensions import deprecated",
         "",
@@ -701,13 +702,23 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                 reserved.update({"value", "__match_args__", "__iter__", "__len__", "__contains__", "eval"})
         else:
             value_type = protocol.value_type.__name__
-            if protocol.literal_types or not protocol.literal_constructor:
-                if protocol.literal_constructor:
+            if protocol.conversion_sort and "__init__" in methods[family_name]:
+                methods[family_name]["__init__"] = methods[family_name]["__init__"].replace(
+                    ") -> None:", ", /) -> None:"
+                )
+            if protocol.literal_types:
+                if protocol.conversion_sort is None:
                     lines.append(f"    def __init__(self, value: {value_type}, /) -> None: ...")
                     reserved.add("__init__")
                 elif "__init__" not in methods[family_name]:
                     lines.append("    def __init__(self, _unavailable: Never, /) -> None: ...")
                     reserved.add("__init__")
+                elif protocol.value_type.__name__ == "Fraction":
+                    methods[family_name]["__init__"] = (
+                        "    @overload\n"
+                        "    def __init__(self, value: int | Fraction, /) -> None: ...\n"
+                        "    @overload\n" + methods[family_name]["__init__"]
+                    )
                 lines.extend([
                     '    __match_args__ = ("value",)',
                     "    @property",
@@ -759,7 +770,15 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                 converted.append(names[protocol.conversion_sort] + "Like")
             lines.append(
                 f"{name}Like: TypeAlias = "
-                + " | ".join([name, *(t.__name__ for t in protocol.literal_types), *converted])
+                + " | ".join([
+                    name,
+                    *(
+                        t.__name__
+                        for t in protocol.literal_types
+                        if not protocol.conversion_sort or t not in _SCALARS[protocol.conversion_sort].literal_types
+                    ),
+                    *converted,
+                ])
             )
             lines.append("")
     lines.extend(functions.values())

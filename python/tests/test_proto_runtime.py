@@ -1526,15 +1526,17 @@ def test_set_local_protocols_preserve_symbolic_order_and_empty_distinction(set_r
     assert len(expression) == 2
     assert first in expression
     assert integer(3) not in expression
-    assert [arg.__egg_ref__ for arg in _required_callable_args(expression)] == [
+    payload = expression.__egg_ref__.read().kind.value.value
+    assert payload.field == "set"
+    assert [expression.__egg_ref__.owner.ref("nodes", index) for index in payload.value.items] == [
         first.__egg_ref__,
         second.__egg_ref__,
         first.__egg_ref__,
     ]
+    assert get_callable_args(expression) is None
     assert len(Set(integer(1) + 1, integer(2))) == 2
     assert Set[integer]().value == set()
-    with pytest.raises(set_runtime["ExprValueError"]):
-        _ = Set[integer].empty().value
+    assert Set[integer].empty().value == set()
     with pytest.warns(DeprecationWarning, match="use .value"):
         assert expression.eval() == expression.value
     match expression:
@@ -1542,8 +1544,8 @@ def test_set_local_protocols_preserve_symbolic_order_and_empty_distinction(set_r
             assert children == {first, second}
         case _:
             pytest.fail("Set value matching failed")
-    assert str(expression) == "Set[i64](2, 1, 2)"
-    assert str(expression | expression) == "Set[i64](2, 1, 2) | Set[i64](2, 1, 2)"
+    assert str(expression) == "Set[i64](i64(2), i64(1), i64(2))"
+    assert str(expression | expression) == "Set[i64](i64(2), i64(1), i64(2)) | Set[i64](i64(2), i64(1), i64(2))"
     for operation, key in (
         (expression.insert(first), "insert"),
         (expression.remove(first), "remove"),
@@ -1570,11 +1572,9 @@ def test_set_conversion_and_typed_alias(set_runtime):
     converted = convert({1, 2}, Set[integer])
     assert converted.value == {integer(1), integer(2)}
     empty = convert(set(), Set[integer])
-    empty_function = _required_runtime_function(get_callable_fn(empty))
-    assert empty_function.__egg_ref__ == Set[integer].empty.__egg_ref__
+    assert get_callable_fn(empty) is None
     assert isinstance(empty, Set[integer])
-    with pytest.raises(set_runtime["ExprValueError"]):
-        _ = empty.value
+    assert empty.value == set()
     for source in ([1], frozenset({1}), {"wrong"}):
         with pytest.raises(ConvertError):
             convert(source, Set[integer])
@@ -1584,8 +1584,7 @@ def test_set_conversion_and_typed_alias(set_runtime):
     def size(value: SetLike[integer, int]) -> integer: ...  # type: ignore[valid-type]
 
     assert _required_callable_args(size({1, 2}))[0].value == converted.value
-    nested_empty_function = _required_runtime_function(get_callable_fn(_required_callable_args(size(set()))[0]))
-    assert nested_empty_function.__egg_ref__ == Set[integer].empty.__egg_ref__
+    assert _required_callable_args(size(set()))[0].value == set()
     pair, string = (set_runtime[name] for name in ("Pair", "String"))
     nested = convert({(1, "a")}, Set[pair[integer, string]])
     assert next(iter(nested)).value == (integer(1), string("a"))
@@ -1629,7 +1628,7 @@ def test_set_formed_value_preserves_refs_and_pretty_roundtrip(set_runtime, empty
         assert str(expression) == expected
     # Trusted display of our constructed values, not evaluation by an engine.
     authored = eval(expected, set_runtime)
-    assert authored.__egg_ref__.read().kind.field == "call"
+    assert authored.__egg_ref__.read().kind.field == "primitive_value"
     assert list(authored) == list(expression)  # type: ignore[call-overload]
     assert get_callable_args(expression) is None
     copied = copy(expression)
@@ -1709,7 +1708,7 @@ def test_set_empty_converter_and_formed_pretty_use_retained_presentation(
     python_presentation_mapping["callables"]["egglog.core.set.empty"][0]["path"] = ["vacant"]
     generated = request.getfixturevalue("set_runtime")
     Set, integer = generated["FiniteSet"], generated["i64"]
-    assert str(convert(set(), Set[integer])) == "FiniteSet[i64].vacant()"
+    assert str(convert(set(), Set[integer])) == "FiniteSet[i64]()"
     builder = Builder()
     root = builder.add(
         "nodes",
@@ -1723,7 +1722,7 @@ def test_set_empty_converter_and_formed_pretty_use_retained_presentation(
     assert str(RuntimeExpr(builder.publish().ref("nodes", root))) == "FiniteSet[i64]()"
 
 
-def test_map_from_pairs_rejects_set_even_with_forged_input_metadata(set_catalog_program, request):
+def test_map_from_pairs_stays_symbolic_with_forged_input_metadata(set_catalog_program, request):
     declaration = next(d for d in set_catalog_program.primitives if d.name == "egglog.core.map.of")
     input_sort = set_catalog_program.sorts[declaration.signature.inputs[0].sort]
     assert input_sort.kind.field == "application"
@@ -1733,31 +1732,42 @@ def test_map_from_pairs_rejects_set_even_with_forged_input_metadata(set_catalog_
     Map, Set, Pair, integer, string = (generated[name] for name in ("Map", "Set", "Pair", "i64", "String"))
     expression = Map.from_pairs(Set(Pair(integer(1), string("a"))))
     assert expression.__egg_ref__.read().kind.field == "call"
-    with pytest.raises(generated["ExprValueError"], match="Vec"):
+    with pytest.raises(generated["ExprValueError"], match="Map value payload"):
         _ = expression.value
 
 
-def test_exact_construction_and_conversions_stay_symbolic(rational_runtime):
+def test_exact_host_values_and_symbolic_conversions_have_one_boundary(rational_runtime):
+    from egglog.deconstruct import get_literal_value  # noqa: PLC0415
+
     r, z, q, integer = (rational_runtime[name] for name in ("Rational", "BigInt", "BigRat", "i64"))
+    huge = 10**100 + 1
+    for expression, expected in (
+        (r(1, 2), Fraction(1, 2)),
+        (r(Fraction(2, -4)), Fraction(-1, 2)),
+        (r(2), Fraction(2)),
+        (z(huge), huge),
+        (q(1, 2), Fraction(1, 2)),
+        (q(Fraction(huge, 2)), Fraction(huge, 2)),
+        (q(2), Fraction(2)),
+    ):
+        assert expression.__egg_ref__.read().kind.field == "primitive_value"
+        assert expression.value == get_literal_value(expression) == expected
+        assert get_callable_fn(expression) is None
+        assert get_callable_args(expression) is None
+        packed = pack([expression.__egg_ref__])
+        assert pb.Program.from_binary(packed.program.to_binary()).to_binary() == packed.program.to_binary()
     symbolic = integer(1) + 2
     for expression, key in (
-        (r(1, 2), "egglog.experimental.rational.make"),
-        (z(10), "egglog.core.bigint.from_i64"),
+        (r(symbolic, 2), "egglog.experimental.rational.make"),
+        (z(symbolic), "egglog.core.bigint.from_i64"),
         (z.from_string("123"), "egglog.core.bigint.from_string"),
-        (q(1, 2), "egglog.core.bigrat.make"),
-        (r(1, 2) + Fraction(1, 3), "egglog.experimental.rational.add"),
-        (Fraction(1, 3) + r(1, 2), "egglog.experimental.rational.add"),
+        (q(z(symbolic), 2), "egglog.core.bigrat.make"),
     ):
         assert expression.__egg_ref__.read().kind.field == "call"
         assert expression.__egg_ref__.read().kind.value.func == key
-        packed = pack([expression.__egg_ref__])
-        assert pb.Program.from_binary(packed.program.to_binary()).to_binary() == packed.program.to_binary()
-    assert get_callable_fn(r(1, 2)) == r
-    assert get_callable_fn(z.from_string("123")) == z.from_string
-    assert [part.value for part in _required_callable_args(Fraction(1, 3) + r(1, 2))] == [
-        Fraction(1, 3),
-        Fraction(1, 2),
-    ]
+        assert get_literal_value(expression) is None
+        with pytest.raises(rational_runtime["ExprValueError"]):
+            _ = expression.value
     for target in (r, z, q):
         converted = convert(symbolic, target)
         child = _required_callable_args(converted)[0]
@@ -1766,23 +1776,28 @@ def test_exact_construction_and_conversions_stay_symbolic(rational_runtime):
         assert child.__egg_ref__ == symbolic.__egg_ref__
         with pytest.raises(rational_runtime["ExprValueError"]):
             _ = converted.value
-    for target in (r, q):
-        converted = convert(Fraction(1, 2), target)
-        assert get_callable_fn(converted) == target
-        numerator = _required_callable_args(converted)[0]
-        if target == q:
-            numerator = _required_callable_args(numerator)[0]
-        assert numerator.__egg_ref__.read().kind.value.value.field == "i64"
-    for target in (r, z, q):
+        assert convert(1, target).value == 1
         with pytest.raises(ConvertError):
             convert(1.5, target)
+    for target in (r, q):
+        converted = convert(Fraction(1, 2), target)
+        assert converted.__egg_ref__.read().kind.field == "primitive_value"
+        assert converted.value == Fraction(1, 2)
+        with pytest.raises(ValueError, match=r"denominator|zero"):
+            target(1, 0)
+        for arguments in ((), (1.5,), (Fraction(1, 2), 1)):
+            with pytest.raises(TypeError):
+                target(*arguments)
+    for arguments in ((), ("1",), (1, 2), (Fraction(1, 2),)):
+        with pytest.raises(TypeError):
+            z(*arguments)
     assert str(r(symbolic, 2)) == "Rational(i64(1) + 2, 2)"
 
 
 def test_bignum_generated_family_authors_exact_calls_without_engine(rational_runtime):
     z, q, integer = (rational_runtime[name] for name in ("BigInt", "BigRat", "i64"))
     a, b = z.from_string("123456789012345678901"), z.from_string("-17")
-    x, y = q(a, z.from_string("2")), q(1, 3)
+    x, y = q(123456789012345678901, 2), q(1, 3)
     expressions = [
         ("bigint.add", a + b, "BigInt"),
         ("bigint.sub", a - b, "BigInt"),
@@ -1980,20 +1995,20 @@ def test_closed_scalar_family_authors_exact_calls_without_engine(rational_runtim
         floating.from_i64(1, 2)
 
 
-def test_exact_legacy_local_inspection_and_protocols(rational_runtime):
-    r, z, q = (rational_runtime[name] for name in ("Rational", "BigInt", "BigRat"))
+def test_exact_value_protocols_only_decode_payloads(rational_runtime):
+    r, z, q, integer = (rational_runtime[name] for name in ("Rational", "BigInt", "BigRat", "i64"))
     half = r(1, 2)
     assert half.value == Fraction(1, 2)
     assert float(half) == 0.5
     assert int(half) == 0
     assert r(1, -2).value == Fraction(-1, 2)
-    with pytest.raises(ZeroDivisionError):
-        _ = r(1, 0).value
+    with pytest.raises(ValueError, match=r"denominator|zero"):
+        r(1, 0)
     huge = 10**100 + 1
-    formed_integer = z.from_string(str(huge))
+    formed_integer = z(huge)
     assert formed_integer.value == huge
     assert int(formed_integer) == operator.index(formed_integer) == huge
-    formed_ratio = q(formed_integer, z.from_string("2"))
+    formed_ratio = q(Fraction(huge, 2))
     assert formed_ratio.value == Fraction(huge, 2)
     assert int(formed_ratio) == huge // 2
     assert float(formed_ratio) == float(Fraction(huge, 2))
@@ -2005,15 +2020,12 @@ def test_exact_legacy_local_inspection_and_protocols(rational_runtime):
             assert value == Fraction(1, 2)
         case _:
             pytest.fail("Exact value match protocol missing")
-    # Keep the old local form limits: from_i64 is a native call, not a literal.
-    for symbolic in (z(10), q(1, 2), half + Fraction(1, 3)):
+    for symbolic in (z(integer(10)), q(z(1), z(2)), z.from_string("123"), half + Fraction(1, 3)):
         with pytest.raises(rational_runtime["ExprValueError"]):
             _ = symbolic.value
-    with pytest.raises(ValueError, match="invalid literal"):
-        _ = z.from_string("invalid").value
 
 
-def test_exact_pretty_uses_retained_classmethod_presentation(
+def test_exact_pretty_uses_owned_type_presentation(
     rational_runtime, rational_catalog_program, python_presentation_mapping
 ):
     from egglog.pretty import pretty_ref  # noqa: PLC0415
@@ -2027,14 +2039,14 @@ def test_exact_pretty_uses_retained_classmethod_presentation(
         params.reverse()
     catalog_owner = builtin_owner(rational_catalog_program, mapping=python_presentation_mapping)
     for name, arm, payload, expected in (
-        ("BigInt", "big_int", "123", "Integer.decimal('123')"),
+        ("BigInt", "big_int", "123", "Integer(123)"),
         (
             "BigRat",
             "big_rat",
             pb.BigRat(numerator="1", denominator="2"),
-            "BigRat(Integer.decimal('2'), Integer.decimal('1'))",
+            "BigRat(1, 2)",
         ),
-        ("Rational", "rational", pb.Rational(numerator=1, denominator=2), "Rational(2, 1)"),
+        ("Rational", "rational", pb.Rational(numerator=1, denominator=2), "Rational(1, 2)"),
     ):
         sort = next(
             i
@@ -2091,11 +2103,10 @@ def test_exact_inert_values_are_owned_inspectable_and_printable(rational_runtime
     assert get_literal_value(expression) == expression.value == expected
     assert get_callable_args(expression) is None
     assert copy(expression).__egg_ref__ == expression.__egg_ref__
-    # Display uses actual constructor/classmethod presentations, never f64 or
-    # frontend evaluation. Reauthoring is symbolic, not an inert-record clone.
+    # Display reauthors the same host value through its owned type view.
     displayed = eval(str(expression), rational_runtime)
     assert displayed.value == expected
-    assert displayed.__egg_ref__.read().kind.field == "call"
+    assert displayed.__egg_ref__.read().kind.field == "primitive_value"
     packed = pack([expression.__egg_ref__])
     detached = Builder.from_program(
         pb.Program.from_binary(packed.program.to_binary()), environment=expression.__egg_ref__.owner._environment
@@ -2113,7 +2124,7 @@ def test_exact_inert_decimal_magnitude_ignores_process_digit_limit(rational_runt
     text, huge = "9" * digits, 10**digits - 1
     if form == "integer":
         family, arm, payload, expected = "BigInt", "big_int", "-" + text, -huge
-        display = f"BigInt.from_string('-{text}')"
+        display = f"BigInt({hex(expected)})"
     else:
         numerator, denominator, expected = {
             "numerator": ("-" + text, "2", Fraction(-huge, 2)),
@@ -2122,7 +2133,8 @@ def test_exact_inert_decimal_magnitude_ignores_process_digit_limit(rational_runt
         }[form]
         family, arm = "BigRat", "big_rat"
         payload = pb.BigRat(numerator=numerator, denominator=denominator)
-        display = f"BigRat(BigInt.from_string({numerator!r}), BigInt.from_string({denominator!r}))"
+        parts = [expected.numerator, expected.denominator]
+        display = "BigRat(" + ", ".join(str(part) if part.bit_length() < 2000 else hex(part) for part in parts) + ")"
     builder = Builder()
     index = builder.add(
         "nodes",
@@ -2153,50 +2165,92 @@ def test_exact_inert_decimal_magnitude_ignores_process_digit_limit(rational_runt
             detached = Builder.from_program(decoded, environment=expression.__egg_ref__.owner._environment).publish()
             assert RuntimeExpr(detached.ref("nodes", packed.indices[0])).value == expected
         else:
-            # Independent of inert decoding: the existing display contract
-            # reauthors a symbolic from-string Call that remains inspectable.
+            # Reauthoring uses canonical host construction, including huge ints.
             reauthored = eval(display, rational_runtime)
-            assert reauthored.__egg_ref__.read().kind.field == "call"
+            assert reauthored.__egg_ref__.read().kind.field == "primitive_value"
             assert reauthored.value == expected
     finally:
         assert sys.get_int_max_str_digits() == limit
 
 
-def test_exact_from_string_inspection_preserves_noncanonical_int_behavior(rational_runtime):
+def test_exact_from_string_stays_symbolic_without_local_parsing(rational_runtime):
     cls = rational_runtime["BigInt"]
-    for text, expected in (("  +001_234 ", 1234), ("-0", 0), ("+1", 1), ("01", 1)):
-        assert cls.from_string(text).value == expected
-    for text in ("1e3", "1.5", "NaN", "Infinity"):
-        with pytest.raises(ValueError, match="invalid literal"):
-            _ = cls.from_string(text).value
+    for text in ("1", "  +001_234 ", "-0", "+1", "01", "1e3", "1.5", "NaN", "Infinity"):
+        expression = cls.from_string(text)
+        assert expression.__egg_ref__.read().kind.field == "call"
+        assert _required_callable_args(expression)[0].value == text
+        with pytest.raises(rational_runtime["ExprValueError"]):
+            _ = expression.value
 
 
 @pytest.mark.parametrize(
-    ("family", "arm", "payload"),
+    ("family", "arm", "payload", "error", "message"),
     [
-        ("BigInt", "big_int", "01"),
-        ("BigInt", "big_int", "-0"),
-        ("BigInt", "big_int", "+1"),
-        ("BigInt", "big_int", "1_0"),
-        ("BigInt", "big_int", " 1"),
-        ("BigInt", "big_int", "1e3"),
-        ("BigInt", "big_int", "1.5"),
-        ("BigInt", "big_int", "NaN"),
-        ("BigRat", "big_rat", pb.BigRat(numerator="1", denominator="2.0")),
-        ("BigInt", "rational", pb.Rational(numerator=1, denominator=2)),
-        ("Rational", "i64", 1),
-        ("BigRat", "big_rat", pb.BigRat(numerator="2", denominator="4")),
-        ("BigRat", "big_rat", pb.BigRat(numerator="0", denominator="2")),
-        ("BigRat", "big_rat", pb.BigRat(numerator="1", denominator="-2")),
-        ("BigRat", "big_rat", pb.BigRat(numerator="+1", denominator="2")),
-        ("Rational", "rational", pb.Rational(numerator=2, denominator=4)),
-        ("Rational", "rational", pb.Rational(numerator=1, denominator=0)),
-        ("Rational", "rational", pb.Rational(numerator=0, denominator=2)),
-        ("Rational", "rational", pb.Rational(numerator=2**63, denominator=1)),
-        ("Rational", "rational", pb.Rational(numerator=1, denominator=2**63)),
+        ("BigInt", "big_int", "01", ValueError, "noncanonical decimal integer"),
+        ("BigInt", "big_int", "-0", ValueError, "noncanonical decimal integer"),
+        ("BigInt", "big_int", "+1", ValueError, "noncanonical decimal integer"),
+        ("BigInt", "big_int", "1_0", ValueError, "noncanonical decimal integer"),
+        ("BigInt", "big_int", " 1", ValueError, "invalid decimal integer"),
+        ("BigInt", "big_int", "1e3", ValueError, "invalid decimal integer"),
+        ("BigInt", "big_int", "1.5", ValueError, "invalid decimal integer"),
+        ("BigInt", "big_int", "NaN", ValueError, "invalid decimal integer"),
+        ("BigRat", "big_rat", pb.BigRat(numerator="1", denominator="2.0"), ValueError, "invalid decimal integer"),
+        (
+            "BigInt",
+            "rational",
+            pb.Rational(numerator=1, denominator=2),
+            ValueError,
+            "scalar payload does not match its sort",
+        ),
+        ("Rational", "i64", 1, ValueError, "scalar payload does not match its sort"),
+        (
+            "BigRat",
+            "big_rat",
+            pb.BigRat(numerator="2", denominator="4"),
+            ValueError,
+            "fraction must be reduced with a positive denominator",
+        ),
+        (
+            "BigRat",
+            "big_rat",
+            pb.BigRat(numerator="0", denominator="2"),
+            ValueError,
+            "fraction must be reduced with a positive denominator",
+        ),
+        (
+            "BigRat",
+            "big_rat",
+            pb.BigRat(numerator="1", denominator="-2"),
+            ValueError,
+            "fraction must be reduced with a positive denominator",
+        ),
+        ("BigRat", "big_rat", pb.BigRat(numerator="+1", denominator="2"), ValueError, "noncanonical decimal integer"),
+        (
+            "Rational",
+            "rational",
+            pb.Rational(numerator=2, denominator=4),
+            ValueError,
+            "fraction must be reduced with a positive denominator",
+        ),
+        (
+            "Rational",
+            "rational",
+            pb.Rational(numerator=1, denominator=0),
+            ValueError,
+            "fraction must be reduced with a positive denominator",
+        ),
+        (
+            "Rational",
+            "rational",
+            pb.Rational(numerator=0, denominator=2),
+            ValueError,
+            "fraction must be reduced with a positive denominator",
+        ),
+        ("Rational", "rational", pb.Rational(numerator=2**63, denominator=1), OverflowError, "out of range for int64"),
+        ("Rational", "rational", pb.Rational(numerator=1, denominator=2**63), OverflowError, "out of range for int64"),
     ],
 )
-def test_exact_inert_values_reject_malformed_data(rational_runtime, family, arm, payload):
+def test_exact_inert_values_reject_malformed_data(rational_runtime, family, arm, payload, error, message):
     from egglog.deconstruct import get_literal_value  # noqa: PLC0415
 
     builder = Builder()
@@ -2210,9 +2264,9 @@ def test_exact_inert_values_reject_malformed_data(rational_runtime, family, arm,
         ),
     )
     expression = RuntimeExpr(builder.publish().ref("nodes", index))
-    with pytest.raises(ValueError, match=r"canonical|requires|reduced"):
+    with pytest.raises(error, match=message):
         get_literal_value(expression)
-    with pytest.raises(ValueError, match=r"canonical|requires|reduced"):
+    with pytest.raises(error, match=message):
         _ = expression.value
 
 
@@ -2426,7 +2480,7 @@ def test_scalar_wave_concrete_defaults_and_nested_containers():
     assert _required_callable_args(flag())[0].value is False
     assert [part.value for part in _required_callable_args(message("x", True))] == ["x", True]
     pair = Pair[String, Bool]("key", False)  # type: ignore[arg-type]
-    mapping = Map[String, Bool].empty().insert("key", False)  # type: ignore[arg-type]
+    mapping = convert({"key": False}, Map[String, Bool])
     assert tuple(part.value for part in pair.value) == ("key", False)
     assert mapping.value[String("key")].value is False
     assert isinstance(mapping[String("key")], Bool)
@@ -2490,7 +2544,11 @@ def test_map_authoring_symbolic_children_and_local_protocols(monkeypatch):
     key, first, newest = i64(1) + 2, f64(3.0), f64(4.0)
     empty = Map[i64, f64].empty()
     assert empty.value == {}
-    expression = empty.insert(key, first).insert(i64(1) + 2, newest)
+    operation = empty.insert(key, first).insert(i64(1) + 2, newest)
+    with pytest.raises(ExprValueError):
+        _ = operation.value
+    expression = convert({key: first, i64(1) + 2: newest}, Map[i64, f64])
+    assert expression.__egg_ref__.read().kind.value.value.field == "map"
     assert list(expression.value) == [key]
     assert next(iter(expression.value)).__egg_ref__ == key.__egg_ref__
     assert expression.value[key].__egg_ref__ == newest.__egg_ref__
@@ -2519,8 +2577,9 @@ def test_map_fixed_from_pairs_and_computed_vec_authoring():
     expression = Map.from_pairs(entries)
     assert isinstance(expression, Map[i64, f64])  # type: ignore[misc]
     assert _required_callable_args(expression)[0].__egg_ref__ == entries.__egg_ref__
-    assert expression.value[i64(1)].__egg_ref__ == newest.__egg_ref__
-    assert Map[i64, f64].from_pairs(Vec[Pair[i64, f64]].empty()).value == {}
+    for operation in (expression, Map[i64, f64].from_pairs(Vec[Pair[i64, f64]].empty())):
+        with pytest.raises(ExprValueError):
+            _ = operation.value
     with pytest.raises(TypeError):
         Map[i64, f64].from_pairs()  # type: ignore[call-arg]
     with pytest.raises(TypeError):
@@ -2595,8 +2654,8 @@ def test_map_value_payload_order_ref_zero_and_pretty(empty):
 def test_map_dict_conversion_context_and_exact_target_precedence():
     expression = convert({1: 2.0, 3: 4.0}, Map[i64, f64])
     assert [(key.value, value.value) for key, value in expression.value.items()] == [(1, 2.0), (3, 4.0)]
-    assert expression.__egg_ref__.read().kind.value.func == "egglog.core.map.insert"
-    assert convert({}, Map[i64, f64]).__egg_ref__.read().kind.value.func == "egglog.core.map.empty"
+    assert expression.__egg_ref__.read().kind.value.value.field == "map"
+    assert convert({}, Map[i64, f64]).value == {}
     assert get_type_args() == ()
     with pytest.raises(ConvertError):
         convert({f64(1.0): 2.0}, Map[i64, f64])
@@ -2654,7 +2713,7 @@ def test_map_union_key_identity_and_nested_children(same):
     first = RuntimeExpr(eq(i64(1)).to(i64(2)).__egg_ref__)
     second = first if same else RuntimeExpr(eq(i64(1)).to(i64(2)).__egg_ref__)
     value = Vec(Pair(i64(3), f64(4.0)))
-    mapping = Map.from_pairs(Vec(Pair(first, value), Pair(second, value)))
+    mapping = convert({first: value, second: value}, Map[i64, Vec[Pair[i64, f64]]])
     children = mapping.value
     assert len(children) == (1 if same else 2)
     assert [key.__egg_ref__ for key in children] == (
@@ -2682,7 +2741,7 @@ def test_map_union_key_identity_and_nested_children(same):
         "nominal",
     ],
 )
-def test_map_invalid_records_are_explicit_local_inspection_errors(invalid):
+def test_map_shallow_inspection_and_program_validation_have_distinct_boundaries(invalid):  # noqa: C901
     if invalid == "nominal":
 
         class NominalMap(Expr, egg_sort="Map"):
@@ -2748,12 +2807,93 @@ def test_map_invalid_records_are_explicit_local_inspection_errors(invalid):
     elif invalid == "call_arity":
         kind = Oneof[Literal["call"], pb.Call]("call", pb.Call(func="egglog.core.map.of", args=[key, value]))
     builder.fill("nodes", root, pb.Node(sort_id=sort, kind=kind))
-    with pytest.raises(ExprValueError):
-        _map_entries(RuntimeExpr(builder.publish().ref("nodes", root)))
+    owner = builder.publish()
+    expression = RuntimeExpr(owner.ref("nodes", root))
+    if invalid in {"leaf_cycle", "union_oob", "union_cycle"}:
+        from egglog.egraph_state import EggSmolError  # noqa: PLC0415
+
+        # The immediate child is well sorted. Its descendants are program
+        # validation's responsibility, not local container inspection's.
+        assert _map_entries(expression) == ((owner.ref("nodes", key), owner.ref("nodes", value)),)
+        with pytest.raises((EggSmolError, IndexError, ValueError)):
+            EGraph().register(expression)
+    else:
+        with pytest.raises(ExprValueError):
+            _map_entries(expression)
+
+
+def test_map_shallow_inspection_preserves_equality_boundary_cycles():
+    builder = Builder()
+    key_ref = i64(1).__egg_ref__
+    integer = builder.import_ref(key_ref.owner.ref("sorts", key_ref.read().sort_id))
+    element = builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "RecursiveMapElement")))
+    mapping = builder.add(
+        "sorts",
+        pb.Sort(
+            kind=Oneof[Literal["application"], pb.SortApplication](
+                "application", pb.SortApplication(name="Map", args=[integer, element])
+            )
+        ),
+    )
+    builder.add(
+        "declarations",
+        pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="RecursiveMapElement"))),
+    )
+    builder.add(
+        "declarations",
+        pb.Declaration(
+            kind=Oneof[Literal["constructor"], pb.Constructor](
+                "constructor", pb.Constructor(name="WrapRecursiveMap", inputs=[pb.Arg(sort=mapping)], output=element)
+            )
+        ),
+    )
+    root = builder.reserve("nodes")
+    child = builder.reserve("nodes")
+    member = builder.add(
+        "nodes",
+        pb.Node(
+            sort_id=element, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="WrapRecursiveMap", args=[root]))
+        ),
+    )
+    builder.fill(
+        "nodes",
+        child,
+        pb.Node(sort_id=element, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[member]))),
+    )
+    key = builder.import_ref(key_ref)
+    builder.fill(
+        "nodes",
+        root,
+        pb.Node(
+            sort_id=mapping,
+            kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                "primitive_value",
+                pb.PrimitiveValue(
+                    value=Oneof[Literal["map"], pb.MapValue](
+                        "map", pb.MapValue(entries=[pb.MapEntry(key=key, value=child)])
+                    )
+                ),
+            ),
+        ),
+    )
+    owner = builder.publish()
+    expression = RuntimeExpr(owner.ref("nodes", root))
+    assert _map_entries(expression) == ((owner.ref("nodes", key), owner.ref("nodes", child)),)
+    materialized = expression.value
+    assert isinstance(materialized, dict)
+    selected = materialized[i64(1)]
+    assert isinstance(selected, RuntimeExpr)
+    assert selected.__egg_ref__ == owner.ref("nodes", child)
+    # The arena cycle is finite data, and native admission permits its equality
+    # boundary. Local inspection need not recursively extract its child.
+    assert pack([expression.__egg_ref__]).program.nodes
+    EGraph().register(expression)
 
 
 @pytest.mark.parametrize("invalid", ["pair_missing", "vec_oob", "pair_user"])
-def test_map_from_pairs_rejects_invalid_nested_provenance(invalid):
+def test_map_from_pairs_defers_malformed_nested_data_to_program_validation(invalid):
+    from egglog.egraph_state import EggSmolError  # noqa: PLC0415
+
     builder = Builder()
     key = builder.import_ref(i64(1).__egg_ref__)
     value = builder.import_ref(f64(2.0).__egg_ref__)
@@ -2806,8 +2946,13 @@ def test_map_from_pairs_rejects_invalid_nested_provenance(invalid):
             kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="egglog.core.map.of", args=[vector])),
         ),
     )
-    with pytest.raises(ExprValueError):
-        RuntimeExpr(builder.publish().ref("nodes", root)).value
+    expression = RuntimeExpr(builder.publish().ref("nodes", root))
+    with pytest.raises(ExprValueError) as rejected:
+        _ = expression.value
+    assert rejected.value.allowed == "a Map value payload"
+    assert rejected.value.expr is expression
+    with pytest.raises((EggSmolError, IndexError, ValueError)):
+        EGraph().register(expression)
 
 
 @pytest.mark.parametrize("source", ["dict", "value"])
@@ -2829,14 +2974,11 @@ def test_map_insert_view_parameter_permutation_preserves_core_order(
     if source == "dict":
         expression: RuntimeExpr = convert({1: 2 if same_sort else 2.0}, target)  # type: ignore[arg-type]
         assert expression.value == {i64(1): value}
-        assert str(expression) == f"Map[i64, {value_type}].empty().put({value.value!r}, 1)"
-        assert [argument.value for argument in _required_callable_args(expression)[1:]] == [value.value, 1]
-        args = [
-            RuntimeExpr(expression.__egg_ref__.owner.ref("nodes", index))
-            for index in expression.__egg_ref__.read().kind.value.args
-        ]
-        assert args[1].value == 1
-        assert args[2].value == value.value
+        assert str(expression) == f"Map[i64, {value_type}].empty().put({value}, i64(1))"
+        assert get_callable_args(expression) is None
+        entry = expression.__egg_ref__.read().kind.value.value.value.entries[0]
+        assert RuntimeExpr(expression.__egg_ref__.owner.ref("nodes", entry.key)).value == 1
+        assert RuntimeExpr(expression.__egg_ref__.owner.ref("nodes", entry.value)).value == value.value
     else:
         builder = Builder()
         key = builder.import_ref(i64(1).__egg_ref__)
@@ -2869,7 +3011,7 @@ def test_map_converter_and_value_pretty_follow_renamed_views(vec_catalog_program
     target = runtime._BASE_CLASSES["Map"][i64, f64]
     assert target.__egg_sort__ is not None
     expression: RuntimeExpr = convert({1: 2.0}, target)  # type: ignore[arg-type]
-    assert str(expression) == "Mapping[i64, f64].vacant().put(1, 2.0)"
+    assert str(expression) == "Mapping[i64, f64].vacant().put(i64(1), f64(2.0))"
     mapping = expression.value
     assert isinstance(mapping, dict)
     value = mapping[i64(1)]
@@ -2877,11 +3019,8 @@ def test_map_converter_and_value_pretty_follow_renamed_views(vec_catalog_program
     assert value.value == 2.0
     from_entries = _required_runtime_function(target.from_entries)(Vec(Pair(i64(1), f64(2.0))))
     assert from_entries is not None
-    formed_mapping = from_entries.value
-    assert isinstance(formed_mapping, dict)
-    formed_value = formed_mapping[i64(1)]
-    assert isinstance(formed_value, RuntimeExpr)
-    assert formed_value.value == 2.0
+    with pytest.raises(ExprValueError):
+        _ = from_entries.value
     assert ".from_entries(" in str(_required_runtime_function(from_entries.lookup)(i64(1)))
     assert str(_required_runtime_function(from_entries.lookup)(i64(1))).endswith(".lookup(1)")
     with pytest.raises(AttributeError):
@@ -3011,6 +3150,8 @@ def test_vec_generic_authoring_local_protocols_and_pretty(vec_runtime, monkeypat
     symbolic, literal = i64(1) + 2, i64(3)
     expression = vector(symbolic, literal)
     assert isinstance(expression, vector[i64])
+    assert expression.__egg_ref__.read().kind.value.value.field == "vec"
+    assert get_callable_args(expression) is None
     assert [item.__egg_ref__ for item in expression.value] == [symbolic.__egg_ref__, literal.__egg_ref__]
     assert list(expression) == [symbolic, literal]
     assert len(expression) == 2
@@ -3020,11 +3161,11 @@ def test_vec_generic_authoring_local_protocols_and_pretty(vec_runtime, monkeypat
         assert expression.eval() == expression.value
     assert str(vector[i64].empty()) == "Vec[i64].empty()"
     assert vector[i64]().value == vector[i64].empty().value == ()
-    assert str(vector(i64(1), i64(3))) == "Vec[i64](1, 3)"
+    assert str(vector(i64(1), i64(3))) == "Vec[i64](i64(1), i64(3))"
     selected = vector(i64(1), i64(3))[0]
     assert isinstance(selected, i64)
     assert selected.__egg_ref__.read().kind.value.func == "egglog.core.vec.get"
-    assert str(selected) == "Vec[i64](1, 3)[0]"
+    assert str(selected) == "Vec[i64](i64(1), i64(3))[0]"
     with pytest.raises(ExprValueError):
         selected.value
     with pytest.raises(TypeError):
@@ -3264,7 +3405,7 @@ def test_vec_value_payload_direct_children_and_pretty(vec_runtime, empty):
 
 
 def test_vec_getitem_pretty_uses_public_syntax(vec_runtime):
-    assert str(vec_runtime[i64](i64(1))[0]) == "Vec[i64](1)[0]"
+    assert str(vec_runtime[i64](i64(1))[0]) == "Vec[i64](i64(1))[0]"
 
 
 def test_pair_proposed_authoring_and_symbolic_inspection(pair_runtime, monkeypatch):
@@ -3275,6 +3416,8 @@ def test_pair_proposed_authoring_and_symbolic_inspection(pair_runtime, monkeypat
     pair = pair_runtime
     left, right = i64(1) + 2, f64(3.0)
     expression = pair[i64, f64](right=right, left=left)
+    assert expression.__egg_ref__.read().kind.value.value.field == "pair"
+    assert get_callable_args(expression) is None
     children = expression.value
     assert children[0].__egg_ref__ == left.__egg_ref__
     assert children[1].__egg_ref__ == right.__egg_ref__
@@ -3292,6 +3435,48 @@ def test_pair_proposed_authoring_and_symbolic_inspection(pair_runtime, monkeypat
         pair[i64, f64](left=i64(1), right=f64(2), unknown=3)
     with pytest.raises(ConvertError):
         pair[i64, f64](f64(1), f64(2))
+
+
+@pytest.mark.parametrize("family", ["Pair", "Vec", "Set", "MultiSet", "Maybe", "Map"])
+def test_container_data_inspection_rejects_raw_constructor_calls(monkeypatch, family):
+    from egglog import Maybe, MultiSet, Set  # noqa: PLC0415
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Container construction or inspection accessed an engine")
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    symbolic = i64(1) / 0
+    expression, key = {
+        "Pair": (Pair(symbolic, i64(2)), "egglog.core.pair.make"),
+        "Vec": (Vec(symbolic), "egglog.core.vec.of"),
+        "Set": (Set(symbolic), "egglog.core.set.of"),
+        "MultiSet": (MultiSet(symbolic, symbolic), "egglog.core.multiset.of"),
+        "Maybe": (Maybe[i64].some(symbolic), "egglog.experimental.maybe.some"),
+        "Map": (convert({symbolic: i64(2)}, Map[i64, i64]), "egglog.core.map.empty"),
+    }[family]
+    expression = to_runtime_expr(expression)
+    assert expression.__egg_ref__.read().kind.field == "primitive_value"
+    assert expression.value is not None
+    assert get_callable_args(expression) is None
+    packed = pack([expression.__egg_ref__])
+    node = packed.program.nodes[packed.indices[0]]
+    payload = _required_oneof(node.kind, "primitive_value", pb.PrimitiveValue)
+    arguments = []
+
+    def reference(role: str, index: int) -> int:
+        assert role == "nodes"
+        arguments.append(index)
+        return index
+
+    _copy_record(payload, relocate=reference)
+    if family == "Map":
+        arguments.clear()
+    node.kind = Oneof[Literal["call"], pb.Call]("call", pb.Call(func=key, args=arguments))
+    owner = Builder.from_program(packed.program, environment=expression.__egg_ref__.owner._environment).publish()
+    raw = RuntimeExpr(owner.ref("nodes", packed.indices[0]))
+    assert get_callable_fn(raw) is not None
+    with pytest.raises(ExprValueError):
+        _ = raw.value
 
 
 def test_pair_tuple_conversion_context_exact_override_and_wrong_families(pair_runtime):
@@ -8237,11 +8422,12 @@ def test_multiset_local_protocols_preserve_symbolic_occurrences_without_engine(m
         case _:
             pytest.fail("MultiSet value matching failed")
     packed = pack([expression.__egg_ref__])
-    args = _required_oneof(packed.program.nodes[packed.indices[0]].kind, "call", pb.Call).args
+    payload = _required_oneof(packed.program.nodes[packed.indices[0]].kind, "primitive_value", pb.PrimitiveValue)
+    args = _required_oneof(payload.value, "multiset", pb.ValueList).items
     assert args[0] == args[2] != args[1]
     assert packed.program.nodes[args[0]].kind is not None
     _required_oneof(packed.program.nodes[args[0]].kind, "var", str)
-    assert convert((), MultiSet[i64]).__egg_ref__.read().kind.value.func == "egglog.core.multiset.of"
+    assert convert((), MultiSet[i64]).value == []
 
     @function
     def size(value: MultiSetLike[i64, int]) -> i64: ...
@@ -8322,7 +8508,10 @@ def test_multiset_occurrences_preserve_union_identity(same):
     assert len(expression) == 2
     assert [child.__egg_ref__ for child in expression.value] == [first.__egg_ref__, second.__egg_ref__]
     packed = pack([expression.__egg_ref__])
-    args = _required_oneof(packed.program.nodes[packed.indices[0]].kind, "call", pb.Call).args
+    payload = _required_oneof(packed.program.nodes[packed.indices[0]].kind, "primitive_value", pb.PrimitiveValue)
+    args = _required_oneof(payload.value, "multiset", pb.ValueList).items
+    for argument in args:
+        _required_oneof(packed.program.nodes[argument].kind, "union", pb.Union)
     assert (args[0] == args[1]) == same
 
 

@@ -5,7 +5,6 @@ Pretty printing for declarations.
 from __future__ import annotations
 
 import ast
-import struct
 from collections import Counter
 from dataclasses import dataclass
 from fractions import Fraction
@@ -405,12 +404,11 @@ def pretty_ref(  # noqa: C901, PLR0912
                     if primitive is None:
                         msg = "Cannot print a primitive without a value"
                         raise ValueError(msg)
-                    if primitive.field == "f64_bits":
-                        value = repr(struct.unpack("!d", struct.pack("!Q", primitive.value))[0])
-                    elif primitive.field in {"i64", "string", "bool"}:
-                        value = repr(primitive.value)
-                    elif primitive.field == "unit":
-                        value = ""
+                    if primitive.field in {"f64_bits", "i64", "string", "bool", "unit"}:
+                        from .deconstruct import get_literal_value  # noqa: PLC0415
+                        from .runtime import RuntimeExpr  # noqa: PLC0415
+
+                        value = "" if primitive.field == "unit" else repr(get_literal_value(RuntimeExpr(reference)))
                     elif primitive.field == "custom" and custom_literal is not None:
                         frames.append(custom_literal(reference, bare))
                         continue
@@ -419,46 +417,12 @@ def pretty_ref(  # noqa: C901, PLR0912
                         from .runtime import RuntimeExpr  # noqa: PLC0415
 
                         exact = get_literal_value(RuntimeExpr(reference))
-                        if primitive.field == "rational":
-                            assert isinstance(exact, Fraction)
-                            arguments = [str(exact.numerator), str(exact.denominator)]
-                        else:
-                            string_constructor = _definition_at(reference, "callable", "egglog.core.bigint.from_string")
-                            integer_views = presentation(string_constructor).views
-                            class_view = next((v for v in integer_views if v.kind == CallKind.CLASS_METHOD), None)
-                            if class_view is None or class_view.owner is None:
-                                msg = "BigInt value presentation requires a supplied from-string classmethod"
-                                raise ValueError(msg)
-                            integer_sort = class_view.owner
-                            constructor = f"{pretty_ref(integer_sort)}.{class_view.path[-1]}"
-                            if primitive.field == "big_int":
-                                frames.append(f"{constructor}({primitive.value!r})")
-                                continue
-                            assert isinstance(exact, Fraction)
-                            # The validated wire already owns canonical decimal
-                            # strings; str(large_int) would impose a host limit.
-                            arguments = [
-                                f"{constructor}({part!r})"
-                                for part in (primitive.value.numerator, primitive.value.denominator)
-                            ]
-                        ratio_constructor = _definition_at(
-                            reference,
-                            "callable",
-                            "egglog.experimental.rational.make"
-                            if primitive.field == "rational"
-                            else "egglog.core.bigrat.make",
-                        )
-                        ratio_views = presentation(ratio_constructor).views
-                        init_view = next((v for v in ratio_views if v.kind == CallKind.INITIALIZER), None)
-                        if init_view is None or sorted(p.core_input for p in init_view.params) != [0, 1]:
-                            msg = "Ratio value presentation requires a supplied two-input initializer"
-                            raise ValueError(msg)
-                        pieces = [
-                            (sort, False, False),
-                            "(",
-                            ", ".join(arguments[p.core_input] for p in init_view.params),
-                            ")",
-                        ]
+                        assert isinstance(exact, int | Fraction)
+                        integers = [exact] if isinstance(exact, int) else [exact.numerator, exact.denominator]
+                        # Hexadecimal integer literals also reauthor at arbitrary
+                        # magnitude under Python's decimal digit limit.
+                        arguments = [str(part) if part.bit_length() < 2000 else hex(part) for part in integers]
+                        pieces = [(sort, False, False), "(", ", ".join(arguments), ")"]
                         frames.extend(reversed(pieces))
                         continue
                     elif primitive.field == "maybe":

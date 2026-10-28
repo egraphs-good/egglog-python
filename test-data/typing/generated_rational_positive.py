@@ -7,6 +7,10 @@ from typing import assert_type
 from egglog import BigInt, BigIntLike, BigRat, BigRatLike, Bool, Rational, RationalLike, String, Unit, convert, f64, i64
 
 assert_type(Rational(1, 2), Rational)
+assert_type(Rational(1), Rational)
+assert_type(Rational(Fraction(1, 2)), Rational)
+assert_type(BigRat(Fraction(1, 2)), BigRat)
+assert_type(BigRat(1), BigRat)
 assert_type(Rational(i64(1) + 2, 3), Rational)
 assert_type(Rational(1, 2) + Fraction(1, 3), Rational)
 assert_type(Fraction(1, 3) + Rational(1, 2), Rational)

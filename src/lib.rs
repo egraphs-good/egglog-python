@@ -19,5 +19,7 @@ fn bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
         crate::protobuf::_export_pyobject_catalog,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(crate::protobuf::_encode_scalar, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::protobuf::_decode_scalar, m)?)?;
     Ok(())
 }

@@ -26,6 +26,27 @@ assert String("hello").value == "hello"
 assert PyObject([1,2,3]).value == [1,2,3]
 ```
 
+Exact numeric constructors accept Python integers, and `Rational` and `BigRat`
+also accept `Fraction` or two integer numerator/denominator arguments. These
+host values are available through `.value` immediately:
+
+```{code-cell} python
+from fractions import Fraction
+
+assert BigInt(10**100).value == 10**100
+assert Rational(1, -2).value == Fraction(-1, 2)
+assert BigRat(Fraction(2, 3)).value == Fraction(2, 3)
+assert EGraph().extract(BigInt(10**100) + 1).value == 10**100 + 1
+assert EGraph().extract(BigInt.from_string("123")).value == 123
+```
+
+Expression arguments and primitive operations such as `from_string` remain
+symbolic. Extract them before reading `.value`; this property only decodes
+value payloads and does not evaluate constructor calls or arithmetic. Invalid
+host fractions can fail during construction, while symbolic-operation errors
+occur when the engine executes them. Exact numeric host constructor arguments
+are positional.
+
 `join` concatenates any number of strings, including none. String addition,
 replacement, integer conversion, and Boolean operations build expressions;
 extract them to inspect the computed value:
@@ -61,6 +82,28 @@ assert EGraph().extract(some.unwrap_or(i64(2))).value == 7
 `unwrap()` is undefined for `None`. `unwrap_or(default)` evaluates its default
 even when the value is present. Python `None` converts to `Maybe[T].none()` when
 the expected type supplies `T`.
+
+Direct `Pair`, `Vec`, `Set`, `MultiSet` and `Maybe` construction, and host dict
+conversion to `Map`, store their children as data. Inspection returns shallow
+Python containers of expression wrappers; it does not execute symbolic children:
+
+```{code-cell} python
+symbolic = i64(1) / 0
+values = Vec(symbolic, i64(2))
+assert values.value[0] == symbolic
+assert Pair(symbolic, i64(3)).value[0] == symbolic
+assert Maybe[i64].some(symbolic).value == symbolic
+mapping = convert({i64(1) + 1: i64(3), i64(2): i64(4)}, Map[i64, i64])
+assert len(mapping.value) == 2
+assert {key.value: value.value for key, value in EGraph().extract(mapping).value.items()} == {2: 4}
+```
+
+`Map.from_pairs`, `insert`, `push`, indexing and other operations remain
+symbolic, including when their inputs are direct data. Extract their results
+before reading `.value`. Native execution determines set deduplication and map
+key collisions; local inspection uses the expression wrappers' structural
+identity. Constructor data has no callable for `get_callable_fn` or
+`get_callable_args`; use `.value` to inspect its children.
 
 To check if an expression is a let value and get its name, use `get_let_name(expr)`:
 

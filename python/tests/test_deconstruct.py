@@ -7,6 +7,7 @@ from typing import ClassVar
 import pytest
 
 from egglog import *
+from egglog.egraph import to_runtime_expr
 
 
 class X(Expr):
@@ -102,9 +103,14 @@ def test_get_var_name():
         pytest.param(X.c(), X.c, (), id="classmethod"),
         pytest.param(X(), X, (), id="init"),
         pytest.param(X().m(X()), X.m, (X(), X()), id="method call"),
-        pytest.param(Vec(i64(1)), Vec[i64], (i64(1),), id="generic class"),
-        pytest.param(Vec[i64](), Vec[i64], (), id="generic parameter init"),
-        pytest.param(Vec[i64].empty(), Vec[i64].empty, (), id="generic parameter classmethod"),
+        pytest.param(Vec(i64(1)), None, None, id="generic class"),
+        pytest.param(Vec[i64](), None, None, id="generic parameter init"),
+        pytest.param(
+            Map[i64, X].from_pairs(Vec(Pair(i64(1), X()))),
+            Map[i64, X].from_pairs,
+            (Vec(Pair(i64(1), X())),),
+            id="generic parameter classmethod",
+        ),
     ],
 )
 def test_callable(expr, fn, args):
@@ -114,9 +120,13 @@ def test_callable(expr, fn, args):
 
 
 def test_callable_generic_applied():
-    # Authored i64 instances are RuntimeExpr presentations at this reflection boundary.
-    assert get_callable_args(Vec(i64(1)), Vec[i64]) == (i64(1),)  # type: ignore[comparison-overlap]
+    entries = Vec(Pair(i64(1), X()))
+    expression = Map.from_pairs(entries)
+    assert get_callable_args(expression, Map[i64, X].from_pairs) == (to_runtime_expr(entries),)
+    assert get_callable_args(Vec(i64(1)), Vec[i64]) is None
 
 
 def test_callable_generic_applied_method():
-    assert get_callable_args(Vec[i64].empty(), Vec[i64].empty) == ()
+    vector = Vec[i64].empty()
+    assert get_callable_args(vector.push(i64(1)), Vec[i64].push) == (to_runtime_expr(vector), to_runtime_expr(i64(1)))
+    assert get_callable_args(vector, Vec[i64].empty) is None

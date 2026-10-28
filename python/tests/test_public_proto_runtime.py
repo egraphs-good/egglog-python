@@ -372,13 +372,17 @@ def test_set_public_native_bytes() -> None:
         (Set(Vec(one, two)), {Vec(one, two)}),
         (Set(Set(one)), {Set(one)}),
     ):
-        assert expression.__egg_ref__.read().kind.field == "call"
+        if expression.__egg_ref__.read().kind.field == "call":
+            with pytest.raises(ExprValueError):
+                _ = expression.value
+        else:
+            assert expression.__egg_ref__.read().kind.value.value.field == "set"
         extracted = graph.extract(expression)
         assert extracted.__egg_ref__.read().kind.value.value.field == "set"
         if not expected or isinstance(next(iter(expected)), i64):
             assert extracted.value == expected
         else:
-            # Nested children become formed values rather than constructor Calls.
+            # Extraction evaluates the direct data payload's symbolic children.
             assert len(extracted) == 1
             assert (
                 to_runtime_expr(next(iter(extracted))).value
@@ -402,6 +406,18 @@ def test_exact_wave_public_native_bytes() -> None:
     graph = EGraph()
     huge = 10**100 + 1
     for expression, expected in (
+        (BigInt(huge), huge),
+        (BigInt(-(2**100)), -(2**100)),
+        (BigRat(Fraction(huge, 2)), Fraction(huge, 2)),
+        (BigRat(2, -4), Fraction(-1, 2)),
+        (Rational(Fraction(2, -4)), Fraction(-1, 2)),
+        (Rational(-(2**63), 1), Fraction(-(2**63))),
+    ):
+        assert expression.__egg_ref__.read().kind.field == "primitive_value"
+        assert expression.value == expected
+        assert get_callable_args(expression) is None
+        assert graph.extract(expression).value == expected
+    for expression, expected in (
         (Rational(1, 2), Fraction(1, 2)),
         (Rational(1, -2), Fraction(-1, 2)),
         (Rational(i64(1) + 2, 2), Fraction(3, 2)),
@@ -414,13 +430,30 @@ def test_exact_wave_public_native_bytes() -> None:
         (BigRat(BigInt.from_string(str(huge)), 2), Fraction(huge, 2)),
         (convert(Fraction(1, 2), BigRat), Fraction(1, 2)),
     ):
-        assert expression.__egg_ref__.read().kind.field == "call"
+        symbolic = expression.__egg_ref__.read().kind.field == "call"
+        if symbolic:
+            with pytest.raises(ExprValueError):
+                _ = expression.value
+        else:
+            assert expression.value == expected
         extracted = graph.extract(expression)
         assert extracted.__egg_ref__.read().kind.field == "primitive_value"
         assert extracted.value == expected
         assert EGraph().extract(extracted).value == expected
     assert int(graph.extract(BigInt(10))) == 10
     assert float(graph.extract(BigRat(1, 2))) == 0.5
+    for expression, expected in (
+        (BigInt(huge) + huge, 2 * huge),
+        (BigInt(-huge).min(huge), -huge),
+        (BigInt(-huge).max(huge), huge),
+        (BigRat(huge, 2) + Fraction(1, 2), Fraction(huge + 1, 2)),
+        (BigRat(1, 2).min(Fraction(2, 3)), Fraction(1, 2)),
+        (BigRat(1, 2).max(Fraction(2, 3)), Fraction(2, 3)),
+    ):
+        assert expression.__egg_ref__.read().kind.field == "call"
+        with pytest.raises(ExprValueError):
+            _ = expression.value
+        assert graph.extract(expression).value == expected
 
 
 def test_scalar_wave_public_native_bytes() -> None:
@@ -921,6 +954,9 @@ def test_vec_public_generic_and_computed_table_bytes() -> None:
 
     graph = EGraph()
     expression = Vec[i64](i64(1) + 2, i64(4))
+    assert expression.__egg_ref__.read().kind.value.value.field == "vec"
+    assert get_callable_args(expression) is None
+    assert expression.value[0].__egg_ref__.read().kind.field == "call"
     graph.register(set_(vector()).to(expression), set_(pair()).to(Pair(i64(5), f64(6.0))))
     extracted = graph.extract(vector())
     assert extracted.__egg_ref__.read().kind.value.value.field == "vec"
@@ -968,6 +1004,13 @@ def test_map_public_computed_vec_table_and_reingested_value_bytes() -> None:
     graph.check(eq(result).to(expression))
     assert graph.extract(mapping()[i64(1)]).value == 3.0
     assert graph.extract(result.insert(i64(3), f64(5.0))[i64(3)]).value == 5.0
+    from egglog import convert  # noqa: PLC0415
+
+    data = convert({i64(1) + 1: f64(6.0), i64(2): f64(7.0)}, Map[i64, f64])
+    assert data.__egg_ref__.read().kind.value.value.field == "map"
+    assert len(data.value) == 2
+    assert len(data.__egg_ref__.read().kind.value.value.value.entries) == 2
+    assert {key.value: value.value for key, value in graph.extract(data).value.items()} == {2: 7.0}
     assert graph.extract(Map[i64, f64].empty()).value == {}
     assert graph.extract(Map[i64, f64].from_pairs(Vec[Pair[i64, f64]].empty())).value == {}
     with pytest.raises(ExprValueError):
@@ -1257,6 +1300,8 @@ def test_pair_public_generic_bytes_roundtrip() -> None:
     from egglog import Pair, convert, f64  # noqa: PLC0415
 
     expression = Pair[i64, f64](left=i64(1) + 2, right=f64(4.5))
+    assert expression.__egg_ref__.read().kind.value.value.field == "pair"
+    assert get_callable_args(expression) is None
     assert expression.value[0].__egg_ref__.read().kind.field == "call"
     graph = EGraph(num_threads=1)
     graph.register(expression)
@@ -1382,10 +1427,17 @@ def test_multiset_packaged_catalog_public_values_and_replay_bytes(monkeypatch: p
     assert [item.__egg_ref__ for item in result.value] == [
         result.__egg_ref__.owner.ref("nodes", index) for index in value.value.items
     ]
-    assert any(
-        call.func == "egglog.core.multiset.of" and len(call.args) == 3 and call.args[0] == call.args[2]
-        for call in _recorded_calls(requests)
-    )
+    authored_items = [
+        node.kind.value.value.value.items
+        for request in requests
+        if request.program is not None
+        for node in request.program.nodes
+        if node.kind is not None
+        and node.kind.field == "primitive_value"
+        and node.kind.value.value is not None
+        and node.kind.value.value.field == "multiset"
+    ]
+    assert any(len(items) == 3 and items[0] == items[2] != items[1] for items in authored_items)
     original_handle = graph._state.handle
     graph._state.destroy()
     assert graph._state.handle is None
