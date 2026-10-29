@@ -216,10 +216,10 @@ _A_2 + _A_3""",
     pytest.param(f, "f", id="function"),
     pytest.param(A().method, "A().method", id="method"),
     # lambda
-    pytest.param(higher_order(lambda x: A() + x), "higher_order(lambda x: A() + x)", id="lambda"),
+    pytest.param(higher_order(lambda x: A() + x), "higher_order(lambda arg0: A() + arg0)", id="lambda"),
     # partial
     pytest.param(higher_order(partial(binary, A())), "higher_order(partial(binary, A()))", id="partial"),
-    pytest.param(higher_order(lambda x: f(b)), "higher_order(lambda x: f(b))", id="partial-lambda"),
+    pytest.param(higher_order(lambda x: f(b)), "higher_order(lambda arg0: f(b))", id="partial-lambda"),
 ]
 
 
@@ -468,6 +468,29 @@ def test_lambda_captures_keep_shared_calls_inside_expression(pretty_without_engi
     captured = binary(shared, shared)
     expression = higher_order(lambda value: binary(captured, value))
     assert ast.parse(str(expression), mode="eval")
+
+    nested = UnstableFn[UnstableFn[i64, i64], i64](lambda x: UnstableFn[i64, i64](lambda y: x + y))
+    outer = ast.parse(str(nested), mode="eval").body
+    assert isinstance(outer, ast.Lambda)
+    inner = outer.body
+    assert isinstance(inner, ast.Lambda)
+    assert outer.args.args[0].arg != inner.args.args[0].arg
+    assert isinstance(inner.body, ast.BinOp)
+    assert isinstance(inner.body.left, ast.Name)
+    assert isinstance(inner.body.right, ast.Name)
+    assert inner.body.left.id == outer.args.args[0].arg
+    assert inner.body.right.id == inner.args.args[0].arg
+
+    free = var("arg0", i64)
+    closed = UnstableFn[i64, i64](lambda value: free + value)
+    displayed = ast.parse(str(closed), mode="eval").body
+    assert isinstance(displayed, ast.Lambda)
+    assert displayed.args.args[0].arg != "arg0"
+    assert isinstance(displayed.body, ast.BinOp)
+    assert isinstance(displayed.body.left, ast.Name)
+    assert isinstance(displayed.body.right, ast.Name)
+    assert displayed.body.left.id == "arg0"
+    assert displayed.body.right.id == displayed.args.args[0].arg
 
 
 def test_deep_pretty_stays_iterative_without_formatter(pretty_without_engine, monkeypatch: pytest.MonkeyPatch) -> None:

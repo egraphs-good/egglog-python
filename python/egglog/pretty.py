@@ -456,53 +456,47 @@ def pretty_ref(  # noqa: C901, PLR0912
                         ]
                         frames.extend(reversed(pieces))
                         continue
+                    elif primitive.field == "lambda":
+                        closure = primitive.value
+                        closure_type: pb.Sort = sort.read()
+                        if closure_type.kind is None or closure_type.kind.field != "func":
+                            msg = "Lambda value requires a Func sort"
+                            raise TypeError(msg)
+                        bindings = {
+                            f"_{index}": "("
+                            + pretty_ref(
+                                owner.ref("nodes", child),
+                                custom_literal=custom_literal,
+                                variables=variables if variables is not None else {},
+                            )
+                            + ")"
+                            for index, child in enumerate(closure.captures)
+                        }
+                        # Captures are expanded in the enclosing scope. Avoid
+                        # shadowing any visible identifier in those expressions.
+                        visible = [*(variables or {}).values(), *bindings.values()]
+                        names = []
+                        next_parameter = 0
+                        for _ in closure_type.kind.value.params:
+                            while any(f"arg{next_parameter}" in expression for expression in visible):
+                                next_parameter += 1
+                            names.append(f"arg{next_parameter}")
+                            next_parameter += 1
+                        bindings.update({f"_{index + len(closure.captures)}": name for index, name in enumerate(names)})
+                        body = pretty_ref(
+                            owner.ref("nodes", closure.body), custom_literal=custom_literal, variables=bindings
+                        )
+                        parameters = ", ".join(names)
+                        text = f"lambda {parameters}: {body}" if parameters else f"lambda: {body}"
+                        frames.extend(reversed([f"({text})" if parentheses else text]))
+                        continue
                     elif primitive.field == "partial_call":
                         from functools import partial  # noqa: PLC0415
 
                         from .deconstruct import get_literal_value  # noqa: PLC0415
-                        from .runtime import RuntimeExpr, RuntimeFunction  # noqa: PLC0415
+                        from .runtime import RuntimeExpr  # noqa: PLC0415
 
                         value = get_literal_value(RuntimeExpr(reference))
-                        function = value.func if isinstance(value, partial) else value
-                        if isinstance(function, RuntimeFunction) and function.__egg_intrinsic__ is None:
-                            declaration = function.__egg_ref__
-                            declared: pb.Declaration | pb.Primitive = declaration.read()
-                            if isinstance(declared, pb.Declaration):
-                                assert declared.kind is not None
-                                computed = declared.kind.value
-                            else:
-                                computed = declared
-                            if (
-                                isinstance(computed, pb.UserDefinedPrimitive)
-                                and computed.name.startswith("__egglog_python_lambda_")
-                                and len(presentation(declaration).views) == 1
-                            ):
-                                view = presentation(declaration).views[0]
-                                names = [parameter.name for parameter in view.params]
-                                captures = value.args if isinstance(value, partial) else ()
-                                bindings = {
-                                    f"_{index}": "("
-                                    + pretty_ref(
-                                        child.__egg_ref__,
-                                        custom_literal=custom_literal,
-                                        variables=variables if variables is not None else {},
-                                    )
-                                    + ")"
-                                    for index, child in enumerate(captures)
-                                }
-                                bindings.update({
-                                    f"_{index}": name for index, name in enumerate(names) if index >= len(captures)
-                                })
-                                body = pretty_ref(
-                                    declaration.owner.ref("nodes", computed.body),
-                                    custom_literal=custom_literal,
-                                    variables=bindings,
-                                )
-                                parameters = ", ".join(names[len(captures) :])
-                                text = f"lambda {parameters}: {body}" if parameters else f"lambda: {body}"
-                                pieces = [f"({text})" if parentheses else text]
-                                frames.extend(reversed(pieces))
-                                continue
                         if isinstance(value, partial):
                             pieces = ["partial(", str(value.func)]
                             for child in value.args:

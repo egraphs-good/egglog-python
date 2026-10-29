@@ -1107,17 +1107,15 @@ def _lower_function_body(  # noqa: C901
         elif node.kind.field == "union" and not rewrite_body:
             msg = "Union in named eager bodies is not supported"
             raise NotImplementedError(msg)
-        elif (
+        nested_body = None
+        if (
             node.kind.field == "primitive_value"
             and node.kind.value.value is not None
             and node.kind.value.value.field == "lambda"
         ):
-            msg = (
-                "Lambda in named rewrite bodies is not migrated"
-                if rewrite_body
-                else "Lambda in named eager bodies is not supported"
-            )
-            raise NotImplementedError(msg)
+            closure = node.kind.value.value.value
+            # Captures belong to this scope; the body owns its independent binder.
+            nested_body = source.owner.ref("nodes", closure.body)
 
         def relocate(role: str, index: int, origin: Ref = source) -> int:
             reference = origin.owner.ref(role, index)
@@ -1134,7 +1132,17 @@ def _lower_function_body(  # noqa: C901
                 raise ValueError(msg)
             builder.import_ref(_definition_at(origin, namespace, name))
 
-        builder.fill("nodes", indices[source], _copy_record(node, relocate=relocate, dependency=dependency))
+        lowered = _copy_record(
+            node,
+            relocate=(lambda role, index: index if role == "nodes" else relocate(role, index))
+            if nested_body is not None
+            else relocate,
+            dependency=dependency,
+        )
+        if nested_body is not None:
+            lowered.kind.value.value.value.captures = [relocate("nodes", index) for index in closure.captures]
+            lowered.kind.value.value.value.body = builder.import_ref(nested_body)
+        builder.fill("nodes", indices[source], lowered)
     return indices[body]
 
 
@@ -1142,11 +1150,8 @@ def _compile_python_function(
     function: FunctionType,
     parameters: list[Ref],
     output: Ref | None,
-    *,
-    keepalive: tuple[object, ...] = (),
-    name: str | None = None,
-) -> tuple[RuntimeFunction, tuple[RuntimeExpr, ...]]:
-    """Lift lexical symbolic values into a named primitive's positional prefix."""
+) -> RuntimeExpr:
+    """Author a Lambda with lexical symbolic captures and a deferred typed body."""
     closure_values = [cell.cell_contents for cell in function.__closure__ or ()]
     global_values = {
         name: value
@@ -1195,43 +1200,37 @@ def _compile_python_function(
     body_node: pb.Node = body.__egg_ref__.read()
     builder = Builder()
     body_index = _lower_function_body(builder, body.__egg_ref__, references)
-    if name is None:
-        name = f"__egglog_python_lambda_{uuid4().hex}"
-    argument_names = list(signature(function).parameters)
-    if len(argument_names) != len(parameters):
-        argument_names = [f"arg{index}" for index in range(len(parameters))]
-    parameter_names = [*(f"_capture{index}" for index in range(len(captures))), *argument_names]
-    if len(set(parameter_names)) != len(parameter_names):
-        parameter_names = [f"arg{index}" for index in range(len(sorts))]
-    declaration = builder.add(
-        "declarations",
-        pb.Declaration(
-            kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
-                "user_defined_primitive",
-                pb.UserDefinedPrimitive(
-                    name=name,
-                    inputs=[
-                        pb.Arg(sort=builder.import_ref(sort), name=f"_{index}") for index, sort in enumerate(sorts)
-                    ],
-                    output=builder.import_ref(body.__egg_ref__.owner.ref("sorts", body_node.sort_id)),
-                    body=body_index,
+    function_sort = builder.add(
+        "sorts",
+        pb.Sort(
+            kind=Oneof[Literal["func"], pb.FuncSort](
+                "func",
+                pb.FuncSort(
+                    params=[builder.import_ref(parameter) for parameter in parameters],
+                    result=builder.import_ref(body.__egg_ref__.owner.ref("sorts", body_node.sort_id)),
+                ),
+            )
+        ),
+    )
+    node = builder.add(
+        "nodes",
+        pb.Node(
+            sort_id=function_sort,
+            kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                "primitive_value",
+                pb.PrimitiveValue(
+                    value=Oneof[Literal["lambda"], pb.Lambda](
+                        "lambda",
+                        pb.Lambda(
+                            captures=[builder.import_ref(capture.__egg_ref__) for capture in captures],
+                            body=body_index,
+                        ),
+                    )
                 ),
             ),
         ),
     )
-    builder.presentations["callable", name] = Presentation(
-        views=(
-            CallPresentation(
-                kind=CallKind.FUNCTION,
-                path=("egglog", "egraph", name),
-                params=tuple(
-                    PresentationParameter(name=parameter, core_input=index)
-                    for index, parameter in enumerate(parameter_names)
-                ),
-            ),
-        )
-    )
-    return RuntimeFunction(builder.publish(keepalive=keepalive).ref("declarations", declaration), 0), captures
+    return RuntimeExpr(builder.publish().ref("nodes", node))
 
 
 # Overload to support aritys 0-4 until variadic generic support map, so we can map from type to value
@@ -1530,19 +1529,34 @@ class EGraph:
     @property
     def as_egglog_string(self) -> str:
         """
-        Return the replayable Egglog transcript for this e-graph.
+        Render the current graph's accepted input history as Egglog source.
 
-        If a failure may have partially changed the graph and cannot be
-        represented by a replayable command, the transcript is invalidated and
-        this property raises ``RuntimeError``.
+        Enable with ``save_egglog_string=True`` or ``record_history=True``.
+        Popping a scope omits its inputs. Accepted failed requests include their
+        unexecuted suffix, so the text does not promise exact replay after failure.
+        Unsupported source serialization raises here without changing the graph.
         """
-        return self._state.transport.recorded_source()
+        if self._cost_model_frames or self._state._cost_model_active or self._state._native_running:
+            msg = "Cannot export source during a cost-model callback"
+            raise RuntimeError(msg)
+        if self._state.handle is None:
+            msg = "EGraph handle has been destroyed"
+            raise RuntimeError(msg)
+        if not self._state.record_history:
+            msg = "Create the EGraph with save_egglog_string=True or record_history=True"
+            raise ValueError(msg)
+        if not self._state.seminaive:
+            msg = "Source export does not encode the initial seminaive=False creation context"
+            raise NotImplementedError(msg)
+        request = pb.GetHistoryRequest(egraph_id=self._state.handle)
+        return self._state.transport.render_source(request.to_binary())
 
     def history(self) -> pb.Program:
         """
         Return the accumulated input Program recorded for this graph.
 
-        Create with ``record_history=True``. The Program preserves input order
+        Create with ``record_history=True`` or ``save_egglog_string=True``.
+        The Program preserves input order
         and arena sharing; it does not retain replies or promise exact replay
         after failures. Retrieval itself does not add a command.
         """
@@ -1557,20 +1571,11 @@ class EGraph:
 
     def close(self) -> None:
         """
-        Close and remove the optional saved Egglog transcript.
+        Compatibility no-op for the former saved-source recorder.
 
-        For an e-graph created with ``save_egglog_string=True``, subsequent
-        commands are rejected because they could no longer be recorded.
-        Otherwise this method has no effect and the e-graph remains usable.
+        Source is rendered lazily from graph-owned history and needs no
+        finalization. Native handles are released with their owning state.
         """
-        # With transcripts disabled, close historically leaves the graph usable.
-        # Native handles are released when their owning state is disposed.
-        if not self._state._recording:
-            return
-        if self._cost_model_frames or self._state._native_running:
-            msg = "Cannot close a transcript during engine execution"
-            raise RuntimeError(msg)
-        self._state.transport.close_recording()
 
     def _ipython_display_(self) -> None:
         self.display()
@@ -2174,17 +2179,8 @@ class EGraph:
             msg = "Cannot pop an EGraph without a pushed state"
             raise IndexError(msg)
         active = self._state
-        if active._recording:
-            active.transport.prepare_recording_scope(False)
         try:
             active.destroy()
-        except BaseException:
-            if active._recording:
-                active.transport.finish_recording(False)
-            raise
-        else:
-            if active._recording:
-                active.transport.finish_recording(True)
         finally:
             if active.handle is None:
                 self._state = self._state_stack.pop()

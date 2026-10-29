@@ -62,8 +62,6 @@ def _thread_count(value: object) -> int:
 class EGraphState:
     """Own one native handle and the declaration refs needed to read responses."""
 
-    _recording = False
-
     def __init__(
         self,
         *,
@@ -80,9 +78,6 @@ class EGraphState:
         if not isinstance(record_history, bool):
             msg = "History recording must be a boolean"
             raise TypeError(msg)
-        if save_egglog_string and not seminaive:
-            msg = "Recording cannot replay initial seminaive=False without a Source creation context"
-            raise NotImplementedError(msg)
         self.transport = bindings._ProtoEngine()
         # The public default cost sort is an ambient engine builtin. Creation
         # references it directly; authored Programs send only user declarations.
@@ -97,7 +92,7 @@ class EGraphState:
             options=pb.EGraphOptions(cost_sort=0, seminaive=seminaive),
             threads=num_threads,
             no_decomp=no_decomp,
-            record_history=record_history,
+            record_history=record_history or save_egglog_string,
         )
         response = pb.CreateEGraphResponse.from_binary(self.transport.create(request.to_binary()))
         self.handle: int | None = response.egraph_id
@@ -106,9 +101,8 @@ class EGraphState:
             raise ValueError(msg)
         self.threads = response.threads
         self.no_decomp = no_decomp
-        self._recording = save_egglog_string
-        if save_egglog_string:
-            self.transport.enable_recording()
+        self.record_history = record_history or save_egglog_string
+        self.seminaive = seminaive
         self.definitions = dict(builtin_catalog().definitions)
         self.rulesets: dict[str, Ref] = {}
         # Exact acknowledged configs, or None after an unacknowledged attempt.
@@ -185,28 +179,6 @@ class EGraphState:
             for command in packed.program.commands
             if command.kind is not None and command.kind.field == "bind_scheduler"
         ]
-        if self._recording:
-            program = packed.program
-            # Snapshot introspection has no source command and cannot install
-            # definitions or evaluate authored roots. It remains usable after close.
-            snapshot_only = (
-                len(program.commands) == 1
-                and not program._unknown_fields
-                and not program.commands[0]._unknown_fields
-                and program.commands[0].kind is not None
-                and program.commands[0].kind.field == "freeze"
-                and not program.commands[0].kind.value._unknown_fields
-                and not any((
-                    program.nodes,
-                    program.sorts,
-                    program.declarations,
-                    program.files,
-                    program.rulesets,
-                ))
-            )
-            if not snapshot_only:
-                self.transport.prepare_recording(program.to_binary())
-        # Rendering/packing failures above provably did not submit a binding.
         # After transport starts, never retry an unacknowledged deployment.
         for binding in scheduler_bindings:
             self._scheduler_bindings.setdefault(binding.name, None)
@@ -238,10 +210,6 @@ class EGraphState:
             else:
                 encoded, host_error = self.transport.run_stream(encoded_request, consume)
                 encoded_frames = [encoded]
-        except BaseException:
-            if self._recording:
-                self.transport.finish_recording(False)
-            raise
         finally:
             self._active_definitions = ()
             self._native_running = False
@@ -269,15 +237,11 @@ class EGraphState:
                     )
                     results.append((output, owner))
         except BaseException as error:
-            if self._recording:
-                self.transport.finish_recording(False)
             if host_error is not None and error is not host_error:
                 raise error from host_error
             raise
         # The actual response and arenas have been consumed. Preserve
         # first-host precedence without rewriting its chain or the native Error.
-        if self._recording:
-            self.transport.finish_recording(host_error is None and failure is None)
         if host_error is None and failure is None:
             for binding in scheduler_bindings:
                 self._scheduler_bindings[binding.name] = binding
@@ -356,22 +320,14 @@ class EGraphState:
         if self.handle is None:
             msg = "EGraph handle has been destroyed"
             raise RuntimeError(msg)
-        if self._recording:
-            self.transport.prepare_recording_scope(True)
-        try:
-            response = pb.CloneEGraphResponse.from_binary(
-                self.transport.clone_graph(pb.CloneEGraphRequest(egraph_id=self.handle).to_binary())
-            )
-        except BaseException:
-            if self._recording:
-                self.transport.finish_recording(False)
-            raise
-        if self._recording:
-            self.transport.finish_recording(True)
+        response = pb.CloneEGraphResponse.from_binary(
+            self.transport.clone_graph(pb.CloneEGraphRequest(egraph_id=self.handle).to_binary())
+        )
         result = object.__new__(EGraphState)
         result.transport = self.transport
         result.handle = response.egraph_id
-        result._recording = self._recording
+        result.record_history = self.record_history
+        result.seminaive = self.seminaive
         result.definitions = self.definitions.copy()
         result.rulesets = self.rulesets.copy()
         result.threads = self.threads

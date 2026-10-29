@@ -77,8 +77,13 @@ def get_literal_value(x: object) -> object:  # noqa: C901, PLR0912 -- payload va
             raise ValueError(msg)
         return bindings._decode_scalar(sort.kind.value.name, node.kind.value.to_binary())
     match value.field:
+        case "lambda":
+            if sort.kind is None or sort.kind.field != "func":
+                msg = "Lambda value requires a Func sort"
+                raise TypeError(msg)
+            return x
         case "partial_call":
-            from .runtime import _ApplyAdapter, _partial_function, create_callable  # noqa: PLC0415
+            from .runtime import _partial_function, create_callable  # noqa: PLC0415
 
             reference = x.__egg_ref__
             function_sort = reference.owner.ref("sorts", node.sort_id)
@@ -155,9 +160,6 @@ def get_literal_value(x: object) -> object:  # noqa: C901, PLR0912 -- payload va
             if not isinstance(function, RuntimeFunction | RuntimeClass):
                 msg = "Function value has no callable Python presentation"
                 raise TypeError(msg)
-            origin = next((value for value in declaration.owner._keepalive if isinstance(value, _ApplyAdapter)), None)
-            if origin is not None:
-                function = origin.function
             return partial(function, *children) if children else function
         case _:
             # Containers have their own .value protocols, retaining symbolic

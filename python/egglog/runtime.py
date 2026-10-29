@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass
 from enum import Enum
 from functools import partial
-from hashlib import sha256
 from inspect import Parameter, Signature
 from threading import RLock
 from types import FunctionType, GenericAlias, MethodType
@@ -23,7 +21,7 @@ from ._builtin_protocols import NUMERIC_BINARY_METHODS, SCALAR_PROTOCOLS
 from ._catalog import Catalog
 from ._presentation import CallKind, CallPresentation, Presentation, presentation
 from ._presentation import Parameter as PresentationParameter
-from ._program import Builder, Owner, Ref, StructuralView, _definition_key, _structural_parts, clone_nodes
+from ._program import Builder, Owner, Ref, StructuralView, _definition_key, clone_nodes
 from .type_constraint_solver import TypeConstraintError, infer_sort, substitute_sort
 
 __all__ = [
@@ -101,13 +99,6 @@ _OMITTED = object()
 
 class _Intrinsic(Enum):
     APPLY = "apply"
-
-
-@dataclass(frozen=True)
-class _ApplyAdapter:
-    """Keep the frontend callable identity of a compiled intrinsic adapter."""
-
-    function: RuntimeFunction
 
 
 def _author_call(  # noqa: C901, PLR0912
@@ -399,8 +390,7 @@ def _author_call(  # noqa: C901, PLR0912
                     substitute_sort(pattern.owner.ref("sorts", index), substitutions)
                     for index in sort_kind.value.params
                 ]
-                function, captures = _compile_python_function(value, parameters, result)
-                expression = _function_value(function, captures, None)
+                expression = _compile_python_function(value, parameters, result)
             else:
                 callback = value
                 prefix = ()
@@ -814,12 +804,11 @@ class RuntimeClass(type):
                 expected: pb.Sort = cls.__egg_sort__.read()
                 assert expected.kind is not None
                 assert expected.kind.field == "func"
-                function, closed = _compile_python_function(
+                return _compile_python_function(
                     function,
                     [cls.__egg_sort__.owner.ref("sorts", index) for index in expected.kind.value.params],
                     cls.__egg_sort__.owner.ref("sorts", expected.kind.value.result),
                 )
-                captures = list(closed)
             if not isinstance(function, RuntimeFunction):
                 msg = "UnstableFn requires a named RuntimeFunction"
                 raise TypeError(msg)
@@ -1294,32 +1283,6 @@ class RuntimeFunction(metaclass=RuntimeFunctionMeta):
         )
 
 
-def _apply_adapter_name(function_sort: Ref) -> str:
-    """Identify a concrete adapter by type structure, independent of arena layout."""
-    function_sort = function_sort.owner.ref(function_sort.role, function_sort.index)
-    digests: dict[Ref, bytes] = {}
-    active: set[Ref] = set()
-    pending = [(function_sort, False)]
-    while pending:
-        current, leaving = pending.pop()
-        current = current.owner.ref(current.role, current.index)
-        if current in digests:
-            continue
-        shape, children = _structural_parts(current)
-        if leaving:
-            active.remove(current)
-            token = shape, tuple(digests[child] for child, _ in children)
-            digests[current] = sha256(repr(token).encode()).digest()
-            continue
-        if current in active:
-            msg = "Function adapter types cannot contain cycles"
-            raise TypeConstraintError(msg)
-        active.add(current)
-        pending.append((current, True))
-        pending.extend((child, False) for child, _ in reversed(children))
-    return "__egglog_python_apply_" + digests[function_sort].hex()
-
-
 def _function_value(
     function: RuntimeFunction,
     captures: tuple[object, ...],
@@ -1328,35 +1291,56 @@ def _function_value(
     context: tuple[list[Ref | None], Ref | None] | None = None,
     environment: tuple[Owner, ...] = (),
 ) -> RuntimeExpr:
-    """Materialize one strictly closed named function value and its ordered prefix."""
+    """Author a closed named prefix or a Lambda binding intrinsic application."""
     sort, children, application_sort = _partial_function(
         function, captures, expected, context=context, environment=environment
     )
     if function.__egg_intrinsic__ is _Intrinsic.APPLY:
-        from .egraph import _compile_python_function  # noqa: PLC0415
-
         assert application_sort is not None
         application_type: pb.Sort = application_sort.read()
         assert application_type.kind is not None
         assert application_type.kind.field == "func"
-
-        def apply(receiver, *args):
-            return RuntimeFunction(_Intrinsic.APPLY)(receiver, *args)
-
-        assert isinstance(apply, FunctionType)
-        origin = RuntimeFunction(_Intrinsic.APPLY, bound=_class_for_sort(application_sort))
-        adapter, closed = _compile_python_function(
-            apply,
-            [
+        signature = application_type.kind.value
+        builder = Builder(environment=environment)
+        arguments = [
+            builder.add(
+                "nodes",
+                pb.Node(
+                    sort_id=builder.import_ref(parameter),
+                    kind=Oneof[Literal["var"], str]("var", f"_{index}"),
+                ),
+            )
+            for index, parameter in enumerate([
                 application_sort,
-                *(application_sort.owner.ref("sorts", index) for index in application_type.kind.value.params),
-            ],
-            application_sort.owner.ref("sorts", application_type.kind.value.result),
-            keepalive=(_ApplyAdapter(origin),),
-            name=_apply_adapter_name(application_sort),
+                *(application_sort.owner.ref("sorts", index) for index in signature.params),
+            ])
+        ]
+        body = builder.add(
+            "nodes",
+            pb.Node(
+                sort_id=builder.import_ref(application_sort.owner.ref("sorts", signature.result)),
+                kind=Oneof[Literal["apply"], pb.Apply]("apply", pb.Apply(function=arguments[0], args=arguments[1:])),
+            ),
         )
-        assert not closed
-        return _function_value(adapter, children, sort, environment=environment)
+        node = builder.add(
+            "nodes",
+            pb.Node(
+                sort_id=builder.import_ref(sort),
+                kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                    "primitive_value",
+                    pb.PrimitiveValue(
+                        value=Oneof[Literal["lambda"], pb.Lambda](
+                            "lambda",
+                            pb.Lambda(
+                                captures=[builder.import_ref(child.__egg_ref__) for child in children],
+                                body=body,
+                            ),
+                        )
+                    ),
+                ),
+            ),
+        )
+        return RuntimeExpr(builder.publish().ref("nodes", node))
     record: pb.Declaration | pb.Primitive = function.__egg_ref__.read()
     if isinstance(record, pb.Declaration):
         assert record.kind is not None

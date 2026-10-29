@@ -125,41 +125,30 @@ class CallbackObservation(TypedDict):
 _callback_observations: dict[str, CallbackObservation | bool] = {}
 
 
-@pytest.mark.parametrize("outcome", ["success", "preflight", "transport", "decode", "engine", "host"])
-def test_source_recording_commits_only_valid_acknowledgements(monkeypatch, outcome):  # noqa: C901
-    from egglog.egraph_state import EGraphState  # noqa: PLC0415
+@pytest.mark.parametrize("outcome", ["success", "transport", "decode", "engine", "host"])
+def test_source_history_does_not_preflight_or_acknowledge_execution(monkeypatch, outcome):
+    events = []
+    original = ValueError("original history boundary")
 
-    events: list[str | tuple[str, bool]] = []
-    original = ValueError("original recording boundary")
-    success = output_frames()
     responses = {
         "decode": ([b"\x80"], None),
         "engine": (
             [
                 pb.RunProgramResponse(
                     result=Oneof[Literal["error"], pb.Error](
-                        "error", pb.Error(code=pb.ErrorCode.RUNTIME_FAILURE, message="native recording failure")
+                        "error", pb.Error(code=pb.ErrorCode.RUNTIME_FAILURE, message="native failure")
                     )
                 ).to_binary()
             ],
             None,
         ),
-        "host": (success, original),
+        "host": (output_frames(), original),
     }
 
     class InertTransport:
         def create(self, encoded):
+            assert pb.CreateEGraphRequest.from_binary(encoded).record_history
             return pb.CreateEGraphResponse(egraph_id=1, threads=1).to_binary()
-
-        def enable_recording(self):
-            events.append("enable")
-
-        def prepare_recording(self, encoded):
-            program = pb.Program.from_binary(encoded)
-            assert len(program.commands) == 1
-            events.append("prepare")
-            if outcome == "preflight":
-                raise original
 
         def run(self, encoded):
             request = pb.RunProgramRequest.from_binary(encoded)
@@ -167,10 +156,50 @@ def test_source_recording_commits_only_valid_acknowledgements(monkeypatch, outco
             events.append("run")
             if outcome == "transport":
                 raise original
-            return responses.get(outcome, (success, None))
+            return responses.get(outcome, (output_frames(), None))
 
-        def finish_recording(self, success):
-            events.append(("finish", success))
+        def render_source(self, encoded):
+            assert pb.GetHistoryRequest.from_binary(encoded).egraph_id == 1
+            events.append("export")
+            return "accepted input"
+
+        def destroy(self, encoded):
+            return pb.DestroyEGraphResponse().to_binary()
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
+    graph = EGraph(save_egglog_string=True)
+    if outcome == "success":
+        graph.register(i64(1))
+    else:
+        with pytest.raises(EggSmolError if outcome == "engine" else ValueError) as caught:
+            graph.register(i64(1))
+        if outcome in {"transport", "host"}:
+            assert caught.value is original
+        if outcome == "engine":
+            assert caught.value.__dict__["_egglog_proto_error"].code == pb.ErrorCode.RUNTIME_FAILURE
+    assert events == ["run"]
+    assert graph.as_egglog_string == "accepted input"
+    assert events == ["run", "export"]
+
+
+def test_source_history_submits_freeze_with_installation(monkeypatch):
+    from egglog.egraph_state import EGraphState  # noqa: PLC0415
+
+    submitted = []
+
+    class InertTransport:
+        def create(self, encoded):
+            assert pb.CreateEGraphRequest.from_binary(encoded).record_history
+            return pb.CreateEGraphResponse(egraph_id=1, threads=1).to_binary()
+
+        def run(self, encoded):
+            request = pb.RunProgramRequest.from_binary(encoded)
+            assert request.program is not None
+            assert request.program.commands[0].kind is not None
+            assert request.program.commands[0].kind.field == "freeze"
+            assert len(request.program.declarations) == 1
+            submitted.append(request.program)
+            return output_frames(), None
 
         def destroy(self, encoded):
             return pb.DestroyEGraphResponse().to_binary()
@@ -178,77 +207,14 @@ def test_source_recording_commits_only_valid_acknowledgements(monkeypatch, outco
     monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
     state = EGraphState(save_egglog_string=True)
     builder = Builder()
-    root = builder.import_ref(i64(1).__egg_ref__)
-    command = builder.add(
-        "commands",
-        pb.Command(
-            kind=Oneof[Literal["action"], pb.Action](
-                "action", pb.Action(kind=Oneof[Literal["term"], int]("term", root))
-            )
-        ),
-    )
-    expected = {
-        "preflight": ValueError,
-        "transport": ValueError,
-        "decode": ValueError,
-        "engine": EggSmolError,
-        "host": ValueError,
-    }
-    if outcome == "success":
-        state.run_program([builder.publish().ref("commands", command)])
-    else:
-        with pytest.raises(expected[outcome]) as caught:
-            state.run_program([builder.publish().ref("commands", command)])
-        if outcome in {"preflight", "transport", "host"}:
-            assert caught.value is original
-        if outcome == "engine":
-            assert caught.value.__dict__["_egglog_proto_error"].code == pb.ErrorCode.RUNTIME_FAILURE
-    assert events == (
-        ["enable", "prepare"]
-        if outcome == "preflight"
-        else ["enable", "prepare", "run", ("finish", outcome == "success")]
-    )
-
-
-def test_source_recording_does_not_exempt_freeze_with_installation(monkeypatch):
-    from egglog.egraph_state import EGraphState  # noqa: PLC0415
-
-    prepared = []
-
-    class ClosedTransport:
-        def create(self, encoded):
-            return pb.CreateEGraphResponse(egraph_id=1, threads=1).to_binary()
-
-        def enable_recording(self):
-            pass
-
-        def prepare_recording(self, encoded):
-            program = pb.Program.from_binary(encoded)
-            assert program.commands[0].kind is not None
-            assert program.commands[0].kind.field == "freeze"
-            assert len(program.declarations) == 1
-            prepared.append(program)
-            msg = "transcript has been closed"
-            raise ValueError(msg)
-
-        def run(self, encoded):
-            pytest.fail("Freeze with installation bypassed closed recording preflight")
-
-        def destroy(self, encoded):
-            return pb.DestroyEGraphResponse().to_binary()
-
-    monkeypatch.setattr(bindings, "_ProtoEngine", ClosedTransport)
-    state = EGraphState(save_egglog_string=True)
-    builder = Builder()
     declaration = builder.add(
         "declarations",
-        pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="not-installed"))),
+        pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="installed"))),
     )
     command = builder.add("commands", pb.Command(kind=Oneof[Literal["freeze"], pb.Freeze]("freeze", pb.Freeze())))
     owner = builder.publish()
-    with pytest.raises(ValueError, match="has been closed"):
-        state.run_program([owner.ref("commands", command)], roots=[owner.ref("declarations", declaration)])
-    assert len(prepared) == 1
+    state.run_program([owner.ref("commands", command)], roots=[owner.ref("declarations", declaration)])
+    assert len(submitted) == 1
 
 
 def test_source_producer_returns_only_program_bytes_and_scope_counts():
@@ -314,7 +280,7 @@ def test_source_producer_later_error_preserves_executed_byte_prefix():
 
 
 @pytest.fixture
-def scheduler_transport(monkeypatch):  # noqa: C901 -- finite acknowledgement/failure matrix, not engine conformance
+def scheduler_transport(monkeypatch):
     from egglog.egraph_state import EGraphState  # noqa: PLC0415
 
     class InertTransport:
@@ -327,22 +293,6 @@ def scheduler_transport(monkeypatch):  # noqa: C901 -- finite acknowledgement/fa
 
         def create(self, encoded):
             return pb.CreateEGraphResponse(egraph_id=self.next_handle, threads=1).to_binary()
-
-        def enable_recording(self):
-            pass
-
-        def prepare_recording(self, encoded):
-            command_kind = pb.Program.from_binary(encoded).commands[0].kind
-            assert command_kind is not None
-            assert command_kind.field == "bind_scheduler"
-            if self.outcome == "preflight":
-                raise self.original
-
-        def finish_recording(self, success):
-            pass
-
-        def prepare_recording_scope(self, push):
-            pass
 
         def run(self, encoded):
             self.requests.append(pb.RunProgramRequest.from_binary(encoded))
@@ -372,7 +322,7 @@ def scheduler_transport(monkeypatch):  # noqa: C901 -- finite acknowledgement/fa
     return EGraphState(save_egglog_string=True), transport
 
 
-@pytest.mark.parametrize("outcome", ["success", "preflight", "transport", "decode", "engine", "host"])
+@pytest.mark.parametrize("outcome", ["success", "transport", "decode", "engine", "host"])
 def test_persistent_scheduler_deployment_requires_acknowledgement(scheduler_transport, outcome):
     from egglog import back_off  # noqa: PLC0415
 
@@ -405,21 +355,15 @@ def test_persistent_scheduler_deployment_requires_acknowledgement(scheduler_tran
     expected = EggSmolError if outcome == "engine" else ValueError
     with pytest.raises(expected) as caught:
         state.bind_scheduler(reference)
-    if outcome in {"preflight", "transport", "host"}:
+    if outcome in {"transport", "host"}:
         assert caught.value is transport.original
     if outcome == "engine":
         assert caught.value.__dict__["_egglog_proto_error"].code == pb.ErrorCode.RUNTIME_FAILURE
     transport.outcome = "success"
-    if outcome == "preflight":
-        assert name not in state._scheduler_bindings
-        assert not transport.requests
+    assert state._scheduler_bindings[name] is None
+    with pytest.raises(RuntimeError, match="unacknowledged deployment"):
         state.bind_scheduler(reference)
-        assert len(transport.requests) == 1
-    else:
-        assert state._scheduler_bindings[name] is None
-        with pytest.raises(RuntimeError, match="unacknowledged deployment"):
-            state.bind_scheduler(reference)
-        assert len(transport.requests) == 1
+    assert len(transport.requests) == 1
 
 
 def test_persistent_scheduler_deployment_follows_clone_and_saved_context(scheduler_transport):
@@ -3126,13 +3070,12 @@ def test_compilation_flags_and_effective_threads_are_creation_only(resource_tran
         assert not hasattr(graph, removed)
 
 
-@pytest.mark.parametrize("direct_state", [False, True])
-def test_naive_source_recording_rejects_before_creation(resource_transport, direct_state):
-    from egglog.egraph_state import EGraphState  # noqa: PLC0415
-
+def test_naive_source_export_rejects_after_creation(resource_transport):
+    graph = EGraph(save_egglog_string=True, seminaive=False)
+    assert len(resource_transport.creations) == 1
+    assert resource_transport.creations[0].record_history
     with pytest.raises(NotImplementedError, match="initial seminaive=False"):
-        (EGraphState if direct_state else EGraph)(save_egglog_string=True, seminaive=False)
-    assert not resource_transport.creations
+        _ = graph.as_egglog_string
 
 
 @pytest.mark.parametrize("value", [None, 0, 1, "true"])

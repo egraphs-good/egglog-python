@@ -15,19 +15,15 @@ from egglog._program import Builder
     ("record_history", "save_egglog_string", "seminaive"),
     [(False, False, True), (True, False, True), (False, True, True), (True, True, True), (True, False, False)],
 )
-def test_history_and_source_recording_are_independent_creation_choices(
+def test_history_and_source_export_share_native_input_recording(
     monkeypatch: pytest.MonkeyPatch, *, record_history: bool, save_egglog_string: bool, seminaive: bool
 ) -> None:
     created: list[pb.CreateEGraphRequest] = []
-    source_enabled: list[bool] = []
 
     class Transport:
         def create(self, encoded: bytes) -> bytes:
             created.append(pb.CreateEGraphRequest.from_binary(encoded))
             return pb.CreateEGraphResponse(egraph_id=1, threads=1).to_binary()
-
-        def enable_recording(self) -> None:
-            source_enabled.append(True)
 
         def destroy(self, encoded: bytes) -> bytes:
             return pb.DestroyEGraphResponse().to_binary()
@@ -35,11 +31,10 @@ def test_history_and_source_recording_are_independent_creation_choices(
     monkeypatch.setattr(bindings, "_ProtoEngine", Transport)
     graph = EGraph(record_history=record_history, save_egglog_string=save_egglog_string, seminaive=seminaive)
     assert len(created) == 1
-    assert created[0].record_history is record_history
+    assert created[0].record_history is (record_history or save_egglog_string)
     assert created[0].options is not None
     assert created[0].options.seminaive is seminaive
-    assert source_enabled == ([True] if save_egglog_string else [])
-    assert graph._state._recording is save_egglog_string
+    assert graph._state.record_history is (record_history or save_egglog_string)
 
 
 @pytest.mark.parametrize("invalid", [0, 1, None, "yes"])
@@ -108,7 +103,7 @@ def test_history_default_off_and_getter_does_not_record_itself() -> None:
     assert graph.history().to_binary() != observed.to_binary()
 
 
-def test_history_keeps_accepted_failure_inputs_and_live_prefix_after_source_view_invalidates() -> None:
+def test_history_and_source_keep_accepted_failure_inputs_and_live_prefix() -> None:
     @function
     def history_row(key: i64) -> i64: ...
 
@@ -128,8 +123,8 @@ def test_history_keeps_accepted_failure_inputs_and_live_prefix_after_source_view
     ]
     with pytest.raises(EggSmolError, match="recorded prefix failure"):
         graph._state.run_program(commands)
-    with pytest.raises(RuntimeError, match="cannot be replayed"):
-        _ = graph.as_egglog_string
+    source = graph.as_egglog_string
+    assert "recorded prefix failure" in source
     history = graph.history()
     assert len(history.commands) >= 4
     failure = history.commands[-2].kind

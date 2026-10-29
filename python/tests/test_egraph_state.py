@@ -34,7 +34,7 @@ def test_closing_saved_transcript_inside_context_restores_scope() -> None:
     assert not egraph._state_stack
 
 
-def test_invalid_saved_transcript_inside_context_restores_scope() -> None:
+def test_failed_recorded_scope_restores_parent_inputs_and_remains_usable() -> None:
     marker = relation("invalid_transcript_scope_marker", i64)
     egraph = EGraph(marker(i64(1)), save_egglog_string=True)
     parent_state = egraph._state
@@ -72,12 +72,12 @@ def test_invalid_saved_transcript_inside_context_restores_scope() -> None:
         assert value is not None
         assert value.field == "i64"
         assert value.value == 1
-        with pytest.raises(RuntimeError, match="cannot be replayed"):
-            _ = egraph.as_egglog_string
-        with pytest.raises(RuntimeError, match="partial effects cannot be replayed"):
-            egraph.register(marker(i64(3)))
-        with pytest.raises(RuntimeError, match="partial effects cannot be replayed"):
-            egraph.push()
+        assert egraph.as_egglog_string
+        egraph.register(marker(i64(3)))
+        egraph.push()
+        egraph.pop()
+        egraph.check(marker(i64(1)), marker(i64(3)))
+        egraph.check_fail(marker(i64(2)))
         assert egraph._state is parent_state
         assert not egraph._state_stack
     finally:
@@ -114,8 +114,9 @@ def test_saved_transcript_errors_preserve_command_location() -> None:
     assert error.location == pb.CommandLocation(path=[0])
     assert str(exc_info.value) == error.message
     assert exc_info.value.args == (error.message,)
-    with pytest.raises(RuntimeError, match="cannot be replayed"):
-        _ = egraph.as_egglog_string
+    assert egraph.as_egglog_string
+    value = egraph.let("after_failure", i64(3))
+    assert egraph.lookup_function_value(value) == i64(3)
 
 
 def _raise_after_partial_write(_: object) -> object:
@@ -123,7 +124,7 @@ def _raise_after_partial_write(_: object) -> object:
     raise ValueError(message)
 
 
-def test_non_egglog_failure_invalidates_saved_transcript() -> None:
+def test_non_egglog_failure_keeps_input_history_and_live_prefix() -> None:
     trigger = relation("transcript_failure_trigger", i64)
     done = relation("transcript_failure_done", i64)
     x = var("x", i64)
@@ -140,12 +141,8 @@ def test_non_egglog_failure_invalidates_saved_transcript() -> None:
     recorded = EGraph(trigger(i64(1)), save_egglog_string=True)
     with pytest.raises(ValueError, match="callback failed"):
         recorded.run(run(failing_rules))
-    with pytest.raises(RuntimeError, match="partial effects cannot be replayed"):
-        recorded.check(done(i64(1)))
-    with pytest.raises(
-        RuntimeError, match=r"^The saved transcript cannot be replayed after a failed engine operation$"
-    ):
-        _ = recorded.as_egglog_string
+    recorded.check(done(i64(1)))
+    assert recorded.as_egglog_string
     recorded.close()
 
     scoped = EGraph(trigger(i64(1)), save_egglog_string=True)
@@ -154,8 +151,9 @@ def test_non_egglog_failure_invalidates_saved_transcript() -> None:
         scoped.run(run(failing_rules))
     assert scoped._state is parent_state
     assert not scoped._state_stack
-    with pytest.raises(RuntimeError, match="partial effects cannot be replayed"):
-        scoped.check(done(i64(1)))
+    scoped.check_fail(done(i64(1)))
+    scoped.check(trigger(i64(1)))
+    assert scoped.as_egglog_string
     scoped.close()
 
 

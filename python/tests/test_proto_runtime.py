@@ -3074,9 +3074,18 @@ def test_vec_map_callback_capture_core_order_and_binary_roundtrip(equality_outpu
     assert len(call.args) == 2
     function = reference.owner.ref("nodes", call.args[0])
     assert function.owner.ref("sorts", function.read().sort_id).read().kind.field == "func"
+    closure = function.read().kind.value.value
+    assert closure.field == "lambda"
+    assert len(closure.value.captures) == 1
+    assert StructuralView(function.owner.ref("nodes", closure.value.captures[0])) == StructuralView(
+        captured.__egg_ref__
+    )
     assert StructuralView(reference.owner.ref("nodes", call.args[1])) == StructuralView(source.__egg_ref__)
     assert calls == [1]
     encoded = pack([reference])
+    assert not any(
+        item.kind is not None and item.kind.field == "user_defined_primitive" for item in encoded.program.declarations
+    )
     builder = Builder.from_program(
         pb.Program.from_binary(encoded.program.to_binary()), environment=reference.owner._environment
     )

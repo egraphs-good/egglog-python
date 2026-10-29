@@ -169,9 +169,10 @@ for when a body remains rewrite-backed.
     and decomposition settings, constructor/relation table inspection, generic
     value extraction, and `var()` typing for parameterized expression types.
     Correct run-report durations that were previously 1,000 times too small.
-    Add removable source transcripts that preserve rule evaluation and
-    decomposition settings, use replay-safe names, report source-aware parse
-    errors, and reject use after non-replayable failures.
+    Export source lazily from the current graph's accepted input history.
+    Popping a scope omits that branch; failed inputs retain unexecuted suffixes
+    without an exact replay guarantee. Source limitations are reported at export,
+    and `close()` is a compatibility no-op.
     Python exceptions raised by `PyObject` primitives on worker threads now
     propagate to the caller, and the low-level bindings round-trip Egglog 3
     AST/report data, parse and run source programs directly, and expose

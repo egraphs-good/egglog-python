@@ -133,8 +133,9 @@ assert get_var_name(var("x", i64, egg_name="")) == "x"
 Within a query, independently created variables with the same canonical name
 join, and their sorts must agree. The typed name `"_"` is also a named variable,
 not a fresh wildcard. Some canonical names (including `"_"`, `"0"` and `"@x"`)
-work in direct protobuf queries but cannot be recorded with
-`save_egglog_string=True`; recording rejects them before effects.
+work in direct protobuf queries but cannot be rendered as source. With
+`save_egglog_string=True`, those source errors arise when requesting
+`as_egglog_string`, without preventing engine execution.
 
 This differs from the legacy backend's implicit underscore prefix:
 
@@ -685,7 +686,9 @@ value, `.value` inspects it without running egglog: it returns the callable, or
 a `functools.partial` containing its captured prefix. Captured expressions stay
 symbolic until the function value is constructed in the engine; reading `.value`
 does not evaluate them. A nonliteral function expression must be extracted before
-its `.value` is available. Mutating callables cannot be partially applied.
+its `.value` is available. For an anonymous or computed function value, `.value`
+returns the symbolic callable itself; invoking it authors an application without
+running its body in Python. Mutating callables cannot be partially applied.
 
 A free `@function` with concrete argument and result sorts, fixed
 positional-or-keyword parameters, a body, and no explicit `ruleset` defines eager
@@ -707,9 +710,10 @@ added_two = x.map(lambda x: x + Math(2))
 check_eq(added_two, MathList.EMPTY.append(Math(1) + Math(2)), math_list_ruleset.saturate())
 ```
 
-Converting the callback to `Callable`/`UnstableFn` materializes its body as an
-eager anonymous primitive. It does not add a rewrite to the default ruleset or
-require a separate `run()` step. An enclosing declared function still follows
+Converting the callback to `Callable`/`UnstableFn` authors a Lambda body with
+explicit symbolic captures. Captures are evaluated when the function value is
+constructed in the engine; its body runs on application. It does not add a
+rewrite to the default ruleset or require a separate `run()` step. An enclosing declared function still follows
 the ordinary lowering rules; for example, an explicit `ruleset` makes this
 outer body rewrite-backed:
 
@@ -878,29 +882,21 @@ callback; operations on the executing graph are rejected. Callback exceptions
 retain their original Python identity. Buffered calls collect the same canonical
 stream. Input history continues to record inputs only.
 
-### Recording replayable source
+### Exporting input history as source
 
-`EGraph(save_egglog_string=True).as_egglog_string` records the renderable,
-default-option subset using the shared Rust Source renderer. The actual packed
-Program is rendered before execution; its text and renderer state are committed
-only after the engine response is accepted.
-Unsupported source forms are rejected before live effects, not approximated by
-Python's display printer. Custom objectives, assigned costs and some composite
-controls remain outside that source subset.
+Create with `save_egglog_string=True` or `record_history=True`, then request
+`as_egglog_string` to render the current graph's accepted input history using the
+shared Rust Source renderer. Export is lazy: unsupported source forms raise at
+export without preventing engine execution. Custom payloads remain inert.
 
-Push/pop share one chronological transcript and restore the renderer's type
-scope after acknowledged clone and active-branch destruction. Pop resumes the
-retained saved graph and its history. `close()` is idempotent and
-rejects later mutations before execution. A definition-free, arena-free single
-Freeze snapshot is unrecorded read-only introspection, including after close;
-this does not exempt any declaration installation or authored evaluation.
-When an execution/transport failure makes the completed prefix uncertain,
-recording is invalidated and the property raises `RuntimeError`; the original
-error and live partial effects are preserved. Invalidated
-recording rejects later potential mutations/evaluations; the same pure snapshot
-introspection remains available. Closing a graph whose recording was disabled
-remains a no-op. Nondefault global execution
-flags are still unsupported.
+Pop restores the parent's history prefix and omits the abandoned branch; no
+push/pop commands are added to the input Program. Accepted failed requests
+retain their whole input, including unexecuted suffixes. The text therefore does
+not promise exact replay after failure, and failures do not disable later engine
+operations. Observation-only Freeze commands are omitted from source while their
+setup is retained. `close()` is a compatibility no-op; source needs no separate
+finalization. Initial `seminaive=False` is supported for execution/history but
+source export reports the unsupported creation context.
 
 ### `stats`
 
@@ -954,8 +950,8 @@ backend's canonical keys and needs that builtin environment for frontend typing.
 
 ### `history`
 
-Create an {class}`egglog.egraph.EGraph` with `record_history=True` to retain
-accepted input programs, then retrieve one owned accumulated `Program` with
+Create an {class}`egglog.egraph.EGraph` with `record_history=True` or
+`save_egglog_string=True` to retain accepted input programs, then retrieve one owned accumulated `Program` with
 {meth}`egglog.egraph.EGraph.history`. Recording is off
 by default; requesting disabled history raises `ValueError`. Retrieval itself
 does not append a command.
@@ -973,12 +969,10 @@ checkpoint.
 Like snapshots, history contains no Python presentation map or unused default
 templates. Defaults enter an input program when a call actually omits them.
 
-`save_egglog_string=True` separately enables the existing `as_egglog_string`
-successful-source view, with rendering preflight and acknowledgement checks.
-The two flags are independent: saving source does not enable input history.
-When both are enabled, a failure can invalidate the replayable source view while
-structured history remains available. Structured recording supports
-`seminaive=False` without imposing the source view's replay restriction.
+Both flags enable the same native input store, which also supports lazy
+`as_egglog_string` export. Export limitations do not alter engine admission or
+invalidate retained inputs. Structured history supports `seminaive=False` even
+though source export cannot encode that initial creation setting.
 
 ### `display`
 

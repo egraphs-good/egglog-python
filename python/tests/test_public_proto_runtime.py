@@ -142,8 +142,27 @@ def test_named_function_values_author_without_engine(monkeypatch: pytest.MonkeyP
         futures = [pool.submit(UnstableFn, UnstableFn[i64, i64].__call__, prefix) for _ in range(4)]
         assert all(expr_parts(future.result()) == expr_parts(nested) for future in futures)
     assert isinstance(nested(i64(2)), i64)
-    assert isinstance(nested.value, partial)
-    assert nested.value.args == (prefix,)
+    assert nested.value is nested
+    nested_ref = to_runtime_expr(nested).__egg_ref__
+    nested_value = nested_ref.read().kind.value.value
+    assert nested_value.field == "lambda"
+    assert len(nested_value.value.captures) == 1
+    captured = RuntimeExpr(nested_ref.owner.ref("nodes", nested_value.value.captures[0]))
+    assert expr_parts(captured) == expr_parts(prefix)
+    assert nested_ref.owner.ref("nodes", nested_value.value.body).read().kind.field == "apply"
+    binary = var("binary", UnstableFn[i64, i64, i64])
+    bound = UnstableFn(binary.__call__, i64(10))
+    bound_ref = to_runtime_expr(bound).__egg_ref__
+    bound_value = bound_ref.read().kind.value.value
+    assert bound_value.field == "lambda"
+    assert len(bound_value.value.captures) == 2
+    assert expr_parts(RuntimeExpr(bound_ref.owner.ref("nodes", bound_value.value.captures[0]))) == expr_parts(binary)
+    body = bound_ref.owner.ref("nodes", bound_value.value.body).read().kind.value
+    assert [bound_ref.owner.ref("nodes", index).read().kind.value for index in [body.function, *body.args]] == [
+        "_0",
+        "_1",
+        "_2",
+    ]
 
     symbolic = var("callback", UnstableFn[i64, i64])
     assert get_literal_value(symbolic) is None
@@ -1567,27 +1586,66 @@ def test_python_callbacks_capture_symbolic_values_without_engine(monkeypatch: py
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
     captured = i64(4) + i64(5)
     callback = UnstableFn[i64, i64](lambda value: value + captured)
-    restored = callback.value
-    assert isinstance(restored, partial)
-    assert len(restored.args) == 1
-    assert expr_parts(restored.args[0]) == expr_parts(captured)
-    primitive = cast("RuntimeFunction", restored.func).__egg_ref__.read()
-    assert primitive.kind.field == "user_defined_primitive"
-    assert len(primitive.kind.value.inputs) == 2
-    assert callback.__egg_ref__.read().kind.value.value.field == "partial_call"
-    assert str(callback) == "lambda value: value + (i64(4) + 5)"
+    assert callback.value is callback
+    reference = to_runtime_expr(callback).__egg_ref__
+    value = reference.read().kind.value.value
+    assert value.field == "lambda"
+    assert len(value.value.captures) == 1
+    observed_capture = RuntimeExpr(reference.owner.ref("nodes", value.value.captures[0]))
+    assert expr_parts(observed_capture) == expr_parts(captured)
+    body = reference.owner.ref("nodes", value.value.body).read()
+    assert body.kind.field == "call"
+    assert body.kind.value.func == "egglog.core.i64.add"
+    assert str(callback) == "lambda arg0: arg0 + (i64(4) + 5)"
+    same = UnstableFn[i64, i64](lambda different_name: different_name + captured)
+    different = UnstableFn[i64, i64](lambda value: value - captured)
+    assert expr_parts(same) == expr_parts(callback)
+    assert hash(expr_parts(same)) == hash(expr_parts(callback))
+    assert expr_parts(different) != expr_parts(callback)
     with pytest.raises(ConvertError):
         UnstableFn[i64, i64](lambda value: String("wrong result"))  # type: ignore[arg-type, return-value]
 
 
 def test_python_callbacks_execute_captures_and_infer_multiset_output() -> None:
-    from egglog import MultiSet  # noqa: PLC0415
+    from egglog import MultiSet, UnstableFn  # noqa: PLC0415
 
     captured = i64(10)
     xs = MultiSet(i64(2), i64(1), i64(2))
     mapped = xs.map(lambda value: (value + captured).to_string())
     graph = EGraph()
     assert sorted(child.value for child in graph.extract(mapped).value) == ["11", "12", "12"]
+
+    @function(merge=lambda _old, new: new)
+    def cell() -> i64: ...
+
+    graph.register(set_(cell()).to(i64(10)))
+    captured_read = cell()
+    callback = UnstableFn[i64, i64](lambda value: value + captured_read)
+    retained = graph.let("captured_callback", callback)
+    graph.register(set_(cell()).to(i64(20)))
+    assert graph.extract(retained(i64(1))).value == 11
+    observed = graph.extract(retained)
+    assert observed.value is observed
+    reference = to_runtime_expr(observed).__egg_ref__
+    closure = reference.read().kind.value.value
+    assert closure.field == "lambda"
+    assert len(closure.value.captures) == 1
+    assert RuntimeExpr(reference.owner.ref("nodes", closure.value.captures[0])).value == 10
+    assert graph.extract(observed(i64(2))).value == 12
+    named = graph.extract(UnstableFn(i64.__add__, i64(10))).value
+    assert isinstance(named, partial)
+    assert named.func == i64.__add__
+    assert named.args == (i64(10),)
+
+    nested = UnstableFn[UnstableFn[i64, i64], i64](lambda x: UnstableFn[i64, i64](lambda y: x + y))
+    inner = graph.extract(nested(i64(10)))
+    assert inner.value is inner
+    inner_ref = to_runtime_expr(inner).__egg_ref__
+    inner_value = inner_ref.read().kind.value.value
+    assert inner_value.field == "lambda"
+    assert len(inner_value.value.captures) == 1
+    assert RuntimeExpr(inner_ref.owner.ref("nodes", inner_value.value.captures[0])).value == 10
+    assert graph.extract(inner(i64(2))).value == 12
 
 
 def test_let_captures_primitive_and_eq_values_before_later_writes() -> None:
