@@ -53,7 +53,7 @@ def _node_presentation(node: pb.Node, sort_label: str, labels: dict[str, str]) -
         label = labels[node.kind.value.func]
         if node.kind.field == "get_cost":
             label = f"cost({label})"
-    elif node.kind.field == "var":
+    elif node.kind.field in {"var", "binding"}:
         label = node.kind.value
     elif node.kind.field == "union":
         label = "Union"
@@ -111,14 +111,15 @@ def _snapshot_to_data(  # noqa: C901, PLR0912
     definitions = {
         _definition_key(reference.read()): reference
         for source in (*owner._environment, owner)
-        for role in ("declarations", "primitive_sorts", "primitives")
+        for role in ("sorts", "declarations", "primitive_sorts", "primitives")
         for index in range(len(source._slots[role]))
         for reference in (source.ref(role, index),)
+        if _definition_key(reference.read()) is not None
     }
     sort_labels = {}
     labels = {}
     declared_costs = {}
-    type_names = {}
+    type_names: dict[tuple[str, str], str] = {}
     for key, reference in definitions.items():
         assert key is not None
         declaration = reference.read()
@@ -127,15 +128,19 @@ def _snapshot_to_data(  # noqa: C901, PLR0912
             kind = declaration.kind.value
         else:
             kind = declaration
-        if isinstance(kind, pb.EqSort | pb.PrimitiveSort):
+        if isinstance(kind, pb.Sort | pb.PrimitiveSort):
             bindings = presentation(reference).type_view
-            type_names[key] = bindings.path[-1] if bindings is not None else kind.name
+            if isinstance(kind, pb.Sort):
+                assert kind.kind is not None
+                assert kind.kind.field == "eq"
+                type_name = kind.kind.value
+            else:
+                type_name = kind.name
+            type_names[key] = bindings.path[-1] if bindings is not None else type_name
     for declaration in program.declarations:
         if declaration.kind is None:
             continue
         kind = declaration.kind.value
-        if not isinstance(kind, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive | pb.Primitive):
-            continue
         label = kind.name
         views = presentation(definitions["callable", kind.name]).views
         if views:
@@ -164,8 +169,12 @@ def _snapshot_to_data(  # noqa: C901, PLR0912
     pending = []
     terms = set()
     for command in program.commands:
+        if command.kind is not None and command.kind.field == "let":
+            if command.kind.value.has_field("value"):
+                pending.append(command.kind.value.value)
+            continue
         if command.kind is None or command.kind.field != "action" or command.kind.value.kind is None:
-            msg = "Snapshot reconstruction must contain only Actions"
+            msg = "Snapshot reconstruction must contain only Actions and Lets"
             raise ValueError(msg)
         action = command.kind.value.kind
         if action.field not in {"term", "set", "subsume", "set_cost"}:

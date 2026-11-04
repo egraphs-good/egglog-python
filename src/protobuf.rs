@@ -1589,12 +1589,6 @@ mod tests {
                     }),
                     4 => {
                         program.sorts[0].kind = Some(pb::sort::Kind::Eq("PyObject".into()));
-                        program.declarations.push(pb::Declaration {
-                            kind: Some(pb::declaration::Kind::EqSort(pb::EqSort {
-                                name: "PyObject".into(),
-                            })),
-                            ..Default::default()
-                        });
                     }
                     _ => {
                         program.sorts[0].kind =

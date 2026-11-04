@@ -30,9 +30,9 @@ if TYPE_CHECKING:
 # recursively for inline messages. Binder positions are deliberately NOT indices.
 _FIELDS = {
     "Program": "nodes sorts declarations commands files rulesets",
-    "Node": "sort_id:sorts var primitive_value call apply union get_cost span",
+    "Node": "sort_id:sorts var binding primitive_value call apply union get_cost span",
     "BuiltinCatalog": "sorts primitive_sorts primitives files",
-    "Sort": "eq@eq_sort primitive func var span",
+    "Sort": "eq primitive func var span doc",
     "PrimitiveSortRef": "name@primitive_sort args:sorts",
     "FuncSort": "params:sorts result:sorts",
     "Span": "file:files start end",
@@ -54,9 +54,8 @@ _FIELDS = {
     "Action": "term:nodes set delete subsume panic set_cost span",
     "Set": "target value:nodes",
     "SetCost": "target cost:nodes",
-    "Declaration": "constructor function relation user_defined_primitive eq_sort span doc public_alias default_name",
+    "Declaration": "constructor function relation user_defined_primitive span doc public_alias default_name",
     "Arg": "sort:sorts name",
-    "EqSort": "name",
     "Constructor": "name inputs output:sorts cost:nodes unextractable hidden",
     "Function": "name inputs output:sorts merge:nodes hidden",
     "Relation": "name inputs",
@@ -68,7 +67,8 @@ _FIELDS = {
     "RuleBody": "query:nodes head",
     "Rewrite": "lhs:nodes rhs:nodes conditions:nodes subsume",
     "BiRewrite": "lhs:nodes rhs:nodes conditions:nodes",
-    "Command": "action check prove prove_exists run bind_scheduler keep_best extract freeze table_sizes table_rows table_stats loop fail stats explain span",
+    "Command": "action let check prove prove_exists run bind_scheduler keep_best extract freeze table_sizes table_rows table_stats loop fail stats explain span",
+    "Let": "binding:nodes value:nodes",
     "Check": "facts:nodes",
     "Prove": "facts:nodes",
     "ProveExists": "constructor@callable",
@@ -251,7 +251,11 @@ def _structural_parts(
         shape.extend((path, message.desc().type_name))
         inline = []
         for field in message.desc().fields:
-            if field.name == "span" or (field.presence.name != "IMPLICIT" and field not in message):
+            if (
+                field.name == "span"
+                or (isinstance(message, pb.Sort) and field.name == "doc")
+                or (field.presence.name != "IMPLICIT" and field not in message)
+            ):
                 continue
             value = message[field]
             if value is None:
@@ -490,7 +494,7 @@ class Owner:
     __slots__ = (
         "__weakref__",
         "_builtin_indices",
-        "_declaration_indices",
+        "_definition_indices",
         "_environment",
         "_keepalive",
         "_presentation_catalog",
@@ -514,7 +518,7 @@ class Owner:
         # The frontend index is derived once from this immutable owned context.
         # Keeping it here avoids both global retention and repeated catalog scans.
         self._presentation_catalog: Catalog | None = None
-        self._declaration_indices: Mapping[tuple[str, str], tuple[int, ...]] | None = None
+        self._definition_indices: Mapping[tuple[str, str], tuple[tuple[str, int], ...]] | None = None
         self._environment = environment
         self._builtin_indices = MappingProxyType({
             _definition_key(record): (role, index)
@@ -524,17 +528,18 @@ class Owner:
         })
 
     @property
-    def declaration_indices(self) -> Mapping[tuple[str, str], tuple[int, ...]]:
+    def definition_indices(self) -> Mapping[tuple[str, str], tuple[tuple[str, int], ...]]:
         """Index immediate slots once, without copying transitive contexts or retaining self refs."""
-        if self._declaration_indices is None:
-            indices: dict[tuple[str, str], list[int]] = {}
-            for index in range(len(self._slots["declarations"])):
-                ref = self.ref("declarations", index)
-                key = _definition_key(cast("Message", ref.owner._slots[ref.role][ref.index]))
-                if key is not None:
-                    indices.setdefault(key, []).append(index)
-            self._declaration_indices = MappingProxyType({key: tuple(slots) for key, slots in indices.items()})
-        return self._declaration_indices
+        if self._definition_indices is None:
+            indices: dict[tuple[str, str], list[tuple[str, int]]] = {}
+            for role in ("sorts", "nodes", "declarations"):
+                for index in range(len(self._slots[role])):
+                    ref = self.ref(role, index)
+                    key = _definition_key(cast("Message", ref.owner._slots[ref.role][ref.index]))
+                    if key is not None:
+                        indices.setdefault(key, []).append((role, index))
+            self._definition_indices = MappingProxyType({key: tuple(slots) for key, slots in indices.items()})
+        return self._definition_indices
 
     def ref(self, role: str, index: int) -> Ref:
         if (
@@ -615,8 +620,9 @@ class Builder:
         self._environment.update(dict.fromkeys(owner._environment))
         if owner._builtin_indices:
             self._environment[owner] = None
-        for index in range(len(owner._slots["declarations"])):
-            self.import_ref(owner.ref("declarations", index))
+        for slots in owner.definition_indices.values():
+            for role, index in slots:
+                self.import_ref(owner.ref(role, index))
 
     def import_rule(self, reference: Ref) -> pb.Rule:
         """Embed an owned reusable rule, relocating its closure into this fragment."""
@@ -711,7 +717,7 @@ def clone_nodes(roots: Iterable[Ref]) -> tuple[Ref, ...]:  # noqa: C901
 
     def allocate(source: Ref) -> int:
         source = source.owner.ref(source.role, source.index)
-        if source.role != "nodes":
+        if source.role != "nodes" or _definition_key(source.read()) is not None:
             return builder.import_ref(source)
         if source not in indices:
             indices[source] = builder.reserve("nodes")
@@ -727,9 +733,7 @@ def clone_nodes(roots: Iterable[Ref]) -> tuple[Ref, ...]:  # noqa: C901
         source = pending.pop()
 
         def dependency(namespace: str, name: str, origin: Owner = source.owner) -> None:
-            matches = {
-                origin.ref("declarations", index) for index in origin.declaration_indices.get((namespace, name), ())
-            }
+            matches = {origin.ref(role, index) for role, index in origin.definition_indices.get((namespace, name), ())}
             for environment in (*origin._environment, origin):
                 if (slot := environment._builtin_indices.get((namespace, name))) is not None:
                     matches.add(environment.ref(*slot))
@@ -747,17 +751,20 @@ def clone_nodes(roots: Iterable[Ref]) -> tuple[Ref, ...]:  # noqa: C901
 
 
 def _definition_key(record: Message) -> tuple[str, str] | None:
+    """Classify named setup records without conflating absent and empty names."""
     if isinstance(record, pb.PrimitiveSort):
         return "primitive_sort", record.name
     if isinstance(record, pb.Primitive):
         return "callable", record.name
-    """Classify definition namespaces without conflating absent and empty names."""
+    if isinstance(record, pb.Sort) and record.kind is not None and record.kind.field == "eq":
+        return "eq_sort", record.kind.value
+    if isinstance(record, pb.Node) and record.kind is not None and record.kind.field == "binding":
+        return "binding", record.kind.value
     if isinstance(record, pb.Declaration):
         if record.kind is None:
             msg = "Declaration has no kind"
             raise ValueError(msg)
-        namespace = "eq_sort" if record.kind.field == "eq_sort" else "callable"
-        return namespace, record.kind.value.name
+        return "callable", record.kind.value.name
     return None
 
 
@@ -794,20 +801,23 @@ def pack(  # noqa: C901, PLR0912
         indexed.add(owner)
         for provider in (*owner._environment, owner):
             builtin_keys.update(key for key in provider._builtin_indices if key is not None)
-        for key, slots in owner.declaration_indices.items():
-            for index in slots:
-                ref = owner.ref("declarations", index)
-                matches = candidates.setdefault(key, set())
-                if ref not in matches:
-                    matches.add(ref)
-                    if key in emitted:
-                        demands.add(key)
+            for key, slots in provider.definition_indices.items():
+                for role, index in slots:
+                    ref = provider.ref(role, index)
+                    matches = candidates.setdefault(key, set())
+                    if ref not in matches:
+                        matches.add(ref)
+                        if key in emitted:
+                            demands.add(key)
 
     def reconcile(key: tuple[str, str], preferred: Ref) -> Ref:
         # Keep original candidates until their reachable owner closures have
         # been inspected; a discarded body can import conflicting definitions.
         matches = candidates[key]
-        reference = emitted.get(key) or next((old for old in matches if old in mapped), preferred)
+        reference = emitted.get(key) or next(
+            (old for old in matches if old in mapped),
+            next((old for old in matches if key in old.owner._presentations), preferred),
+        )
         while True:
             count = len(matches)
             owners: list[Owner] = []
@@ -819,7 +829,7 @@ def pack(  # noqa: C901, PLR0912
             if len(matches) == count:
                 return reference
 
-    def allocate(reference: Ref) -> int:  # noqa: C901
+    def allocate(reference: Ref) -> int:
         ref = reference.owner.ref(reference.role, reference.index)
         if ref.role == "rules":
             msg = "Rules must be embedded in Ruleset collections"
@@ -848,12 +858,11 @@ def pack(  # noqa: C901, PLR0912
                 index_owner(ref.owner)
                 return mapped[ref]
             index_owner(ref.owner)
-            if ref.role == "declarations":
-                key = _definition_key(ref.read())
-                if key is not None:
-                    ref = reconcile(key, ref)
-                    if ref in mapped:
-                        return mapped[ref]
+            key = _definition_key(ref.read())
+            if key is not None:
+                ref = reconcile(key, ref)
+                if ref in mapped:
+                    return mapped[ref]
             records = getattr(program, ref.role)
             mapped[ref] = len(records)
             records.append(_ROLES[ref.role]())
@@ -873,8 +882,8 @@ def pack(  # noqa: C901, PLR0912
         if ref.role in {"primitive_sorts", "primitives"}:
             index_owner(ref.owner)
             continue
-        if ref.role != "declarations":
-            msg = "Definitions must refer to declarations"
+        if _definition_key(ref.read()) is None:
+            msg = "Definitions must refer to named setup records"
             raise TypeError(msg)
         index_owner(ref.owner)
     for reference in rulesets:

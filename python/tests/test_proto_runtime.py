@@ -2837,10 +2837,6 @@ def test_map_shallow_inspection_preserves_equality_boundary_cycles():
     )
     builder.add(
         "declarations",
-        pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="RecursiveMapElement"))),
-    )
-    builder.add(
-        "declarations",
         pb.Declaration(
             kind=Oneof[Literal["constructor"], pb.Constructor](
                 "constructor", pb.Constructor(name="WrapRecursiveMap", inputs=[pb.Arg(sort=mapping)], output=element)
@@ -3789,14 +3785,16 @@ def test_class_and_initializer_documentation_presence(doc):
 def test_owned_definition_lookup_keeps_exact_refs_without_detaching(monkeypatch, name, later):
     requested = pb.Program(
         sorts=[
-            pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64")))
+            pb.Sort(
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))
+            ),
+            pb.Sort(kind=Oneof("eq", name)),
         ],
         declarations=[
             pb.Declaration(
                 kind=Oneof[Literal["relation"], pb.Relation]("relation", pb.Relation(name=name)),
                 doc="retained documentation",
             ),
-            pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name=name))),
         ],
         nodes=[pb.Node(kind=Oneof[Literal["var"], str]("var", "origin"))],
     )
@@ -3807,7 +3805,7 @@ def test_owned_definition_lookup_keeps_exact_refs_without_detaching(monkeypatch,
     expected = {
         "callable": original.ref("declarations", 0),
         "primitive_sort": native.ref("primitive_sorts", 0),
-        "eq_sort": original.ref("declarations", 1),
+        "eq_sort": original.ref("sorts", 1),
     }
     _required_oneof(requested.declarations[0].kind, "relation", pb.Relation).name = "changed caller input"
     detached = expected["callable"].read()
@@ -3894,7 +3892,7 @@ def test_owned_definition_lookup_and_deconstruction_are_linear(monkeypatch):
             patch.setattr(runtime, "_definition_key", counted_key)
             owner = builder.publish()
             assert visits == 0
-            assert getattr(owner, "_declaration_indices", None) is None
+            assert getattr(owner, "_definition_indices", None) is None
             for _ in range(2):
                 for index in range(size):
                     expression = RuntimeExpr(owner.ref("nodes", index))
@@ -3903,9 +3901,9 @@ def test_owned_definition_lookup_and_deconstruction_are_linear(monkeypatch):
                     recovered = get_callable_fn(expression)
                     assert isinstance(recovered, RuntimeFunction)
                     assert recovered.__egg_ref__ == expected
-        indices = getattr(owner, "_declaration_indices", None) or {}
+        indices = getattr(owner, "_definition_indices", None) or {}
         retained = sum(len(slots) for slots in indices.values())
-        assert all(type(slot) is int for slots in indices.values() for slot in slots)
+        assert all(role == "declarations" and type(slot) is int for slots in indices.values() for role, slot in slots)
         measurements.append((size, visits, retained))
         released = weakref(owner)
         del owner, expected, expression, recovered

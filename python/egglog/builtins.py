@@ -304,7 +304,7 @@ for _definition in _catalog.definitions.values():
         _kind = _declaration.kind.value
     else:
         _kind = _declaration
-    if not isinstance(_kind, pb.PrimitiveSort | pb.EqSort):
+    if not isinstance(_kind, pb.PrimitiveSort):
         continue
     _binding = presentation(_definition).type_view
     _path = tuple(_binding.path) if _binding is not None else (*__name__.split("."), _kind.name)

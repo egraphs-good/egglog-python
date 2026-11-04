@@ -45,8 +45,9 @@ class Catalog:
         self.owner = program if isinstance(program, Owner) else Builder.from_program(program).publish()
         self.roots = tuple(
             self.owner.ref(role, index)
-            for role in ("primitive_sorts", "primitives", "declarations")
+            for role in ("primitive_sorts", "primitives", "sorts", "declarations")
             for index in range(len(self.owner._slots[role]))
+            if _definition_key(self.owner.ref(role, index).read()) is not None
         )
         self.reindex()
 
@@ -55,8 +56,8 @@ class Catalog:
         """Index already-published definitions without copying their owners/identity."""
         result = object.__new__(cls)
         result.roots = tuple(dict.fromkeys(ref.owner.ref(ref.role, ref.index) for ref in declarations))
-        if any(reference.role not in {"declarations", "primitive_sorts", "primitives"} for reference in result.roots):
-            msg = "Catalog roots must be canonical declaration references"
+        if any(_definition_key(reference.read()) is None for reference in result.roots):
+            msg = "Catalog roots must be canonical named setup references"
             raise TypeError(msg)
         result.reindex()
         return result
@@ -69,7 +70,7 @@ class Catalog:
         constants: dict[tuple[str, ...], tuple[Ref, int]] = {}
         members: dict[tuple[tuple[str, str] | None, str], tuple[Ref, int]] = {}
         for ref in self.roots:
-            declaration: pb.Declaration | pb.Primitive | pb.PrimitiveSort = ref.read()
+            declaration: pb.Sort | pb.Node | pb.Declaration | pb.Primitive | pb.PrimitiveSort = ref.read()
             key = _definition_key(declaration)
             assert key is not None
             if key in definitions:
@@ -83,7 +84,7 @@ class Catalog:
                 kind = declaration.kind.value
             else:
                 kind = declaration
-            if isinstance(kind, pb.PrimitiveSort | pb.EqSort):
+            if isinstance(kind, (pb.PrimitiveSort, pb.Sort)):
                 binding = presentation(ref).type_view
                 if binding is not None:
                     # type() can return names that static Python class syntax

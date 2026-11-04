@@ -31,7 +31,6 @@ def snapshot():
             ),
         ],
         declarations=[
-            pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="A"))),
             pb.Declaration(
                 kind=Oneof[Literal["constructor"], pb.Constructor](
                     "constructor", pb.Constructor(name="C", inputs=[pb.Arg(sort=1)], output=0)
@@ -181,7 +180,6 @@ def test_snapshot_function_type_labels_use_only_owned_records(monkeypatch):
             pb.Sort(kind=Oneof[Literal["func"], pb.FuncSort]("func", pb.FuncSort(params=[2], result=1))),
         ],
         declarations=[
-            pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="A"))),
             pb.Declaration(
                 kind=Oneof[Literal["function"], pb.Function]("function", pb.Function(name="callback", output=3))
             ),

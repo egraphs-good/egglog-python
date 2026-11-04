@@ -185,22 +185,11 @@ def get_constant_name(x: object) -> Ident | None:
 
 
 def get_let_name(x: object) -> str | None:
-    """Return the exact retained local-let name, or None for other expressions."""
+    """Return a global binding's exact name, or None for other expressions."""
     if not isinstance(x, RuntimeExpr):
         raise TypeError(f"Expected Expression, got {type(x).__name__}")
     node: pb.Node = x.__egg_ref__.read()
-    if node.kind is None or node.kind.field != "call":
-        return None
-    declaration = _definition_at(x.__egg_ref__, "callable", node.kind.value.func)
-    views = presentation(declaration).views
-    if views and views[0].kind == CallKind.CONSTANT:
-        if node.kind.value.args:
-            msg = "A constant call must be nullary"
-            raise ValueError(msg)
-        path = views[0].path
-        if len(path) == 4 and path[:2] == ("egglog", "egraph") and path[2].startswith("__egglog_python_let_"):
-            return path[3]
-    return None
+    return node.kind.value if node.kind is not None and node.kind.field == "binding" else None
 
 
 def get_var_name(x: object) -> str | None:

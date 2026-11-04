@@ -1120,7 +1120,6 @@ def test_nominal_and_primitive_sort_member_owners_recover_independently(generic)
             pb.Node(sort_id=1, kind=Oneof[Literal["var"], str]("var", "nominal")),
         ],
         declarations=[
-            pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="Number"))),
             pb.Declaration(
                 kind=Oneof[Literal["constructor"], pb.Constructor](
                     "constructor", pb.Constructor(name="nominal.tag", inputs=[pb.Arg(sort=1)], output=1)
@@ -1138,7 +1137,7 @@ def test_nominal_and_primitive_sort_member_owners_recover_independently(generic)
         }
 
     owner = Builder.from_program(source, environment=(ambient,)).publish(presentation_factory=views)
-    catalog = Catalog.from_refs([*Catalog(ambient).roots, owner.ref("declarations", 0), owner.ref("declarations", 1)])
+    catalog = Catalog.from_refs([*Catalog(ambient).roots, owner.ref("sorts", 1), owner.ref("declarations", 0)])
     host = _class_for_sort(owner.ref("sorts", 0))
     nominal = _class_for_sort(owner.ref("sorts", 1))
     assert host != nominal
@@ -1171,7 +1170,7 @@ def test_nominal_and_primitive_sort_member_owners_recover_independently(generic)
 
     colliding = Builder.from_program(source, environment=(ambient,)).publish(presentation_factory=colliding_views)
     with pytest.raises(ValueError, match="Python binding collision"):
-        Catalog.from_refs([*Catalog(ambient).roots, colliding.ref("declarations", 0), colliding.ref("declarations", 1)])
+        Catalog.from_refs([*Catalog(ambient).roots, colliding.ref("sorts", 1), colliding.ref("declarations", 0)])
 
 
 @pytest.mark.parametrize("nominal", [False, True])
@@ -1186,15 +1185,15 @@ def test_class_and_pretty_recovery_never_use_other_sort_kind(nominal):
                 else Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="Number"))
             )
         ],
-        declarations=[]
-        if nominal
-        else [pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="Number")))],
     )
     owner = Builder.from_program(source, environment=(ambient,) if nominal else ()).publish()
     namespace = "eq_sort" if nominal else "primitive_sort"
     for recover in (_class_for_sort, pretty_ref):
-        with pytest.raises(LookupError, match=f"No owned canonical definition for {namespace} 'Number'"):
-            recover(owner.ref("sorts", 0))
+        if nominal:
+            assert str(recover(owner.ref("sorts", 0))) == "Number"
+        else:
+            with pytest.raises(LookupError, match=f"No owned canonical definition for {namespace} 'Number'"):
+                recover(owner.ref("sorts", 0))
 
 
 def test_catalog_rejects_ambiguous_presentation_and_invalid_paths():
@@ -1392,14 +1391,13 @@ def test_constant_presentation_accepts_each_concrete_nullary_callable(kind):
                 )
             ],
             declarations=[
-                pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="E"))),
                 pb.Declaration(kind=kinds[kind]),
             ],
         )
         builder = Builder.from_program(source)
         builder.presentations["callable", "c"] = surface
         owner = builder.publish()
-        reference = owner.ref("declarations", 1)
+        reference = owner.ref("declarations", 0)
     catalog = Catalog.from_refs([reference])
     assert (reference.read().name if kind == "primitive" else reference.read().kind.field) == (
         "c" if kind == "primitive" else kind

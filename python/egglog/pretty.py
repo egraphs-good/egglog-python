@@ -262,7 +262,23 @@ def pretty_ref(  # noqa: C901, PLR0912
             if record.kind is None:
                 msg_0 = "Cannot print a command without a kind"
                 raise ValueError(msg_0)
-            if record.kind.field == "run":
+            if record.kind.field == "let":
+                assignment = record.kind.value
+                if not assignment.has_field("binding") or not assignment.has_field("value"):
+                    msg_0 = "Cannot print a Let without binding and value"
+                    raise ValueError(msg_0)
+                binding_node: pb.Node = owner.ref("nodes", assignment.binding).read()
+                if binding_node.kind is None or binding_node.kind.field != "binding":
+                    msg_0 = "Let target must be a binding node"
+                    raise ValueError(msg_0)
+                pieces = [
+                    "let(",
+                    repr(binding_node.kind.value),
+                    ", ",
+                    (owner.ref("nodes", assignment.value), False, False),
+                    ")",
+                ]
+            elif record.kind.field == "run":
                 selected = record.kind.value
                 pieces = ["run("]
                 if len(selected.rulesets) > 1:
@@ -373,13 +389,8 @@ def pretty_ref(  # noqa: C901, PLR0912
                 pieces = [sort_names.get((namespace, name), name)]
             else:
                 sort_reference = _definition_at(reference, namespace, name)
-                sort_declaration: pb.Declaration | pb.PrimitiveSort = sort_reference.read()
-                if isinstance(sort_declaration, pb.Declaration):
-                    assert sort_declaration.kind is not None
-                    sort_kind = sort_declaration.kind.value
-                else:
-                    sort_kind = sort_declaration
-                assert isinstance(sort_kind, pb.EqSort | pb.PrimitiveSort)
+                sort_declaration: pb.Sort | pb.PrimitiveSort = sort_reference.read()
+                assert isinstance(sort_declaration, pb.Sort | pb.PrimitiveSort)
                 bindings = presentation(sort_reference).type_view
                 path = bindings.path if bindings is not None else (name,)
                 pieces = [path[-1]]
@@ -396,6 +407,8 @@ def pretty_ref(  # noqa: C901, PLR0912
                 raise ValueError(msg)
             sort = owner.ref("sorts", record.sort_id)
             match record.kind.field:
+                case "binding":
+                    pieces = [record.kind.value]
                 case "var":
                     name = record.kind.value
                     pieces = [variables.get(name, name) if variables is not None else name]

@@ -192,7 +192,6 @@ def _proof_program() -> pb.Program:
             pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Num")),
         ],
         declarations=[
-            pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="Num"))),
             *(
                 pb.Declaration(
                     kind=Oneof[Literal["constructor"], pb.Constructor](

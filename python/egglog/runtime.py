@@ -204,9 +204,6 @@ def _author_call(  # noqa: C901, PLR0912
             inputs, output = kind.inputs, kind.output
         case pb.Relation():
             inputs, output = kind.inputs, None
-        case _:
-            msg = f"Call authoring for {type(kind).__name__} is not migrated yet"
-            raise NotImplementedError(msg)
     if view_index is None:
         # Conservative derived free-function binding: no synthetic metadata is
         # persisted or installed. The generator checks its exported path.
@@ -579,12 +576,25 @@ class _ClassContext:
 def _definition_at(origin: Ref, namespace: str, name: str) -> Ref:
     """Resolve owned definitions before consulting the ambient native catalog."""
     matches = {
-        origin.owner.ref("declarations", index) for index in origin.owner.declaration_indices.get((namespace, name), ())
+        origin.owner.ref(role, index) for role, index in origin.owner.definition_indices.get((namespace, name), ())
     }
+    if namespace in {"eq_sort", "binding"}:
+        matches.update(
+            environment.ref(role, index)
+            for environment in origin.owner._environment
+            for role, index in environment.definition_indices.get((namespace, name), ())
+        )
     if len(matches) > 1:
-        raise ValueError(f"Ambiguous local definition: {namespace} {name!r}")
+        first = next(iter(matches))
+        if namespace not in {"eq_sort", "binding"} or any(
+            StructuralView(first) != StructuralView(other) for other in matches
+        ):
+            raise ValueError(f"Ambiguous local definition: {namespace} {name!r}")
     if matches:
-        return next(iter(matches))
+        return next(
+            (reference for reference in matches if (namespace, name) in reference.owner._presentations),
+            next(iter(matches)),
+        )
     role = "primitives" if namespace == "callable" else "primitive_sorts"
     candidates = (origin.owner.ref(role, index) for index in range(len(origin.owner._slots[role])))
     selected = tuple(
@@ -680,10 +690,16 @@ class RuntimeClass(type):
         if structural_function:
             binding = None
             path = ("egglog", "builtins", "UnstableFn")
-        elif isinstance(kind, pb.PrimitiveSort | pb.EqSort):
+        elif isinstance(kind, pb.PrimitiveSort | pb.Sort):
             assert isinstance(definition, Ref)
+            if isinstance(kind, pb.Sort):
+                assert kind.kind is not None
+                assert kind.kind.field == "eq"
+                name = kind.kind.value
+            else:
+                name = kind.name
             binding = presentation(definition).type_view
-            path = tuple(binding.path) if binding is not None else ("egglog", "builtins", kind.name)
+            path = tuple(binding.path) if binding is not None else ("egglog", "builtins", name)
         else:
             msg = "RuntimeClass requires a canonical sort declaration"
             raise TypeError(msg)
@@ -718,22 +734,26 @@ class RuntimeClass(type):
                 result.__egg_hooks__ = _BASE_CLASSES["UnstableFn"].__egg_hooks__
         elif sort is None and not arguments:
             assert isinstance(definition, Ref)
-            assert isinstance(kind, pb.PrimitiveSort | pb.EqSort)
+            assert isinstance(kind, pb.PrimitiveSort | pb.Sort)
             arity = kind.arity if isinstance(kind, pb.PrimitiveSort) else 0
             if arity:
                 labels = binding.type_params if binding is not None else ()
                 result.__egg_arguments__ = tuple(
                     TypeVar(labels[index] if labels else f"T{index}") for index in range(arity)
                 )
+            elif isinstance(kind, pb.Sort):
+                result.__egg_sort__ = definition
             else:
                 builder = Builder()
                 builder.import_ref(definition)
-                sort_kind = (
-                    Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name=kind.name))
-                    if isinstance(kind, pb.PrimitiveSort)
-                    else Oneof[Literal["eq"], str]("eq", kind.name)
+                index = builder.add(
+                    "sorts",
+                    pb.Sort(
+                        kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+                            "primitive", pb.PrimitiveSortRef(name=kind.name)
+                        )
+                    ),
                 )
-                index = builder.add("sorts", pb.Sort(kind=sort_kind))
                 result.__egg_sort__ = builder.publish().ref("sorts", index)
             if isinstance(kind, pb.PrimitiveSort):
                 _BASE_CLASSES[kind.name] = result
@@ -814,13 +834,14 @@ class RuntimeClass(type):
                 raise TypeError(msg)
             return _function_value(function, tuple(captures), cls.__egg_sort__, environment=())
         assert isinstance(cls.__egg_definition__, Ref)
-        declaration: pb.Declaration | pb.Primitive | pb.PrimitiveSort = cls.__egg_definition__.read()
-        if isinstance(declaration, pb.Declaration):
-            assert declaration.kind is not None
-            kind = declaration.kind.value
+        declaration: pb.Sort | pb.PrimitiveSort = cls.__egg_definition__.read()
+        kind = declaration
+        if isinstance(kind, pb.Sort):
+            assert kind.kind is not None
+            assert kind.kind.field == "eq"
+            name = kind.kind.value
         else:
-            kind = declaration
-        name = kind.name
+            name = kind.name
         if (
             isinstance(kind, pb.PrimitiveSort)
             and name in SCALAR_PROTOCOLS

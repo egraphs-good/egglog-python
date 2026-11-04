@@ -18,6 +18,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from egglog_proto.egglog.v1 import egglog_pb as pb
+from protobuf import Oneof
 
 import egglog.bindings as egg_bindings
 import egglog.builtins as egg_builtins
@@ -82,7 +83,12 @@ def _restore_snapshot(snapshot: pb.EGraphSnapshot, *, environment: tuple[Owner, 
     restored = EGraph()
     restored._state.run_program(
         pack(
-            roots=[owner.ref("declarations", index) for index in range(len(snapshot.program.declarations))],
+            roots=[
+                owner.ref(role, index)
+                for role in ("sorts", "nodes", "declarations")
+                for index, record in enumerate(getattr(snapshot.program, role))
+                if role == "declarations" or (record.kind is not None and record.kind.field in {"eq", "binding"})
+            ],
             commands=[owner.ref("commands", index) for index in range(len(snapshot.program.commands))],
         )
     )
@@ -418,14 +424,8 @@ def test_saved_transcript_preserves_literal_explicit_sort_name() -> None:
     egraph.check(eq(mapping[value]).to(i64(7)), eq(mapping.length()).to(i64(1)))
     snapshot = pb.EGraphSnapshot.from_binary(egraph.freeze().to_binary())
     assert snapshot.program is not None
-    sort = next(
-        declaration.kind.value
-        for declaration in snapshot.program.declarations
-        if declaration.kind is not None
-        and declaration.kind.field == "eq_sort"
-        and declaration.kind.value.name == "true"
-    )
-    assert sort.name == "true"
+    sort = next(sort for sort in snapshot.program.sorts if sort.kind == Oneof("eq", "true"))
+    assert sort.kind == Oneof("eq", "true")
     sort_definition = cast("RuntimeClass", LiteralNamed).__egg_definition__
     assert isinstance(sort_definition, Ref)
     view = presentation(sort_definition).type_view
@@ -444,14 +444,8 @@ def test_saved_transcript_preserves_unparseable_explicit_sort_name() -> None:
     egraph.check(eq(mapping[value]).to(i64(7)), eq(mapping.length()).to(i64(1)))
     snapshot = pb.EGraphSnapshot.from_binary(egraph.freeze().to_binary())
     assert snapshot.program is not None
-    sort = next(
-        declaration.kind.value
-        for declaration in snapshot.program.declarations
-        if declaration.kind is not None
-        and declaration.kind.field == "eq_sort"
-        and declaration.kind.value.name == "has space"
-    )
-    assert sort.name == "has space"
+    sort = next(sort for sort in snapshot.program.sorts if sort.kind == Oneof("eq", "has space"))
+    assert sort.kind == Oneof("eq", "has space")
     sort_definition = cast("RuntimeClass", UnparseableNamed).__egg_definition__
     assert isinstance(sort_definition, Ref)
     view = presentation(sort_definition).type_view
@@ -471,14 +465,8 @@ def test_saved_transcript_preserves_context_sensitive_explicit_sort_name(egg_nam
     egraph.check(eq(mapping[value]).to(i64(7)), eq(mapping.length()).to(i64(1)))
     snapshot = pb.EGraphSnapshot.from_binary(egraph.freeze().to_binary())
     assert snapshot.program is not None
-    sort = next(
-        declaration.kind.value
-        for declaration in snapshot.program.declarations
-        if declaration.kind is not None
-        and declaration.kind.field == "eq_sort"
-        and declaration.kind.value.name == egg_name
-    )
-    assert sort.name == egg_name
+    sort = next(sort for sort in snapshot.program.sorts if sort.kind == Oneof("eq", egg_name))
+    assert sort.kind == Oneof("eq", egg_name)
     sort_definition = cast("RuntimeClass", ContextSensitiveNamed).__egg_definition__
     assert isinstance(sort_definition, Ref)
     view = presentation(sort_definition).type_view
@@ -504,9 +492,12 @@ def test_saved_transcript_preserves_unparseable_let_name(name: str) -> None:
     egraph.check(eq(first).to(i64(1)), eq(second).to(i64(2)))
     snapshot = pb.EGraphSnapshot.from_binary(egraph.freeze().to_binary())
     assert snapshot.program is not None
+    assert get_let_name(first) == name
+    assert get_let_name(second) == safe_name
     bindings = {
-        presentation(reference).views[0].path[-1]: reference.read().kind.value.name
-        for reference in (resolve_callable(first), resolve_callable(second))
+        node.kind.value: index
+        for index, node in enumerate(snapshot.program.nodes)
+        if node.kind is not None and node.kind.field == "binding"
     }
     assert bindings.keys() == {name, safe_name}
     assert bindings[name] != bindings[safe_name]
@@ -736,30 +727,20 @@ def test_lookup_function_value_constructor_row() -> None:
         egraph.lookup_function_value(observed.score())
 
 
-def test_let_auto_prefixes_global_names(capfd: pytest.CaptureFixture[str]):
+def test_let_uses_global_binding_without_public_function(capfd: pytest.CaptureFixture[str]):
     egraph = EGraph(save_egglog_string=True)
-
     x = egraph.let("x", i64(1))
     egraph.check(eq(x).to(i64(1)))
-
-    captured = capfd.readouterr()
-    assert "should start with `$`" not in captured.err
-    snapshot = pb.EGraphSnapshot.from_binary(egraph.freeze().to_binary())
+    assert "should start with `$`" not in capfd.readouterr().err
+    node = expr_parts(x).ref.read()
+    assert node.kind == Oneof("binding", "x")
+    snapshot = egraph.freeze()
     assert snapshot.program is not None
-    declaration = next(
-        declaration
-        for declaration in snapshot.program.declarations
-        if declaration.kind is not None and declaration.kind.value.name == resolve_callable(x).read().kind.value.name
-    )
-    assert declaration.kind is not None
-    assert declaration.kind.field == "function"
-    assert declaration.kind.value.inputs == []
-    assert not declaration.kind.value.has_field("merge")
-    node = cast("RuntimeExpr", x).__egg_ref__.read()
-    assert node.kind is not None
-    assert node.kind.field == "call"
-    assert node.kind.value.func == declaration.kind.value.name
-    assert node.kind.value.args == []
+    assert snapshot.program.declarations == []
+    assert any(node.kind == Oneof("binding", "x") for node in snapshot.program.nodes)
+    assert sum(command.kind is not None and command.kind.field == "let" for command in snapshot.program.commands) == 1
+    with pytest.raises(TypeError):
+        resolve_callable(x)
     _replay_recorded_source(egraph.as_egglog_string)
 
 
@@ -767,67 +748,75 @@ def test_named_let_actions_reconcile_across_independent_owners() -> None:
     from egglog._program import pack  # noqa: PLC0415
 
     first = let("shared", i64(1))
-    second = let("shared", i64(1))
+    second = let("shared", i64(2))
     packed = pack(commands=[first.__egg_ref__, second.__egg_ref__])
-    declarations = [
-        declaration.kind.value
-        for declaration in packed.program.declarations
-        if declaration.kind is not None and declaration.kind.field == "function"
-    ]
-    assert len(declarations) == 1
-    declaration = declarations[0]
-    assert declaration.name == "__egglog_python_let_736861726564"
-    assert declaration.inputs == []
-    assert not declaration.has_field("merge")
+    assert packed.program.declarations == []
+    targets = []
     for command in packed.program.commands:
         assert command.kind is not None
-        assert command.kind.field == "action"
-        assert command.kind.value.kind is not None
-        assert command.kind.value.kind.field == "set"
-        assert command.kind.value.kind.value.target is not None
-        assert command.kind.value.kind.value.target.func == declaration.name
-
+        assert command.kind.field == "let"
+        target = command.kind.value.binding
+        assert packed.program.nodes[target].kind == Oneof("binding", "shared")
+        targets.append(target)
+    assert targets[0] == targets[1]
     graph = EGraph(save_egglog_string=True)
     graph.register(first, second)
-    saved = graph.let("shared", i64(1))
-    graph.check(eq(saved).to(i64(1)))
-    _replay_recorded_source(graph.as_egglog_string)
+    saved = graph.let("shared", i64(3))
+    graph.check(eq(saved).to(i64(3)))
+    with pytest.raises(ValueError, match="source rendering does not support global rebinding"):
+        _ = graph.as_egglog_string
 
 
 def test_named_lets_preserve_exact_names_without_sanitization_collisions() -> None:
     names = ["", "x", "$x", "has space", "has_space", "caf\u00e9", "cafe\u0301", "x;y", "x_y"]
     graph = EGraph(save_egglog_string=True)
-    named = {}
     for index, name in enumerate(names):
         saved = graph.let(name, i64(index))
-        named[name] = resolve_callable(saved)
-        node = expr_parts(saved).ref.read()
-        assert node.kind is not None
-        assert node.kind.field == "call"
-        assert node.kind.value.func == f"__egglog_python_let_{name.encode('utf-8').hex()}"
+        assert expr_parts(saved).ref.read().kind == Oneof("binding", name)
+        assert get_let_name(saved) == name
         graph.check(eq(saved).to(i64(index)))
-    snapshot = pb.EGraphSnapshot.from_binary(graph.freeze().to_binary())
+    snapshot = graph.freeze()
     assert snapshot.program is not None
-    bindings = {
-        presentation(reference).views[0].path[-1]: reference.read().kind.value.name for reference in named.values()
-    }
-    assert bindings.keys() == set(names)
-    assert len(set(bindings.values())) == len(names)
+    bindings = [
+        node.kind.value for node in snapshot.program.nodes if node.kind is not None and node.kind.field == "binding"
+    ]
+    assert set(bindings) == set(names)
+    assert len(bindings) == len(names)
+    assert snapshot.program.declarations == []
     _replay_recorded_source(graph.as_egglog_string)
 
 
-def test_named_let_unequal_initializers_use_native_no_merge() -> None:
+def test_named_let_rebinding_reads_old_value_and_preserves_failed_initializer() -> None:
     graph = EGraph()
     saved = graph.let("same", i64(1))
-
+    graph.let("same", saved + i64(1))
+    graph.check(eq(saved).to(i64(2)))
+    graph.register(set_(saved).to(saved + i64(1)))
+    graph.check(eq(saved).to(i64(3)))
     with pytest.raises(EggSmolError) as exc_info:
-        graph.let("same", i64(2))
-
+        graph.let("same", i64(1) / i64(0))
     error = exc_info.value.__dict__["_egglog_proto_error"]
     assert error.code == pb.ErrorCode.RUNTIME_FAILURE
     assert error.location is not None
     assert error.location.path == [0]
-    graph.check(eq(saved).to(i64(1)))
+    graph.check(eq(saved).to(i64(3)))
+
+
+def test_named_let_loop_rebinding_and_rule_head_rejection() -> None:
+    graph = EGraph()
+    saved = graph.let("count", i64(0))
+    increment = let("count", saved + i64(1))
+    graph.run(seq(increment) * 0)
+    graph.check(eq(saved).to(i64(0)))
+    graph.run(seq(increment) * 3)
+    graph.check(eq(saved).to(i64(3)))
+    graph.run(seq(let("count", saved)).saturate())
+    graph.check(eq(saved).to(i64(3)))
+    lexical = var("count", i64)
+    graph.check(eq(lexical).to(i64(99)))
+    assert get_var_name(lexical) == get_let_name(saved) == "count"
+    with pytest.raises(TypeError, match=r"Let.*rule heads"):
+        rule(eq(saved).to(i64(3))).then(increment)
 
 
 def test_named_let_incompatible_output_sort_rejects_before_effects() -> None:
@@ -1191,7 +1180,7 @@ def test_compatible_sort_aliases_keep_local_classes_and_shared_semantic_sort(*, 
     assert str(ExplicitLateSort()) == "ExplicitLateSort()"
     snapshot = egraph.freeze()
     assert snapshot.program is not None
-    assert sum(d.kind is not None and d.kind.field == "eq_sort" for d in snapshot.program.declarations) == 1
+    assert sum(sort.kind is not None and sort.kind.field == "eq" for sort in snapshot.program.sorts) == 1
     if save_egglog_string:
         _replay_recorded_source(egraph.as_egglog_string)
 
@@ -1424,11 +1413,8 @@ def test_saved_egglog_string_uses_qualified_generated_sort_and_function_names() 
     egraph.register(value)
     snapshot = pb.EGraphSnapshot.from_binary(egraph.freeze().to_binary())
     assert snapshot.program is not None
-    sort = next(
-        declaration.kind.value
-        for declaration in snapshot.program.declarations
-        if declaration.kind is not None and declaration.kind.field == "eq_sort"
-    )
+    sort = next(sort for sort in snapshot.program.sorts if sort.kind is not None and sort.kind.field == "eq")
+    assert sort.kind is not None
     sort_definition = cast("RuntimeClass", Num).__egg_definition__
     assert isinstance(sort_definition, Ref)
     type_view = presentation(sort_definition).type_view
@@ -1447,11 +1433,11 @@ def test_saved_egglog_string_uses_qualified_generated_sort_and_function_names() 
     assert constructor_kind.field == "constructor"
     constructor = constructor_kind.value
     assert view.owner is not None
-    assert view.owner.read().kind.value == sort.name
+    assert view.owner.read().kind.value == sort.kind.value
     output = snapshot.program.sorts[constructor.output]
     assert output.kind is not None
     assert output.kind.field == "eq"
-    assert output.kind.value == sort.name
+    assert output.kind.value == sort.kind.value
     argument = snapshot.program.sorts[constructor.inputs[0].sort]
     assert argument.kind is not None
     assert argument.kind.field == "primitive"
@@ -1529,8 +1515,7 @@ def test_registering_let_reference_preserves_bound_value() -> None:
     assert egraph.lookup_function_value(x) == i64(1)
     node = cast("RuntimeExpr", x).__egg_ref__.read()
     assert node.kind is not None
-    assert node.kind.field == "call"
-    assert node.kind.value.args == []
+    assert node.kind == Oneof("binding", "x")
     egraph.check(eq(x).to(i64(1)))
     _replay_recorded_source(egraph.as_egglog_string)
 
@@ -3011,7 +2996,12 @@ class TestDefaultReplacements:
         restored = EGraph()
         restored._state.run_program(
             pack(
-                roots=[owner.ref("declarations", index) for index in range(len(snapshot.program.declarations))],
+                roots=[
+                    owner.ref(role, index)
+                    for role in ("sorts", "nodes", "declarations")
+                    for index, record in enumerate(getattr(snapshot.program, role))
+                    if role == "declarations" or (record.kind is not None and record.kind.field in {"eq", "binding"})
+                ],
                 commands=[owner.ref("commands", index) for index in range(len(snapshot.program.commands))],
             )
         )
@@ -4928,6 +4918,17 @@ def test_keep_best_discards_unselected_bindings_until_a_parent_scope_is_restored
 
     egraph.push()
     egraph.keep_best(score)
+    compacted = egraph.freeze()
+    assert compacted.program is not None
+    retained_slots = [
+        index for index, node in enumerate(compacted.program.nodes) if node.kind == Oneof("binding", "parent-key")
+    ]
+    assert len(retained_slots) == 1
+    assert not any(
+        command.kind is not None and command.kind.field == "let" and command.kind.value.binding == retained_slots[0]
+        for command in compacted.program.commands
+    )
+    assert egraph.lookup_function_value(parent_key) is None
     fresh_key = egraph.let("fresh-key", CompactKey(1))
     assert egraph.lookup_function_value(score(fresh_key)) == i64(11)
     assert egraph.lookup_function_value(score(parent_key)) is None

@@ -287,20 +287,24 @@ class EGraphState:
             msg = "Cannot adopt unknown Program fields"
             raise NotImplementedError(msg)
         definitions = self.definitions.copy()
-        observed = {_definition_key(declaration) for declaration in program.declarations}
+        observed = {
+            _definition_key(record)
+            for records in (program.sorts, program.nodes, program.declarations)
+            for record in records
+        }
         # Native observation starts after installation but before its response
         # response reaches Python. Retain first-use source contexts only for
         # definitions actually present in the owned native observation.
         for reference in pending:
-            if reference.role == "declarations" and (key := _definition_key(reference.read())) in observed:
-                assert key is not None
+            if (key := _definition_key(reference.read())) is not None and key in observed:
                 definitions[key] = reference
         builder = Builder.from_program(
             pb.Program(
                 nodes=program.nodes,
                 sorts=program.sorts,
                 files=program.files,
-            )
+            ),
+            environment=(reference.owner for reference in definitions.values()),
         )
         for declaration in program.declarations:
             if _definition_key(declaration) not in definitions:
@@ -308,7 +312,8 @@ class EGraphState:
                 # their arena references already address the owned values.
                 builder.add("declarations", declaration)
         for reference in definitions.values():
-            builder.import_ref(reference)
+            if reference.role == "declarations":
+                builder.import_ref(reference)
         return builder.publish()
 
     def copy(self) -> EGraphState:
@@ -353,7 +358,7 @@ class EGraphState:
 class _CostModelObservation:
     """Lookup-only indexes over one owned normative observation Program."""
 
-    def __init__(self, state: EGraphState, program: pb.Program) -> None:
+    def __init__(self, state: EGraphState, program: pb.Program) -> None:  # noqa: C901
         self.program = program
         self.owner = state._adopt_value_records(program, pending=state._active_definitions)
         self.registered = frozenset(
@@ -366,6 +371,11 @@ class _CostModelObservation:
         )
         self.rows: dict[tuple[str, tuple[int, ...]], int] = {}
         self.assigned: dict[tuple[str, tuple[int, ...]], int] = {}
+        self.bindings: dict[str, tuple[int, int | None]] = {
+            node.kind.value: (index, None)
+            for index, node in enumerate(program.nodes)
+            if node.kind is not None and node.kind.field == "binding"
+        }
         for node_index, node in enumerate(program.nodes):
             if node.kind is not None and node.kind.field == "union":
                 for member in node.kind.value.members:
@@ -374,6 +384,13 @@ class _CostModelObservation:
                         call = alternative.kind.value
                         self.rows[call.func, tuple(call.args)] = node_index
         for command in program.commands:
+            if command.kind is not None and command.kind.field == "let":
+                assignment = command.kind.value
+                if assignment.has_field("binding") and assignment.has_field("value"):
+                    target = program.nodes[assignment.binding]
+                    if target.kind is not None and target.kind.field == "binding":
+                        self.bindings[target.kind.value] = (assignment.binding, assignment.value)
+                continue
             if command.kind is None or command.kind.field != "action" or command.kind.value.kind is None:
                 continue
             action = command.kind.value.kind
@@ -410,6 +427,14 @@ class _CostModelObservation:
     def lookup(self, reference: Ref, *, supplied: frozenset[Ref] | None) -> Ref | None:
         """Resolve existing rows without evaluating arguments or publishing declarations."""
         node: pb.Node = reference.read()
+        allowed = (
+            supplied
+            if supplied is not None
+            else frozenset(self.owner.ref("nodes", i) for i in range(len(self.program.nodes)))
+        )
+        if node.kind is not None and node.kind.field == "binding":
+            value = self._resolve(reference, allowed, callback=supplied is not None)
+            return None if value is None else self.owner.ref("nodes", value)
         if node.kind is None or node.kind.field not in {"call", "get_cost"}:
             msg = "Can only look up a table call or assigned cost"
             raise TypeError(msg)
@@ -417,11 +442,6 @@ class _CostModelObservation:
         if ("callable", call.func) not in self.registered:
             msg = "Lookup tables must be registered before extraction starts"
             raise ValueError(msg)
-        allowed = (
-            supplied
-            if supplied is not None
-            else frozenset(self.owner.ref("nodes", i) for i in range(len(self.program.nodes)))
-        )
 
         # A missing row must not hide a later invalid observation.
         resolved_args = [
@@ -437,11 +457,24 @@ class _CostModelObservation:
         result = (self.assigned if node.kind.field == "get_cost" else self.rows).get(key)
         return None if result is None else self.owner.ref("nodes", result)
 
-    def _resolve(self, value: Ref, allowed: frozenset[Ref], *, callback: bool) -> int | None:
+    def _resolve(self, value: Ref, allowed: frozenset[Ref], *, callback: bool) -> int | None:  # noqa: C901, PLR0911, PLR0912
         value = value.owner.ref(value.role, value.index)
+        record: pb.Node = value.read()
+        if record.kind is not None and record.kind.field == "binding":
+            if callback:
+                msg = "Cost models can only look up tables using values supplied to the callback"
+                raise ValueError(msg)
+            binding = self.bindings.get(record.kind.value)
+            if binding is None:
+                return None
+            target, result = binding
+            if StructuralView(value.owner.ref("sorts", record.sort_id)) != StructuralView(
+                self.owner.ref("sorts", self.program.nodes[target].sort_id)
+            ):
+                raise ValueError(f"Binding {record.kind.value!r} has a different sort")
+            return result
         if value in allowed and value.owner is self.owner:
             return value.index
-        record: pb.Node = value.read()
         if (structural := self._portable_shape(value)) is not None:
             for candidate in allowed:
                 if StructuralView(candidate) == structural:

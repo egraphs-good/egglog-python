@@ -21,6 +21,13 @@ The Python generator joins that semantic catalog to its local presentation map;
 the map does not repeat native signatures.
 Programs, snapshots and history contain user definitions and refer to configured
 builtins by canonical keys. They do not contain builtin descriptor snapshots.
+Every equality entry in an input `Program.sorts` establishes that nominal type,
+including unused entries. Its optional `doc` and `span` carry definition metadata.
+Every typed `Node.binding` establishes a global slot in a separate name
+namespace; `Node.var` remains lexical. `Command.let` assigns a value to a binding
+node, supports same-sort rebinding and loops, and is excluded from rule heads.
+Snapshots retain all installed nominal sorts and typed slots, with one Let per
+populated slot. Saved code retains binding references while stored data is closed.
 `Program.rulesets` carries complete named collection definitions as setup before
 commands. Each supplied binding replaces its previous collection; omitted names
 retain their bindings. `Run.rulesets` selects an ordered union of literal

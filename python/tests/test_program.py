@@ -55,26 +55,22 @@ def test_frontend_type_names_follow_owned_refs_but_never_enter_programs():
     encodings = []
     for label in ("A", "Z"):
         builder = Builder()
-        definition = builder.add(
-            "declarations", pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="User")))
-        )
         builder.presentations["eq_sort", "User"] = Presentation(type_view=TypePresentation(("example", label)))
         index = builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "User")))
         owner = builder.publish()
         sort = owner.ref("sorts", index)
         sorts.append(StructuralView(sort))
         imported = Builder()
-        imported.import_ref(owner.ref("declarations", definition))
         copied = imported.import_ref(sort)
         owner = imported.publish()
         copied = owner.ref("sorts", copied)
-        local = presentation(owner.ref("declarations", 0)).type_view
+        local = presentation(owner.ref("sorts", 0)).type_view
         assert local is not None
         assert local.path[-1] == label
         packed = pack([copied]).program
         encodings.append(packed.to_binary())
         decoded = Builder.from_program(pb.Program.from_binary(encodings[-1])).publish()
-        detached = presentation(decoded.ref("declarations", 0)).type_view
+        detached = presentation(decoded.ref("sorts", 0)).type_view
         assert detached is not None
         assert detached.path[-1] == "User"
         assert StructuralView(copied) == StructuralView(sort)
@@ -350,9 +346,7 @@ def test_action_equality_ignores_unrelated_records_and_arena_layout(action_progr
     first = Action(
         Builder.from_program(action_program, environment=(builtin_catalog().owner,)).publish().ref("commands", 0)
     )
-    action_program.declarations += [
-        pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="unused")))
-    ]
+    action_program.sorts.append(pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "unused")))
     action_program.nodes.append(pb.Node(sort_id=1, kind=Oneof[Literal["var"], str]("var", "unused")))
     assert first == Action(
         Builder.from_program(action_program, environment=(builtin_catalog().owner,)).publish().ref("commands", 0)
@@ -443,8 +437,7 @@ def test_action_equality_compares_union_syntax_in_declaration_closure(action_pro
 def union_action_graph():
     return pb.Program(
         sorts=[pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "E"))],
-        declarations=[pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="E")))]
-        + [
+        declarations=[
             pb.Declaration(
                 kind=Oneof[Literal["constructor"], pb.Constructor](
                     "constructor", pb.Constructor(name=name, inputs=[pb.Arg(sort=0) for _ in range(arity)], output=0)
@@ -641,7 +634,6 @@ def test_action_equality_is_iterative_and_dag_safe(union_action_graph, monkeypat
 @pytest.mark.parametrize("reverse", [False, True])
 def test_nominal_family_callable_names_keep_independent_closure(reverse):
     declarations = [
-        pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="Pair"))),
         pb.Declaration(
             kind=Oneof[Literal["constructor"], pb.Constructor]("constructor", pb.Constructor(name="Pair", output=0))
         ),
@@ -679,7 +671,7 @@ def test_nominal_family_callable_names_keep_independent_closure(reverse):
     nominal, family = owner.ref("nodes", 0), owner.ref("nodes", 1)
     for roots in ([nominal, family], [family, nominal], clone_nodes([family]), [nominal, *clone_nodes([family])]):
         result = pack(roots)
-        assert {_program._definition_key(d) for d in result.program.declarations} == {
+        assert {_program._definition_key(ref.read()) for ref in result.definitions} == {
             ("eq_sort", "Pair"),
             ("callable", "Pair"),
         }
@@ -695,64 +687,80 @@ def test_nominal_family_callable_names_keep_independent_closure(reverse):
             raise StopIteration
         assert isinstance(payload, pb.PairValue)
         assert payload.first == payload.second
-    assert {_program._definition_key(d) for d in pack([nominal]).program.declarations} == {
+    assert {_program._definition_key(ref.read()) for ref in pack([nominal]).definitions} == {
         ("eq_sort", "Pair"),
         ("callable", "Pair"),
     }
 
 
-@pytest.mark.parametrize("nominal", [False, True])
 @pytest.mark.parametrize("local", [False, True])
-def test_sort_dependency_never_falls_back_to_other_kind(nominal, local):
+def test_primitive_sort_dependency_never_falls_back_to_nominal_kind(local):
     builder = Builder()
-    sort = builder.add(
-        "sorts",
-        pb.Sort(
-            kind=Oneof[Literal["eq"], str]("eq", "Pair")
-            if nominal
-            else Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="Pair"))
-        ),
-    )
-    wrong_kind = "primitive_sort" if nominal else "eq_sort"
+    sort = builder.add("sorts", pb.Sort(kind=Oneof("primitive", pb.PrimitiveSortRef(name="Pair"))))
     if local:
-        if nominal:
-            builder.add("primitive_sorts", pb.PrimitiveSort(name="Pair"))
-        else:
-            builder.add(
-                "declarations",
-                pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="Pair"))),
-            )
+        builder.add("sorts", pb.Sort(kind=Oneof("eq", "Pair")))
     reference = builder.publish().ref("sorts", sort)
     with pytest.raises(ValueError, match="missing definitions"):
-        pack([reference], ambient=() if local else {(wrong_kind, "Pair")})
-    correct_kind = "eq_sort" if nominal else "primitive_sort"
-    assert not pack([reference], ambient={(correct_kind, "Pair")}).program.declarations
+        pack([reference], ambient=() if local else {("eq_sort", "Pair")})
+    assert not pack([reference], ambient={("primitive_sort", "Pair")}).program.declarations
 
 
-@pytest.mark.parametrize("nominal", [False, True])
-def test_same_kind_sort_definition_conflicts_remain_errors(nominal):
-    if not nominal:
-        owners = [
-            Builder.from_builtins(
-                pb.BuiltinCatalog(primitive_sorts=[pb.PrimitiveSort(name="Pair", arity=arity)])
-            ).publish()
-            for arity in range(2)
-        ]
-        with pytest.raises(ValueError, match="Conflicting builtin environments"):
-            Builder(environment=owners).publish()
-        return
+def test_same_kind_sort_definitions_reconcile_metadata_and_reject_primitive_conflicts():
+    owners = [
+        Builder.from_builtins(pb.BuiltinCatalog(primitive_sorts=[pb.PrimitiveSort(name="Pair", arity=arity)])).publish()
+        for arity in range(2)
+    ]
+    with pytest.raises(ValueError, match="Conflicting builtin environments"):
+        Builder(environment=owners).publish()
     builder = Builder()
     for index in range(2):
-        builder.add(
-            "declarations",
-            pb.Declaration(
-                doc=str(index),
-                kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="Pair")),
-            ),
-        )
+        builder.add("sorts", pb.Sort(doc=str(index), kind=Oneof("eq", "Pair")))
     owner = builder.publish()
-    with pytest.raises(ValueError, match="same-name"):
-        pack([owner.ref("declarations", 0), owner.ref("declarations", 1)])
+    packed = pack([owner.ref("sorts", 0), owner.ref("sorts", 1)])
+    assert packed.indices == (0, 0)
+    assert len(packed.program.sorts) == 1
+    assert packed.program.sorts[0].doc == "0"
+    assert packed.program.declarations == []
+
+
+@pytest.mark.parametrize("name", ["", "same", "has space", "é"])
+def test_named_binding_roots_reconcile_exact_sorts_and_keep_unset_slots(name):
+    references = []
+    for family in ("i64", "i64", "String"):
+        builder = Builder()
+        sort = builder.add("sorts", pb.Sort(kind=Oneof("primitive", pb.PrimitiveSortRef(name=family))))
+        slot = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof("binding", name)))
+        references.append(builder.publish().ref("nodes", slot))
+    ambient = {("primitive_sort", "i64"), ("primitive_sort", "String")}
+    packed = pack(references[:2], ambient=ambient)
+    assert packed.indices == (0, 0)
+    assert packed.program.nodes == [pb.Node(sort_id=0, kind=Oneof("binding", name))]
+    assert packed.program.commands == []
+    assert packed.program.declarations == []
+    assert {_program._definition_key(ref.read()) for ref in packed.definitions} == {("binding", name)}
+    assert clone_nodes([references[0]]) == (references[0],)
+    with pytest.raises(ValueError, match="same-name definitions"):
+        pack([references[0], references[2]], ambient=ambient)
+
+
+def test_global_binding_nominal_callable_and_lexical_names_are_independent():
+    builder = Builder()
+    sort = builder.add("sorts", pb.Sort(kind=Oneof("eq", "same")))
+    binding = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof("binding", "same")))
+    variable = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof("var", "same")))
+    callable_ = builder.add(
+        "declarations", pb.Declaration(kind=Oneof("constructor", pb.Constructor(name="same", output=sort)))
+    )
+    owner = builder.publish()
+    packed = pack([owner.ref("nodes", binding), owner.ref("nodes", variable), owner.ref("declarations", callable_)])
+    assert {_program._definition_key(ref.read()) for ref in packed.definitions} == {
+        ("eq_sort", "same"),
+        ("binding", "same"),
+        ("callable", "same"),
+    }
+    assert packed.indices[0] != packed.indices[1]
+    assert len(packed.program.nodes) == 2
+    assert len(packed.program.sorts) == 1
 
 
 @pytest.mark.parametrize("root_kind", ["calls", "definitions", "late_owner"])
@@ -835,7 +843,6 @@ def test_pack_reconciles_independent_compatible_definitions(monkeypatch, root_ki
         assert declaration_kind is not None
         declaration_kinds.append(declaration_kind)
     assert sum(kind.value.name == "composed" for kind in declaration_kinds) == 1
-    assert all(kind.field != "eq_sort" for kind in declaration_kinds)
     assert [reference.read().to_binary() for _, reference, _ in producers] == before
     if root_kind == "definitions":
         assert packed.indices[0] == packed.indices[1]
@@ -921,10 +928,6 @@ def test_definition_reconciliation_preserves_literal_bits_and_union_identity(bod
             )
         else:
             scalar = builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "E")))
-            builder.add(
-                "declarations",
-                pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="E"))),
-            )
             kind = Oneof[Literal["union"], pb.Union]("union", pb.Union())
         body = builder.add("nodes", pb.Node(sort_id=scalar, kind=kind))
         definition = builder.add(
@@ -1097,9 +1100,6 @@ def test_late_definition_conflict_is_checked_before_dirty_demand_clears(monkeypa
 def test_template_expansion_freshens_nodes_not_definition_identity():
     builder = Builder()
     builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Box")))
-    builder.add(
-        "declarations", pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="Box")))
-    )
     declaration = builder.add(
         "declarations",
         pb.Declaration(
@@ -1118,7 +1118,7 @@ def test_template_expansion_freshens_nodes_not_definition_identity():
     assert cloned_call != owner.ref("nodes", call)
     assert first.owner.ref("declarations", 0) == owner.ref("declarations", declaration)
     combined = pack([first, second, owner.ref("nodes", call)])
-    assert len(combined.program.declarations) == 2
+    assert len(combined.program.declarations) == 1
     assert sum(node.kind is not None and node.kind.field == "union" for node in combined.program.nodes) == 2
 
 
@@ -1574,9 +1574,6 @@ def test_proof_command_relocation_and_constructor_closure():
     fact = builder.import_ref(literal(7))
     builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Box")))
     builder.add(
-        "declarations", pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="Box")))
-    )
-    builder.add(
         "declarations",
         pb.Declaration(
             kind=Oneof[Literal["constructor"], pb.Constructor]("constructor", pb.Constructor(name="box", output=0))
@@ -1621,7 +1618,8 @@ def test_proof_command_relocation_and_constructor_closure():
         kind = declaration.kind
         assert kind is not None
         names.add(kind.value.name)
-    assert names == {"box", "Box"}
+    assert names == {"box"}
+    assert any(sort.kind == Oneof("eq", "Box") for sort in result.sorts)
     assert pb.Program.from_binary(result.to_binary()) == result
     with pytest.raises(ValueError, match=r"missing.*missing"):
         pack(commands=[owner.ref("commands", missing)])

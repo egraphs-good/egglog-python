@@ -197,7 +197,8 @@ def test_source_history_submits_freeze_with_installation(monkeypatch):
             assert request.program is not None
             assert request.program.commands[0].kind is not None
             assert request.program.commands[0].kind.field == "freeze"
-            assert len(request.program.declarations) == 1
+            assert request.program.declarations == []
+            assert request.program.sorts == [pb.Sort(kind=Oneof("eq", "installed"))]
             submitted.append(request.program)
             return output_frames(), None
 
@@ -207,14 +208,61 @@ def test_source_history_submits_freeze_with_installation(monkeypatch):
     monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
     state = EGraphState(save_egglog_string=True)
     builder = Builder()
-    declaration = builder.add(
-        "declarations",
-        pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="installed"))),
-    )
+    sort = builder.add("sorts", pb.Sort(kind=Oneof("eq", "installed")))
     command = builder.add("commands", pb.Command(kind=Oneof[Literal["freeze"], pb.Freeze]("freeze", pb.Freeze())))
     owner = builder.publish()
-    state.run_program([owner.ref("commands", command)], roots=[owner.ref("declarations", declaration)])
+    state.run_program([owner.ref("commands", command)], roots=[owner.ref("sorts", sort)])
     assert len(submitted) == 1
+
+
+def test_freeze_retains_unused_nominal_sorts_and_unset_binding_slots():
+    from egglog._program import _definition_key  # noqa: PLC0415
+    from egglog.runtime import RuntimeExpr  # noqa: PLC0415
+
+    builder = Builder(environment=(builtin_catalog().owner,))
+    nominal = builder.add("sorts", pb.Sort(kind=Oneof("eq", "unused"), doc="retained nominal documentation"))
+    value_ref = i64(7).__egg_ref__
+    value = builder.import_ref(value_ref)
+    integer = builder.import_ref(value_ref.owner.ref("sorts", value_ref.read().sort_id))
+    slot = builder.add("nodes", pb.Node(sort_id=integer, kind=Oneof("binding", "unset")))
+    command = builder.add(
+        "commands",
+        pb.Command(
+            kind=Oneof(
+                "loop",
+                pb.Loop(max_iterations=0, body=[pb.Command(kind=Oneof("let", pb.Let(binding=slot, value=value)))]),
+            )
+        ),
+    )
+    owner = builder.publish()
+    graph = EGraph()
+    graph._state.run_program(
+        [owner.ref("commands", command)], roots=[owner.ref("sorts", nominal), owner.ref("nodes", slot)]
+    )
+    snapshot = graph.freeze()
+    assert snapshot.program is not None
+    assert any(
+        sort.kind == Oneof("eq", "unused") and sort.doc == "retained nominal documentation"
+        for sort in snapshot.program.sorts
+    )
+    assert any(node.kind == Oneof("binding", "unset") for node in snapshot.program.nodes)
+    assert not any(command.kind is not None and command.kind.field == "let" for command in snapshot.program.commands)
+    assert graph.lookup_function_value(RuntimeExpr(owner.ref("nodes", slot))) is None
+    restored_owner = Builder.from_program(snapshot.program, environment=(builtin_catalog().owner,)).publish()
+    restored = EGraph()
+    restored._state.run_program(
+        roots=[
+            restored_owner.ref(role, index)
+            for role in ("sorts", "nodes", "declarations")
+            for index, record in enumerate(getattr(snapshot.program, role))
+            if _definition_key(record) is not None
+        ],
+        commands=[restored_owner.ref("commands", index) for index in range(len(snapshot.program.commands))],
+    )
+    assert restored.freeze() == snapshot
+    restored.let("unset", i64(9))
+    restored.check(eq(RuntimeExpr(owner.ref("nodes", slot))).to(i64(9)))
+    assert graph.lookup_function_value(RuntimeExpr(owner.ref("nodes", slot))) is None
 
 
 def test_source_producer_returns_only_program_bytes_and_scope_counts():
@@ -542,6 +590,7 @@ def test_shared_snapshot_restores_logical_state_over_bytes(state):
     from collections import Counter  # noqa: PLC0415
 
     from egglog import Vec, expr_parts, let, relation, set_cost, subsume, union  # noqa: PLC0415
+    from egglog._program import StructuralView, _definition_key  # noqa: PLC0415
 
     class Atom(Expr):
         def __init__(self, value: i64) -> None: ...
@@ -583,7 +632,12 @@ def test_shared_snapshot_restores_logical_state_over_bytes(state):
     restored = EGraph()
     restored._state.run_program(
         pack(
-            roots=[owner.ref("declarations", index) for index in range(len(snapshot.program.declarations))],
+            roots=[
+                owner.ref(role, index)
+                for role in ("sorts", "nodes", "declarations")
+                for index, record in enumerate(getattr(snapshot.program, role))
+                if _definition_key(record) is not None
+            ],
             commands=[owner.ref("commands", index) for index in range(len(snapshot.program.commands))],
         )
     )
@@ -597,7 +651,15 @@ def test_shared_snapshot_restores_logical_state_over_bytes(state):
     elif state == "relation":
         restored.check(member(a))
     roundtrip = restored.freeze()
-    assert roundtrip.options == snapshot.options
+    assert roundtrip.options is not None
+    assert roundtrip.program is not None
+    roundtrip_owner = Builder.from_program(roundtrip.program, environment=(builtin_catalog().owner,)).publish()
+    assert StructuralView(roundtrip_owner.ref("sorts", roundtrip.options.cost_sort)) == StructuralView(
+        owner.ref("sorts", snapshot.options.cost_sort)
+    )
+    options = pb.EGraphOptions.from_binary(roundtrip.options.to_binary())
+    options.cost_sort = snapshot.options.cost_sort
+    assert options == snapshot.options
     action_counts = []
     for frozen in (roundtrip, snapshot):
         frozen_program = frozen.program
@@ -606,6 +668,11 @@ def test_shared_snapshot_restores_logical_state_over_bytes(state):
         for command in frozen_program.commands:
             command_kind = command.kind
             assert command_kind is not None
+            if command_kind.field == "let":
+                binding = frozen_program.nodes[command_kind.value.binding]
+                assert binding.kind == Oneof("binding", "vector")
+                action_fields.append("let")
+                continue
             assert command_kind.field == "action"
             action_kind = command_kind.value.kind
             assert action_kind is not None
@@ -1414,7 +1481,6 @@ def test_function_sizes_include_unavailable_and_subsumed_native_bytes(table_tran
             pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "CountedHidden")),
         ],
         declarations=[
-            pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="CountedHidden"))),
             pb.Declaration(
                 kind=Oneof[Literal["constructor"], pb.Constructor](
                     "constructor",
@@ -1456,7 +1522,7 @@ def test_function_sizes_include_unavailable_and_subsumed_native_bytes(table_tran
     )
     owner = Builder.from_program(program).publish()
     graph._state.run_program([owner.ref("commands", n) for n in range(3)])
-    target = RuntimeFunction(owner.ref("declarations", 1))
+    target = RuntimeFunction(owner.ref("declarations", 0))
     assert graph.function_size(target) == 2
     assert graph.all_function_sizes() == [(target, 2)]
     with pytest.raises(ValueError, match="has no extractable representative"):
@@ -1672,7 +1738,6 @@ def test_function_values_unavailable_cells_raise_from_native_bytes(table_transpo
         sorts=sorts,
         nodes=nodes,
         declarations=[
-            pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="Hidden"))),
             pb.Declaration(
                 kind=Oneof[Literal["constructor"], pb.Constructor](
                     "constructor", pb.Constructor(name="Hidden", inputs=[pb.Arg(sort=0)], output=1, unextractable=True)
@@ -1712,7 +1777,7 @@ def test_function_values_unavailable_cells_raise_from_native_bytes(table_transpo
     )
     owner = Builder.from_program(program).publish()
     graph._state.run_program([owner.ref("commands", n) for n in range(2)])
-    target = RuntimeFunction(owner.ref("declarations", 3))
+    target = RuntimeFunction(owner.ref("declarations", 2))
     with pytest.raises(ValueError, match=f"Table 'inspected' row 1 {unavailable} has no extractable representative"):
         graph.function_values(target)
     observed = _required_data(responses[-1], "table_rows")
@@ -2885,12 +2950,7 @@ def test_response_owner_keeps_nominal_and_ambient_family_contexts(monkeypatch):
         def run(self, encoded):
             request = pb.RunProgramRequest.from_binary(encoded)
             assert request.program is not None
-            declaration_kinds = []
-            for declaration in request.program.declarations:
-                kind = declaration.kind
-                assert kind is not None
-                declaration_kinds.append(kind)
-            assert any(kind.field == "eq_sort" and kind.value.name == "Pair" for kind in declaration_kinds)
+            assert any(sort.kind == Oneof("eq", "Pair") for sort in request.program.sorts)
             return output_frames(
                 pb.RunProgramOutput(
                     sorts=[

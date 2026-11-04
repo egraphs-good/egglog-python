@@ -105,12 +105,28 @@ key collisions; local inspection uses the expression wrappers' structural
 identity. Constructor data has no callable for `get_callable_fn` or
 `get_callable_args`; use `.value` to inspect its children.
 
-To check if an expression is a let value and get its name, use `get_let_name(expr)`:
+`EGraph.let` stores a value in a graph-local binding and returns an expression
+that reads it. Names are exact: `"x"`, `"$x"` and `""` are distinct. Reassigning
+a name requires the same sort, and the initializer reads its previous value.
+Use `get_let_name(expr)` to inspect the binding name:
 
 ```{code-cell} python
-x = EGraph().let("my_var", i64(1))
+bindings_graph = EGraph()
+x = bindings_graph.let("my_var", i64(1))
 assert get_let_name(x) == "my_var"
+bindings_graph.let("my_var", x + 1)
+bindings_graph.check(eq(x).to(i64(2)))
+bindings_graph.register(set_(x).to(x + 1))
+bindings_graph.run(seq(let("my_var", x + 1)) * 2)
+bindings_graph.check(eq(x).to(i64(5)))
 ```
+
+Bindings occupy their own namespace, separate from functions and lexical
+variables. `let(name, expr)` authors an assignment for `register` or `seq`;
+assignments cannot appear in rule heads. A failed initializer retains the old
+binding value and any completed operand effects. `freeze()` preserves both
+populated and unset bindings; a saved binding expression reads the current value
+in whichever graph executes it.
 
 To check if an expression is a variable and get its name, use `get_var_name(expr)`:
 
@@ -1147,9 +1163,10 @@ This operation is destructive. It clears all old rows, then rebuilds the
 extracted rows of the requested callables and any constructor rows needed to
 represent their values. Unreferenced rows remain absent. Declarations and
 cost-table identities remain available, although their rows are cleared.
-Bindings returned by {meth}`egglog.egraph.EGraph.let` are ordinary function rows
-and disappear if not retained by compaction. A missing binding is not
-reinitialized when reused; popping a saved scope restores its saved rows.
+Bindings returned by {meth}`egglog.egraph.EGraph.let` use their own typed slot
+namespace and cannot be selected as callable targets. Compaction can unset their
+values while retaining the typed slots. Reading an unset binding does not
+reinitialize it; popping a saved scope restores its stored bindings.
 Snapshot-owned lookup class values remain observation-local, independently of
 compaction. The same `EGraph` can
 continue registering new actions and running rules afterward. Call this method

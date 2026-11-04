@@ -138,14 +138,16 @@ def validate_default(root: Ref) -> None:
 def presentation(reference: Ref) -> Presentation:
     """Resolve canonical local ownership and derive a conservative type name."""
     reference = reference.owner.ref(reference.role, reference.index)
-    if reference.role not in {"declarations", "primitive_sorts", "primitives"}:
+    if reference.role not in {"sorts", "nodes", "declarations", "primitive_sorts", "primitives"}:
         msg = "Python presentation requires a semantic declaration reference"
         raise TypeError(msg)
     from ._program import _definition_key  # noqa: PLC0415
 
-    record: pb.Declaration | pb.PrimitiveSort | pb.Primitive = reference.read()
+    record: pb.Sort | pb.Node | pb.Declaration | pb.PrimitiveSort | pb.Primitive = reference.read()
     key = _definition_key(record)
-    assert key is not None
+    if key is None:
+        msg = "Python presentation requires a named setup record"
+        raise TypeError(msg)
     supplied = reference.owner._presentations.get(key)
     if supplied is not None:
         return supplied
@@ -154,7 +156,11 @@ def presentation(reference: Ref) -> Presentation:
         kind = record.kind.value
     else:
         kind = record
-    if isinstance(kind, pb.PrimitiveSort | pb.EqSort):
+    if isinstance(kind, pb.Sort):
+        assert kind.kind is not None
+        assert kind.kind.field == "eq"
+        return Presentation(type_view=TypePresentation(("egglog", "builtins", kind.kind.value)))
+    if isinstance(kind, pb.PrimitiveSort):
         return Presentation(type_view=TypePresentation(("egglog", "builtins", kind.name)))
     return Presentation()
 
@@ -183,11 +189,9 @@ def validate_view(reference: Ref, view: CallPresentation) -> None:  # noqa: C901
         inputs, tail, output, binder = signature.inputs, signature.varargs, signature.output, signature.type_param_count
     elif isinstance(kind, pb.Constructor | pb.Function | pb.UserDefinedPrimitive):
         inputs, tail, output, binder = kind.inputs, [], kind.output, 0
-    elif isinstance(kind, pb.Relation):
-        inputs, tail, output, binder = kind.inputs, [], None, 0
     else:
-        msg = "Python call layout requires a callable signature"
-        raise TypeError(msg)
+        assert isinstance(kind, pb.Relation)
+        inputs, tail, output, binder = kind.inputs, [], None, 0
     specialized = view.tail_repetitions is not None
     consumes_tail = not specialized and view.receiver == len(inputs)
     if consumes_tail and (len(tail) != 1 or view.kind != CallKind.METHOD):

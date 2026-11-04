@@ -420,19 +420,16 @@ class _ExprMetaclass(type):
         path = [*module.split("."), name] if module else [name]
         builder = Builder()
         definition = builder.add(
-            "declarations",
-            pb.Declaration(
-                kind=Oneof[Literal["eq_sort"], pb.EqSort](
-                    "eq_sort",
-                    pb.EqSort(name=egg_sort or ".".join(path)),
-                ),
+            "sorts",
+            pb.Sort(
+                kind=Oneof[Literal["eq"], str]("eq", egg_sort or ".".join(path)),
                 doc=namespace.get("__doc__"),
             ),
         )
         builder.presentations["eq_sort", egg_sort or ".".join(path)] = Presentation(
             type_view=TypePresentation(tuple(path))
         )
-        return RuntimeClass(builder.publish(keepalive=(context,)).ref("declarations", definition))
+        return RuntimeClass(builder.publish(keepalive=(context,)).ref("sorts", definition))
 
     def __instancecheck__(cls, instance: object) -> bool:
         return isinstance(instance, RuntimeExpr)
@@ -1599,7 +1596,7 @@ class EGraph:
 
     def let(self, name: str, expr: BASE_EXPR) -> BASE_EXPR:
         """
-        Set an exact-name binding and return its ordinary nullary call.
+        Assign an exact-name global binding and return its typed reference.
 
         The returned expression resolves that name in whichever graph uses it.
         See :func:`let` for repeated-write and name policies.
@@ -1608,13 +1605,9 @@ class EGraph:
         self.register(action)
         command: pb.Command = action.__egg_ref__.read()
         assert command.kind is not None
-        assert command.kind.field == "action"
-        assert command.kind.value.kind is not None
-        assert command.kind.value.kind.field == "set"
-        target = command.kind.value.kind.value.target
-        assert target is not None
-        declaration = _definition_at(action.__egg_ref__, "callable", target.func)
-        return cast("BASE_EXPR", RuntimeFunction(declaration, 0)())
+        assert command.kind.field == "let"
+        assert command.kind.value.has_field("binding")
+        return cast("BASE_EXPR", RuntimeExpr(action.__egg_ref__.owner.ref("nodes", command.kind.value.binding)))
 
     def include(self, path: str) -> None:
         """
@@ -2737,7 +2730,7 @@ class Schedule:
                     msg = "can't convert schedule count to unsigned native size"
                     raise OverflowError(msg)
                 pending.extend(reversed(control.body))
-            elif current.kind.field not in {"bind_scheduler", "freeze"}:
+            elif current.kind.field not in {"action", "let", "bind_scheduler", "freeze"}:
                 msg = f"Schedule command is not migrated: {current.kind.field}"
                 raise NotImplementedError(msg)
         for leaf in leaves:
@@ -3110,8 +3103,8 @@ class Action:
             msg = "Actions require a canonical command reference"
             raise TypeError(msg)
         record: pb.Command = reference.read()
-        if record.kind is None or record.kind.field != "action":
-            msg = "Actions require a command containing an action"
+        if record.kind is None or record.kind.field not in {"action", "let"}:
+            msg = "Actions require a command containing an action or Let"
             raise TypeError(msg)
         self.__egg_ref__ = reference.owner.ref(reference.role, reference.index)
 
@@ -3199,47 +3192,30 @@ def set_cost(expr: BaseExpr, cost: i64Like) -> Action:
 
 def let(name: str, expr: BaseExpr) -> Action:
     """
-    Bind an expression once using the exact name; ``x`` and ``$x`` are distinct.
+    Assign a global binding using the exact name; ``x`` and ``$x`` are distinct.
 
-    Equal repeated writes are idempotent; unequal writes use ordinary no-merge
-    errors, including their completed operand effects. Names are graph-local,
-    not fresh identities tied to a call or scope.
+    Rebinding requires the same sort. The initializer reads the old value, and
+    a failed initializer retains it with any completed operand effects. Names
+    are graph-local, not fresh identities tied to a call or scope.
     """
+    if not isinstance(cast("object", name), str):
+        msg = "Binding names must be strings"
+        raise TypeError(msg)
     runtime_expr = to_runtime_expr(expr)
     node: pb.Node = runtime_expr.__egg_ref__.read()
     builder = Builder()
-    logical_name = f"__egglog_python_let_{name.encode('utf-8').hex()}"
-    builder.add(
-        "declarations",
-        pb.Declaration(
-            kind=Oneof[Literal["function"], pb.Function](
-                "function",
-                pb.Function(
-                    name=logical_name,
-                    output=builder.import_ref(runtime_expr.__egg_ref__.owner.ref("sorts", node.sort_id)),
-                ),
-            ),
+    target = builder.add(
+        "nodes",
+        pb.Node(
+            sort_id=builder.import_ref(runtime_expr.__egg_ref__.owner.ref("sorts", node.sort_id)),
+            kind=Oneof[Literal["binding"], str]("binding", name),
         ),
-    )
-    builder.presentations["callable", logical_name] = Presentation(
-        views=(
-            CallPresentation(
-                kind=CallKind.CONSTANT,
-                path=("egglog", "egraph", logical_name, name),
-            ),
-        )
     )
     index = builder.add(
         "commands",
         pb.Command(
-            kind=Oneof[Literal["action"], pb.Action](
-                "action",
-                pb.Action(
-                    kind=Oneof[Literal["set"], pb.Set](
-                        "set",
-                        pb.Set(target=pb.Call(func=logical_name), value=builder.import_ref(runtime_expr.__egg_ref__)),
-                    )
-                ),
+            kind=Oneof[Literal["let"], pb.Let](
+                "let", pb.Let(binding=target, value=builder.import_ref(runtime_expr.__egg_ref__))
             )
         ),
     )
@@ -3499,6 +3475,22 @@ class _SetBuilder(Generic[BASE_EXPR]):
     def to(self, rhs: BASE_EXPR) -> Action:
         lhs = to_runtime_expr(self.lhs)
         node: pb.Node = lhs.__egg_ref__.read()
+        if node.kind is not None and node.kind.field == "binding":
+            rhs_expr = resolve_literal(lhs.__egg_ref__.owner.ref("sorts", node.sort_id), rhs)
+            builder = Builder()
+            index = builder.add(
+                "commands",
+                pb.Command(
+                    kind=Oneof[Literal["let"], pb.Let](
+                        "let",
+                        pb.Let(
+                            binding=builder.import_ref(lhs.__egg_ref__),
+                            value=builder.import_ref(rhs_expr.__egg_ref__),
+                        ),
+                    )
+                ),
+            )
+            return Action(builder.publish().ref("commands", index))
         if node.kind is None or node.kind.field != "call":
             msg = "Can only set function calls"
             raise TypeError(msg)
@@ -3605,6 +3597,9 @@ class _RuleBuilder:
             reference = action.__egg_ref__
             command: pb.Command = reference.read()
             assert command.kind is not None
+            if command.kind.field == "let":
+                msg = "Let commands cannot be used in rule heads"
+                raise TypeError(msg)
             assert command.kind.field == "action"
             # Inline actions must retain both their owner-local indices and
             # named closure, even for a Set target with no argument nodes.
@@ -3822,9 +3817,9 @@ class BackOff:
         return str(self)
 
 
-def seq(*schedules: Schedule) -> Schedule:
+def seq(*schedules: Schedule | Action) -> Schedule:
     """
-    Run any number of schedules in order.
+    Run schedules and top-level actions in order.
 
     For two schedules, ``left + right`` is equivalent to ``seq(left, right)``.
     """
@@ -3833,13 +3828,14 @@ def seq(*schedules: Schedule) -> Schedule:
     ]
     builder = Builder()
     for source in sources:
-        builder.import_context(source._command.owner)
+        builder.import_context(source.__egg_ref__.owner if isinstance(source, Action) else source._command.owner)
     body: list[pb.Command] = [
         _copy_record(
-            source._command.read(),
-            relocate=lambda role, index: builder.import_ref(source._command.owner.ref(role, index)),  # noqa: B023
+            reference.read(),
+            relocate=lambda role, index: builder.import_ref(reference.owner.ref(role, index)),  # noqa: B023
         )
         for source in sources
+        for reference in [source.__egg_ref__ if isinstance(source, Action) else source._command]
     ]
     index = builder.add(
         "commands",
@@ -3847,8 +3843,13 @@ def seq(*schedules: Schedule) -> Schedule:
     )
     return Schedule(
         builder.publish().ref("commands", index),
-        {name: owner for source in sources for name, owner in source._bindings.items()},
-        {name: scheduler for source in sources for name, scheduler in source._schedulers.items()},
+        {name: owner for source in sources if isinstance(source, Schedule) for name, owner in source._bindings.items()},
+        {
+            name: scheduler
+            for source in sources
+            if isinstance(source, Schedule)
+            for name, scheduler in source._schedulers.items()
+        },
     )
 
 
