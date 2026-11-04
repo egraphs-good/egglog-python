@@ -219,9 +219,12 @@ def test_source_history_submits_freeze_with_installation(monkeypatch):
 
 def test_source_producer_returns_only_program_bytes_and_scope_counts():
     source = bindings._ProtoEngine.source(
-        "(function source_scoped () i64 :merge new) (push 1) (set (source_scoped) 7) (pop 1)"
+        "(function source_scoped () i64 :merge new) (set (source_scoped) 7)"
+        " (push 1) (set (source_scoped) 9) (check (= (source_scoped) 9))"
+        " (pop 1) (check (= (source_scoped) 7))"
     )
     kinds = []
+    commands = []
     while (submission := source.next_submission()) is not None:
         kind, encoded, count = submission
         kinds.append(kind)
@@ -230,23 +233,27 @@ def test_source_producer_returns_only_program_bytes_and_scope_counts():
             program = pb.Program.from_binary(encoded)
             assert program.to_binary() == encoded
             assert count == 0
+            commands.append([command.kind.field for command in program.commands if command.kind is not None])
         else:
             assert kind in {"push", "pop"}
             assert encoded is None
             assert count == 1
-    assert kinds == ["program", "push", "program", "pop"]
+    assert kinds == ["program", "push", "program", "pop", "program"]
+    assert commands == [["action"], ["action", "check"], ["check"]]
     with pytest.raises(ValueError, match="requires a host callback"):
         bindings._ProtoEngine.source("(print-function missing :mode csv)").next_submission()
 
 
-def test_source_producer_later_error_preserves_executed_byte_prefix():
+@pytest.mark.parametrize("barrier", [False, True])
+def test_source_producer_later_error_rejects_only_unsubmitted_block(barrier):
     graph = EGraph()
-    source = bindings._ProtoEngine.source(
-        "(function source_prefix () i64 :merge new) (set (source_prefix) 7) (missing_source_command)"
-    )
+    text = "(function source_prefix () i64 :merge new) (set (source_prefix) 7)"
+    if barrier:
+        text += " (push 1) (set (source_prefix) 9)"
+    source = bindings._ProtoEngine.source(text + " (missing_source_command)")
     try:
         assert graph._state.handle is not None
-        for _ in range(2):
+        if barrier:
             submission = source.next_submission()
             assert submission is not None
             kind, encoded, count = submission
@@ -255,14 +262,90 @@ def test_source_producer_later_error_preserves_executed_byte_prefix():
             response, host_error = graph._state.transport.run(
                 pb.RunProgramRequest(egraph_id=graph._state.handle, program=pb.Program.from_binary(encoded)).to_binary()
             )
-            decoded = _decode_run_frames(response)
             assert host_error is None
-            assert all(frame.result is not None and frame.result.field == "output" for frame in decoded)
+            assert all(
+                frame.result is not None and frame.result.field == "output" for frame in _decode_run_frames(response)
+            )
+            assert source.next_submission() == ("push", None, 1)
+            graph.push()
+        before = graph.freeze()
         with pytest.raises(ValueError, match="missing_source_command"):
             source.next_submission()
+        assert graph.freeze() == before
+
+        check = "(check (= (source_prefix) 7))"
+        verification = bindings._ProtoEngine.source(
+            "(function source_prefix () i64 :merge new) " + (check if barrier else f"(fail {check})")
+        )
+        while (submission := verification.next_submission()) is not None:
+            kind, encoded, count = submission
+            assert (kind, count) == ("program", 0)
+            assert encoded is not None
+            response, host_error = graph._state.transport.run(
+                pb.RunProgramRequest(egraph_id=graph._state.handle, program=pb.Program.from_binary(encoded)).to_binary()
+            )
+            assert host_error is None
+            assert all(
+                frame.result is not None and frame.result.field == "output" for frame in _decode_run_frames(response)
+            )
+    finally:
+        for state in [graph._state, *graph._state_stack]:
+            state.destroy()
+
+
+def test_source_block_streams_outputs_before_runtime_failure():
+    graph = EGraph()
+    source = bindings._ProtoEngine.source(
+        "(function source_streamed () i64 :merge new) (set (source_streamed) 7)"
+        ' (print-size source_streamed) (panic "source stream marker") (set (source_streamed) 9)'
+    )
+    try:
+        assert graph._state.handle is not None
+        submission = source.next_submission()
+        assert submission is not None
+        kind, encoded, count = submission
+        assert (kind, count) == ("program", 0)
+        assert type(encoded) is bytes
+        program = pb.Program.from_binary(encoded)
+        assert [command.kind.field for command in program.commands if command.kind is not None] == [
+            "action",
+            "table_sizes",
+            "action",
+            "action",
+        ]
+        events = []
+        chunks = []
+        encoded_chunks = []
+
+        def observe(encoded):
+            encoded_chunks.append(encoded)
+            chunk = pb.RunProgramResponse.from_binary(encoded)
+            chunks.append(chunk)
+            assert chunk.result is not None
+            if chunk.result.field == "error":
+                events.append("error")
+                return False
+            events.extend(output.kind.field for output in chunk.result.value.outputs if output.kind is not None)
+            return True
+
+        terminal, host_error = graph._state.transport.run_stream(
+            pb.RunProgramRequest(egraph_id=graph._state.handle, program=program).to_binary(), observe
+        )
+        events.append("returned")
+        assert host_error is None
+        assert events == ["sizes", "error", "returned"]
+        failure = _required_error(_decode_run_frames([terminal]))
+        assert failure.code == pb.ErrorCode.RUNTIME_FAILURE
+        assert failure.location == pb.CommandLocation(path=[2])
+        assert "source stream marker" in failure.message
+        assert encoded_chunks[-1] == terminal
+        sizes = _required_data(chunks, "sizes")
+        assert sizes.outputs[0].kind == Oneof(
+            "sizes", pb.TableSizes(sizes=[pb.TableSize(table="source_streamed", rows=1)])
+        )
 
         verification = bindings._ProtoEngine.source(
-            "(function source_prefix () i64 :merge new) (check (= (source_prefix) 7))"
+            "(function source_streamed () i64 :merge new) (check (= (source_streamed) 7))"
         )
         while (submission := verification.next_submission()) is not None:
             kind, encoded, count = submission

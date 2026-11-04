@@ -1507,9 +1507,16 @@ mod tests {
     #[test]
     fn custom_rejection_is_before_authored_effects() {
         use egglog_experimental::protobuf::source::Source;
-        let phases = Source::new(
+        let setup = Source::new(
             None,
-            "(function observed () i64 :merge new) (set (observed) 0) (check (= (observed) 0))",
+            "(function observed () i64 :merge new) (set (observed) 0)",
+        )
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+        let checks = Source::new(
+            None,
+            "(function observed () i64 :merge new) (check (= (observed) 0))",
         )
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
@@ -1521,8 +1528,8 @@ mod tests {
                 Engine::default()
             };
             let id = create(&mut engine, false);
-            for phase in &phases[..2] {
-                assert_success(&run(&mut engine, id, phase.clone()));
+            for program in &setup {
+                assert_success(&run(&mut engine, id, program.clone()));
             }
             for invalid in 0..6 {
                 let mut program = custom_program(b"inert invalid pickle".to_vec());
@@ -1603,7 +1610,9 @@ mod tests {
                     pb::ErrorCode::InvalidProgram as i32,
                     "configured={configured}, invalid={invalid}"
                 );
-                assert_success(&run(&mut engine, id, phases[2].clone()));
+                for program in &checks {
+                    assert_success(&run(&mut engine, id, program.clone()));
+                }
             }
         }
     }
