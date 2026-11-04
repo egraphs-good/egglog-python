@@ -40,7 +40,7 @@ def test_table_cell_reader_preserves_availability_and_ownership_without_engine(m
     response = pb.RunProgramOutput(
         sorts=[
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))
             ),
             pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Hidden")),
         ],
@@ -99,7 +99,7 @@ def test_table_cell_reader_preserves_availability_and_ownership_without_engine(m
     assert decoded.nodes[term.value].kind == Oneof(
         "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", 7))
     )
-    assert decoded.sorts[decoded.nodes[term.value].sort_id].kind == Oneof("application", pb.SortApplication(name="i64"))
+    assert decoded.sorts[decoded.nodes[term.value].sort_id].kind == Oneof("primitive", pb.PrimitiveSortRef(name="i64"))
     assert decoded.sorts[missing.value].kind == Oneof("eq", "Hidden")
     assert len(decoded.nodes) == 1
     assert pb.TableCell().kind is None  # absence is neither term zero nor unavailable
@@ -109,9 +109,7 @@ def test_table_cell_reader_preserves_availability_and_ownership_without_engine(m
 
 def test_binary_engine_lifecycle_and_scalar_extract():
     engine = bindings._ProtoEngine()
-    sort = pb.Sort(
-        kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
-    )
+    sort = pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64")))
     created = pb.CreateEGraphResponse.from_binary(
         engine.create(pb.CreateEGraphRequest(sorts=[sort], options=pb.EGraphOptions(cost_sort=0)).to_binary()),
     )
@@ -189,7 +187,7 @@ def _proof_program() -> pb.Program:
     return pb.Program(
         sorts=[
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))
             ),
             pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Num")),
         ],
@@ -261,8 +259,8 @@ def proof_engine(request):
             pb.CreateEGraphRequest(
                 sorts=[
                     pb.Sort(
-                        kind=Oneof[Literal["application"], pb.SortApplication](
-                            "application", pb.SortApplication(name="i64")
+                        kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+                            "primitive", pb.PrimitiveSortRef(name="i64")
                         )
                     )
                 ],
@@ -497,8 +495,8 @@ def test_binary_encoded_print_function_returns_typed_logical_rows(proof_engine, 
         assert argument_node.kind == Oneof[Literal["primitive_value"], pb.PrimitiveValue](
             "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", 1))
         )
-        assert response.sorts[argument_node.sort_id].kind == Oneof[Literal["application"], pb.SortApplication](
-            "application", pb.SortApplication(name="i64")
+        assert response.sorts[argument_node.sort_id].kind == Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+            "primitive", pb.PrimitiveSortRef(name="i64")
         )
         assert result_node.kind == Oneof[Literal["call"], pb.Call]("call", pb.Call(func="N", args=[argument_id]))
         assert response.sorts[result_node.sort_id].kind == Oneof[Literal["eq"], str]("eq", "Num")
@@ -513,9 +511,7 @@ def test_binary_unknown_mode_rejected_and_diagnostics_off_works():
     engine = bindings._ProtoEngine()
     request = pb.CreateEGraphRequest(
         sorts=[
-            pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
-            )
+            pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64")))
         ],
         options=pb.EGraphOptions(cost_sort=0, execution_mode=pb.ExecutionMode(999)),
         threads=1,

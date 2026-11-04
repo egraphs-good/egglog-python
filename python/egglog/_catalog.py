@@ -163,7 +163,7 @@ class Catalog:
                 match owner_sort.kind.field:
                     case "eq":
                         owner_key = "eq_sort", owner_sort.kind.value
-                    case "application":
+                    case "primitive":
                         owner_key = "primitive_sort", owner_sort.kind.value.name
                     case _:
                         msg = "Python member requires an equality or host family owner"

@@ -1454,7 +1454,7 @@ def test_saved_egglog_string_uses_qualified_generated_sort_and_function_names() 
     assert output.kind.value == sort.name
     argument = snapshot.program.sorts[constructor.inputs[0].sort]
     assert argument.kind is not None
-    assert argument.kind.field == "application"
+    assert argument.kind.field == "primitive"
     assert argument.kind.value.name == "String"
     assert cast("RuntimeExpr", value).__egg_ref__.read().kind.value.func == constructor.name
     assert egraph.function_size(Num.var) == 1
@@ -1485,14 +1485,14 @@ def test_parameterized_sort_names_use_allocated_argument_names() -> None:
     root = packed.program.nodes[packed.indices[0]]
     sort = packed.program.sorts[root.sort_id]
     assert sort.kind is not None
-    assert sort.kind.field == "application"
+    assert sort.kind.field == "primitive"
     assert sort.kind.value.name == "Map"
     arguments = [packed.program.sorts[index] for index in sort.kind.value.args]
     argument_names = []
     for argument in arguments:
         argument_kind = argument.kind
         assert argument_kind is not None
-        assert argument_kind.field == "application"
+        assert argument_kind.field == "primitive"
         argument_names.append(argument_kind.value.name)
     assert argument_names == ["i64", "BigRat"]
 
@@ -2934,7 +2934,7 @@ class TestDefaultReplacements:
         assert all(argument.sort == signature.output for argument in signature.inputs)
         sort: pb.Sort = reference.owner.ref("sorts", signature.output).read()
         assert sort.kind is not None
-        assert sort.kind.field == "application"
+        assert sort.kind.field == "primitive"
         assert sort.kind.value.name == "i64"
         assert sort.kind.value.args == []
         assert len(presentation(reference).views) == 1

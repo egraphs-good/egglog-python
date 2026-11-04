@@ -84,9 +84,7 @@ class EGraphState:
         request = pb.CreateEGraphRequest(
             sorts=[
                 pb.Sort(
-                    kind=Oneof[Literal["application"], pb.SortApplication](
-                        "application", pb.SortApplication(name="i64")
-                    )
+                    kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))
                 )
             ],
             options=pb.EGraphOptions(cost_sort=0, seminaive=seminaive),
@@ -121,13 +119,11 @@ class EGraphState:
         sorts = pb.Program(
             sorts=[
                 pb.Sort(
-                    kind=Oneof[Literal["application"], pb.SortApplication](
-                        "application", pb.SortApplication(name="i64")
-                    )
+                    kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))
                 ),
                 pb.Sort(
-                    kind=Oneof[Literal["application"], pb.SortApplication](
-                        "application", pb.SortApplication(name="PyObject")
+                    kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+                        "primitive", pb.PrimitiveSortRef(name="PyObject")
                     )
                 ),
             ],

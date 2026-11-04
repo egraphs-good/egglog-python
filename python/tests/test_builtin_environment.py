@@ -18,7 +18,7 @@ def _provider_catalog(*, inputs: int = 1) -> pb.BuiltinCatalog:
     return pb.BuiltinCatalog(
         sorts=[
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="Number"))
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="Number"))
             )
         ],
         primitive_sorts=[pb.PrimitiveSort(name="Number")],

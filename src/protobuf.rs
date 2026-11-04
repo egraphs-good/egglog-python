@@ -828,7 +828,7 @@ mod tests {
                 .create(
                     &pb::CreateEGraphRequest {
                         sorts: vec![pb::Sort {
-                            kind: Some(pb::sort::Kind::Application(pb::SortApplication {
+                            kind: Some(pb::sort::Kind::Primitive(pb::PrimitiveSortRef {
                                 name: "i64".into(),
                                 args: vec![],
                             })),
@@ -987,10 +987,10 @@ mod tests {
             };
             assert_eq!(signature.type_param_count, 0);
             let sort_name = |index: u32| {
-                let Some(pb::sort::Kind::Application(family)) =
+                let Some(pb::sort::Kind::Primitive(family)) =
                     &catalog.definitions.sorts[index as usize].kind
                 else {
-                    panic!("not a primitive sort application")
+                    panic!("not a primitive sort reference")
                 };
                 assert!(family.args.is_empty());
                 family.name.as_str()
@@ -1084,7 +1084,7 @@ mod tests {
         let output = extract.roots[0].variants[0].term;
         let node = &result.nodes[output as usize];
         assert!(
-            matches!(&result.sorts[node.sort_id as usize].kind, Some(pb::sort::Kind::Application(f)) if f.name == "PyObject" && f.args.is_empty())
+            matches!(&result.sorts[node.sort_id as usize].kind, Some(pb::sort::Kind::Primitive(f)) if f.name == "PyObject" && f.args.is_empty())
         );
         assert_eq!(
             node.kind,
@@ -1527,7 +1527,7 @@ mod tests {
             for invalid in 0..6 {
                 let mut program = custom_program(b"inert invalid pickle".to_vec());
                 program.sorts.push(pb::Sort {
-                    kind: Some(pb::sort::Kind::Application(pb::SortApplication {
+                    kind: Some(pb::sort::Kind::Primitive(pb::PrimitiveSortRef {
                         name: "i64".into(),
                         args: vec![],
                     })),
@@ -1565,7 +1565,7 @@ mod tests {
                     }
                     1 => program.nodes[0].sort_id = 1,
                     2 => {
-                        let Some(pb::sort::Kind::Application(family)) = &mut program.sorts[0].kind
+                        let Some(pb::sort::Kind::Primitive(family)) = &mut program.sorts[0].kind
                         else {
                             unreachable!()
                         };
@@ -1591,7 +1591,7 @@ mod tests {
                     }
                     _ => {
                         program.sorts[0].kind =
-                            Some(pb::sort::Kind::Application(pb::SortApplication {
+                            Some(pb::sort::Kind::Primitive(pb::PrimitiveSortRef {
                                 name: "unregistered.PyObject".into(),
                                 args: vec![],
                             }))
@@ -1613,7 +1613,7 @@ mod tests {
         let payload = b"inert nested bytes".to_vec();
         let mut program = custom_program(payload.clone());
         program.sorts.push(pb::Sort {
-            kind: Some(pb::sort::Kind::Application(pb::SortApplication {
+            kind: Some(pb::sort::Kind::Primitive(pb::PrimitiveSortRef {
                 name: "Vec".into(),
                 args: vec![0],
             })),
@@ -1731,7 +1731,7 @@ mod tests {
         let extracted = &extract.roots[0].variants[0];
         let node = &result.nodes[extracted.term as usize];
         assert!(
-            matches!(&result.sorts[node.sort_id as usize].kind, Some(pb::sort::Kind::Application(family)) if family.name == "PyObject" && family.args.is_empty())
+            matches!(&result.sorts[node.sort_id as usize].kind, Some(pb::sort::Kind::Primitive(family)) if family.name == "PyObject" && family.args.is_empty())
         );
         assert_eq!(
             node.kind,
@@ -1766,7 +1766,7 @@ mod tests {
         let request = pb::CreateEGraphRequest {
             record_history,
             sorts: vec![pb::Sort {
-                kind: Some(pb::sort::Kind::Application(pb::SortApplication {
+                kind: Some(pb::sort::Kind::Primitive(pb::PrimitiveSortRef {
                     name: "i64".into(),
                     args: vec![],
                 })),
@@ -1802,7 +1802,7 @@ mod tests {
     fn custom_program(payload: Vec<u8>) -> pb::Program {
         pb::Program {
             sorts: vec![pb::Sort {
-                kind: Some(pb::sort::Kind::Application(pb::SortApplication {
+                kind: Some(pb::sort::Kind::Primitive(pb::PrimitiveSortRef {
                     name: "PyObject".into(),
                     args: vec![],
                 })),
@@ -1912,7 +1912,7 @@ impl ProtoEngine {
             egglog_experimental::builtin::import_sort(&program.sorts, objective, &mut canonical)
                 .map_err(PyValueError::new_err)?;
         if !matches!(&canonical[result as usize].kind,
-            Some(pb::sort::Kind::Application(family)) if family.name == "PyObject" && family.args.is_empty())
+            Some(pb::sort::Kind::Primitive(family)) if family.name == "PyObject" && family.args.is_empty())
         {
             return Err(PyValueError::new_err(
                 "Python model objective requires the explicit PyObject leaf codec",

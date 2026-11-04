@@ -41,7 +41,7 @@ def _pyobject_value(expr: RuntimeExpr) -> object:
     sort: pb.Sort = reference.owner.ref("sorts", node.sort_id).read()
     if (
         sort.kind is None
-        or sort.kind.field != "application"
+        or sort.kind.field != "primitive"
         or sort.kind.value.name != "PyObject"
         or sort.kind.value.args
         or value is None
@@ -68,11 +68,11 @@ def get_literal_value(x: object) -> object:  # noqa: C901, PLR0912 -- payload va
         raise ValueError(msg)
     sort: pb.Sort = x.__egg_ref__.owner.ref("sorts", node.sort_id).read()
     if value.field == "custom" or (
-        sort.kind is not None and sort.kind.field == "application" and sort.kind.value.name == "PyObject"
+        sort.kind is not None and sort.kind.field == "primitive" and sort.kind.value.name == "PyObject"
     ):
         return _pyobject_value(x)
     if value.field in (protocol.literal_arm for protocol in SCALAR_PROTOCOLS.values()):
-        if sort.kind is None or sort.kind.field != "application" or sort.kind.value.args:
+        if sort.kind is None or sort.kind.field != "primitive" or sort.kind.value.args:
             msg = "Scalar value requires a nullary primitive sort"
             raise ValueError(msg)
         return bindings._decode_scalar(sort.kind.value.name, node.kind.value.to_binary())

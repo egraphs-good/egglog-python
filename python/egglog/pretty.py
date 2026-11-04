@@ -161,7 +161,7 @@ def pretty_ref(  # noqa: C901, PLR0912
                     if sort_record.kind is not None:
                         if sort_record.kind.field == "eq":
                             type_name = sort_record.kind.value.rsplit(".", 1)[-1]
-                        elif sort_record.kind.field == "application":
+                        elif sort_record.kind.field == "primitive":
                             type_name = sort_record.kind.value.name
                     name = _name_expr(
                         type_name if type_name.isidentifier() else "expr",
@@ -365,7 +365,7 @@ def pretty_ref(  # noqa: C901, PLR0912
                 pieces.append("]")
                 frames.extend(reversed(pieces))
                 continue
-            if record.kind.field not in {"eq", "application"}:
+            if record.kind.field not in {"eq", "primitive"}:
                 raise NotImplementedError(f"Sort presentation is not migrated: {record.kind.field}")
             name = record.kind.value if record.kind.field == "eq" else record.kind.value.name
             namespace = "eq_sort" if record.kind.field == "eq" else "primitive_sort"
@@ -383,7 +383,7 @@ def pretty_ref(  # noqa: C901, PLR0912
                 bindings = presentation(sort_reference).type_view
                 path = bindings.path if bindings is not None else (name,)
                 pieces = [path[-1]]
-            if record.kind.field == "application" and record.kind.value.args:
+            if record.kind.field == "primitive" and record.kind.value.args:
                 pieces.append("[")
                 for index, argument in enumerate(record.kind.value.args):
                     if index:
@@ -934,8 +934,8 @@ def pretty_ref(  # noqa: C901, PLR0912
                     result_sort = builder.add(
                         "sorts",
                         pb.Sort(
-                            kind=Oneof[Literal["application"], pb.SortApplication](
-                                "application", pb.SortApplication(name="Unit")
+                            kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+                                "primitive", pb.PrimitiveSortRef(name="Unit")
                             )
                         ),
                     )

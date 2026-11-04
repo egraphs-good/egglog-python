@@ -24,7 +24,7 @@ def literal(value: int):
     builder = Builder()
     builder.add(
         "sorts",
-        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
+        pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))),
     )
     index = builder.add(
         "nodes",
@@ -291,7 +291,7 @@ def test_structural_float_equality_hashes_and_exact_bits(left_bits, right_bits, 
         builder.add(
             "sorts",
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="f64"))
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="f64"))
             ),
         )
         index = builder.add(
@@ -316,9 +316,7 @@ def action_program():
     """A Set whose declaration closure contains a recursive named dependency."""
     return pb.Program(
         sorts=[
-            pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name=name))
-            )
+            pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name=name)))
             for name in ("i64", "f64")
         ],
         nodes=[
@@ -408,8 +406,8 @@ def test_action_equality_observes_referenced_declaration_closure(action_program,
     elif change == "merge":
         declaration.kind.value.merge = 1
     elif change == "sort":
-        action_program.sorts[0].kind = Oneof[Literal["application"], pb.SortApplication](
-            "application", pb.SortApplication(name="f64")
+        action_program.sorts[0].kind = Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+            "primitive", pb.PrimitiveSortRef(name="f64")
         )
     elif change == "rhs":
         action_program.commands[0].kind.value.kind.value.value = 1
@@ -653,8 +651,8 @@ def test_nominal_family_callable_names_keep_independent_closure(reverse):
             sorts=[
                 pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Pair")),
                 pb.Sort(
-                    kind=Oneof[Literal["application"], pb.SortApplication](
-                        "application", pb.SortApplication(name="Pair", args=[0, 0])
+                    kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+                        "primitive", pb.PrimitiveSortRef(name="Pair", args=[0, 0])
                     )
                 ),
             ],
@@ -712,7 +710,7 @@ def test_sort_dependency_never_falls_back_to_other_kind(nominal, local):
         pb.Sort(
             kind=Oneof[Literal["eq"], str]("eq", "Pair")
             if nominal
-            else Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="Pair"))
+            else Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="Pair"))
         ),
     )
     wrong_kind = "primitive_sort" if nominal else "eq_sort"
@@ -770,15 +768,13 @@ def test_pack_reconciles_independent_compatible_definitions(monkeypatch, root_ki
             builder.add(
                 "sorts",
                 pb.Sort(
-                    kind=Oneof[Literal["application"], pb.SortApplication](
-                        "application", pb.SortApplication(name="f64")
-                    )
+                    kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="f64"))
                 ),
             )
         scalar = builder.add(
             "sorts",
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))
             ),
         )
         builder.add("primitive_sorts", pb.PrimitiveSort(name="i64"))
@@ -863,7 +859,7 @@ def test_compatible_definition_does_not_hide_conflicting_named_dependency(foreig
         scalar = builder.add(
             "sorts",
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))
             ),
         )
         builder.add("primitive_sorts", pb.PrimitiveSort(name="i64"))
@@ -916,9 +912,7 @@ def test_definition_reconciliation_preserves_literal_bits_and_union_identity(bod
             scalar = builder.add(
                 "sorts",
                 pb.Sort(
-                    kind=Oneof[Literal["application"], pb.SortApplication](
-                        "application", pb.SortApplication(name="f64")
-                    )
+                    kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="f64"))
                 ),
             )
             builder.add("primitive_sorts", pb.PrimitiveSort(name="f64"))
@@ -957,7 +951,7 @@ def test_reconciliation_does_not_discover_unreachable_foreign_bodies():
         scalar = foreign.add(
             "sorts",
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))
             ),
         )
         body = foreign.add(
@@ -985,7 +979,7 @@ def test_reconciliation_does_not_discover_unreachable_foreign_bodies():
         scalar = builder.add(
             "sorts",
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))
             ),
         )
         builder.add("primitive_sorts", pb.PrimitiveSort(name="i64"))
@@ -1027,7 +1021,7 @@ def test_late_definition_conflict_is_checked_before_dirty_demand_clears(monkeypa
     foreign = Builder()
     scalar = foreign.add(
         "sorts",
-        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
+        pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))),
     )
     foreign.add("primitive_sorts", pb.PrimitiveSort(name="i64"))
     nine = foreign.add(
@@ -1054,7 +1048,7 @@ def test_late_definition_conflict_is_checked_before_dirty_demand_clears(monkeypa
     builder = Builder()
     scalar = builder.add(
         "sorts",
-        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
+        pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))),
     )
     builder.add("primitive_sorts", pb.PrimitiveSort(name="i64"))
     four = builder.add(
@@ -1145,7 +1139,7 @@ def test_slot_permutation_and_protobuf_fields_are_authoritative():
         builder.add(
             "sorts",
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))
             ),
         )
         for imported in imports:
@@ -1173,7 +1167,7 @@ def test_adoption_publication_and_inspection_are_isolated():
     builder = Builder()
     builder.add(
         "sorts",
-        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
+        pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))),
     )
     supplied = pb.Node(
         kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
@@ -1237,7 +1231,7 @@ def test_named_recursive_definition_closure_and_missing_names():
     builder = Builder()
     builder.add(
         "sorts",
-        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
+        pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))),
     )
     builder.add("nodes", pb.Node(kind=Oneof[Literal["var"], str]("var", "_0")))
     builder.add("nodes", pb.Node(kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="f", args=[0]))))
@@ -1267,7 +1261,7 @@ def test_rules_rulesets_commands_files_and_command_multiplicity():
     builder.add("files", pb.SourceFile(name="source", contents="x"))
     builder.add(
         "sorts",
-        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
+        pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))),
     )
     builder.add("nodes", pb.Node(kind=Oneof[Literal["var"], str]("var", "x"), span=pb.Span(file=0, end=1)))
     rule = pb.Rule(
@@ -1342,7 +1336,7 @@ def test_inline_rules_import_shared_context_once_and_pack_only_demanded_definiti
     source = Builder(environment=(builtin_catalog().owner,))
     unit = source.add(
         "sorts",
-        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="Unit"))),
+        pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="Unit"))),
     )
     for index in range(available):
         source.add(
@@ -1391,7 +1385,7 @@ def test_inline_rules_import_shared_context_once_and_pack_only_demanded_definiti
     )
     assert len(program.nodes) == 1
     assert program.sorts == [
-        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="Unit")))
+        pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="Unit")))
     ]
     assert [d.kind.value.name for d in program.declarations if d.kind is not None] == ["r0"]
 
@@ -1401,7 +1395,7 @@ def test_binders_defaults_and_payloads_are_not_reinterpreted():
     builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "unused")))
     scalar = builder.add(
         "sorts",
-        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
+        pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))),
     )
     body = builder.add("nodes", pb.Node(sort_id=scalar, kind=Oneof[Literal["var"], str]("var", "_0")))
     for name in ("left", "right"):
@@ -1418,7 +1412,7 @@ def test_binders_defaults_and_payloads_are_not_reinterpreted():
         )
     owner = builder.publish()
     result = pack([owner.ref("declarations", 1), owner.ref("declarations", 0)])
-    assert result.program.sorts[0].kind == Oneof("application", pb.SortApplication(name="i64"))
+    assert result.program.sorts[0].kind == Oneof("primitive", pb.PrimitiveSortRef(name="i64"))
     assert result.program.nodes[0].kind == Oneof[Literal["var"], str]("var", "_0")
     assert len(result.program.declarations) == 2
     for declaration in result.program.declarations:
@@ -1450,7 +1444,7 @@ def test_linear_authoring_and_pack(monkeypatch):
         builder.add(
             "sorts",
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))
             ),
         )
         left = builder.import_ref(current)
@@ -1700,7 +1694,7 @@ def test_import_cache_is_not_authoritative():
     builder = Builder()
     builder.add(
         "sorts",
-        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
+        pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))),
     )
     first = builder.import_ref(value)
     builder._imports.clear()
@@ -1735,7 +1729,7 @@ def test_late_discovered_definition_conflict_is_not_hidden():
     foreign = Builder()
     foreign.add(
         "sorts",
-        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
+        pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))),
     )
     foreign.add("nodes", pb.Node(kind=Oneof[Literal["var"], str]("var", "_0")))
     foreign.add(
@@ -1746,7 +1740,7 @@ def test_late_discovered_definition_conflict_is_not_hidden():
     local = Builder()
     local.add(
         "sorts",
-        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
+        pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))),
     )
     body = local.import_ref(foreign_owner.ref("nodes", 0))
     root = local.add("nodes", pb.Node(kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="f"))))
@@ -1865,7 +1859,7 @@ def test_rejects_non_string_dependency_names():
     with pytest.raises(TypeError, match="definition name"):
         Builder().add(
             "sorts",
-            pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name=5))),  # type: ignore[arg-type]
+            pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name=5))),  # type: ignore[arg-type]
         )
 
 
@@ -1908,7 +1902,7 @@ def test_structural_view_zero_hash_and_origin_are_distinct_from_wire_bits():
         builder.add(
             "sorts",
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="f64"))
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="f64"))
             ),
         )
         root = builder.add(
@@ -1943,7 +1937,7 @@ def test_structural_view_deep_hash_cache_is_erasable_and_does_not_retain_owners(
         builder.add(
             "sorts",
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))
             ),
         )
         child = builder.import_ref(root)

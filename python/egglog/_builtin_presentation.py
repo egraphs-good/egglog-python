@@ -2373,32 +2373,32 @@ DATA = json.loads(r"""{
     ],
     "sorts": [
       {
-        "application": {
+        "primitive": {
           "name": "BigInt"
         }
       },
       {
-        "application": {
+        "primitive": {
           "name": "BigRat"
         }
       },
       {
-        "application": {
+        "primitive": {
           "name": "bool"
         }
       },
       {
-        "application": {
+        "primitive": {
           "name": "f64"
         }
       },
       {
-        "application": {
+        "primitive": {
           "name": "i64"
         }
       },
       {
-        "application": {
+        "primitive": {
           "args": [
             14,
             15
@@ -2407,7 +2407,7 @@ DATA = json.loads(r"""{
         }
       },
       {
-        "application": {
+        "primitive": {
           "args": [
             14
           ],
@@ -2415,7 +2415,7 @@ DATA = json.loads(r"""{
         }
       },
       {
-        "application": {
+        "primitive": {
           "args": [
             14,
             15
@@ -2424,7 +2424,7 @@ DATA = json.loads(r"""{
         }
       },
       {
-        "application": {
+        "primitive": {
           "args": [
             14
           ],
@@ -2432,12 +2432,12 @@ DATA = json.loads(r"""{
         }
       },
       {
-        "application": {
+        "primitive": {
           "name": "String"
         }
       },
       {
-        "application": {
+        "primitive": {
           "args": [
             14
           ],
@@ -2445,7 +2445,7 @@ DATA = json.loads(r"""{
         }
       },
       {
-        "application": {
+        "primitive": {
           "args": [
             14
           ],
@@ -2453,12 +2453,12 @@ DATA = json.loads(r"""{
         }
       },
       {
-        "application": {
+        "primitive": {
           "name": "Rational"
         }
       },
       {
-        "application": {
+        "primitive": {
           "name": "PyObject"
         }
       },

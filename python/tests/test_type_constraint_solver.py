@@ -18,23 +18,19 @@ def sorts() -> dict[str, Ref]:
                 pb.Sort(kind=Oneof[Literal["var"], int]("var", 0)),
                 pb.Sort(kind=Oneof[Literal["var"], int]("var", 1)),
                 pb.Sort(
-                    kind=Oneof[Literal["application"], pb.SortApplication](
-                        "application", pb.SortApplication(name="i64")
+                    kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))
+                ),
+                pb.Sort(
+                    kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="Unit"))
+                ),
+                pb.Sort(
+                    kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+                        "primitive", pb.PrimitiveSortRef(name="Map", args=[0, 1])
                     )
                 ),
                 pb.Sort(
-                    kind=Oneof[Literal["application"], pb.SortApplication](
-                        "application", pb.SortApplication(name="Unit")
-                    )
-                ),
-                pb.Sort(
-                    kind=Oneof[Literal["application"], pb.SortApplication](
-                        "application", pb.SortApplication(name="Map", args=[0, 1])
-                    )
-                ),
-                pb.Sort(
-                    kind=Oneof[Literal["application"], pb.SortApplication](
-                        "application", pb.SortApplication(name="Map", args=[2, 3])
+                    kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+                        "primitive", pb.PrimitiveSortRef(name="Map", args=[2, 3])
                     )
                 ),
             ],

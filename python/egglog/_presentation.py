@@ -224,7 +224,7 @@ def validate_view(reference: Ref, view: CallPresentation) -> None:  # noqa: C901
                 raise ValueError(msg)
             children = (
                 sort.kind.value.args
-                if sort.kind.field == "application"
+                if sort.kind.field == "primitive"
                 else [*sort.kind.value.params, sort.kind.value.result]
                 if sort.kind.field == "func"
                 else ()

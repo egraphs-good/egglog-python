@@ -782,7 +782,7 @@ class _FunctionConstructor:
             msg = "Free functions require a concrete output sort"
             raise NotImplementedError(msg)
         output_record: pb.Sort = output.read()
-        if output_record.kind is None or output_record.kind.field not in {"eq", "application", "func"}:
+        if output_record.kind is None or output_record.kind.field not in {"eq", "primitive", "func"}:
             msg = "Free functions require an equality, host-family or function output sort"
             raise NotImplementedError(msg)
         equality = output_record.kind.field == "eq"
@@ -808,7 +808,7 @@ class _FunctionConstructor:
             if self.unextractable:
                 msg = "Primitive-returning callables cannot be unextractable"
                 raise ValueError(msg)
-            if output_record.kind.field == "application" and output_record.kind.value.name == "Unit" and has_merge:
+            if output_record.kind.field == "primitive" and output_record.kind.value.name == "Unit" and has_merge:
                 msg = "Functions that return Unit cannot use merge"
                 raise ValueError(msg)
         elif has_merge:
@@ -935,7 +935,7 @@ class _FunctionConstructor:
             )
             if has_body and self.ruleset is None
             else Oneof[Literal["relation"], pb.Relation]("relation", pb.Relation(name=name, inputs=inputs))
-            if not has_body and output_record.kind.field == "application" and output_record.kind.value.name == "Unit"
+            if not has_body and output_record.kind.field == "primitive" and output_record.kind.value.name == "Unit"
             else Oneof[Literal["constructor"], pb.Constructor](
                 "constructor",
                 pb.Constructor(name=name, inputs=inputs, output=output_index, unextractable=self.unextractable),
@@ -1371,7 +1371,7 @@ def constant(
         msg = "Constants require a concrete sort"
         raise NotImplementedError(msg)
     record: pb.Sort = sort.read()
-    if record.kind is None or record.kind.field not in {"eq", "application"}:
+    if record.kind is None or record.kind.field not in {"eq", "primitive"}:
         msg = "Constants require an equality or host-family sort"
         raise NotImplementedError(msg)
     has_default = default_replacement is not _MISSING
@@ -1383,7 +1383,7 @@ def constant(
         msg = "Primitive-returning defaults cannot use an explicit ruleset"
         raise ValueError(msg)
     has_merge = merge is not None
-    if record.kind.field == "application" and record.kind.value.name == "Unit" and has_merge:
+    if record.kind.field == "primitive" and record.kind.value.name == "Unit" and has_merge:
         msg = "Functions that return Unit cannot use merge"
         raise ValueError(msg)
     if has_default and has_merge:
@@ -2533,7 +2533,7 @@ class EGraph:
                     else None
                 )
                 valid_sort = (
-                    actual_sort.read().kind == Oneof("application", pb.SortApplication(name="Unit"))
+                    actual_sort.read().kind == Oneof("primitive", pb.PrimitiveSortRef(name="Unit"))
                     if expected is None
                     else StructuralView(actual_sort) == StructuralView(reference.owner.ref("sorts", expected))
                 )

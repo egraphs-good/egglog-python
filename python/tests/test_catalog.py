@@ -48,7 +48,7 @@ def _relocate_builtins(source: pb.BuiltinCatalog) -> pb.BuiltinCatalog:
     for sort in result.sorts:
         kind = sort.kind
         assert kind is not None
-        if kind.field == "application":
+        if kind.field == "primitive":
             kind.value.args = [remap[index] for index in kind.value.args]
         elif kind.field == "func":
             kind.value.params = [remap[index] for index in kind.value.params]
@@ -77,8 +77,8 @@ def _permute_local_owner(mapping, primitive, order):
         record = copy.deepcopy(mapping["fragment"]["sorts"][index])
         if "var" in record:
             record["var"] = order[record["var"]]
-        elif "application" in record:
-            record["application"]["args"] = [local_sort(child) for child in record["application"].get("args", [])]
+        elif "primitive" in record:
+            record["primitive"]["args"] = [local_sort(child) for child in record["primitive"].get("args", [])]
         else:
             pytest.fail("The actual local owner has an unexpected sort form")
         local_indices[index] = len(local_sorts)
@@ -179,7 +179,7 @@ def test_pyobject_generator_rejects_invalid_default(corruption):
         parameter["default"] = len(mapping["fragment"]["nodes"])
     else:
         integer_sort = next(
-            i for i, sort in enumerate(mapping["fragment"]["sorts"]) if sort.get("application", {}).get("name") == "i64"
+            i for i, sort in enumerate(mapping["fragment"]["sorts"]) if sort.get("primitive", {}).get("name") == "i64"
         )
         mapping["fragment"]["nodes"][parameter["default"]]["sortId"] = integer_sort
     renderer = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
@@ -353,7 +353,7 @@ def test_scalar_specialized_stub_rejects_invalid_views(mutation):
         view["owner"] = next(
             i
             for i, sort in enumerate(mapping["fragment"]["sorts"])
-            if sort.get("application", {}).get("name") == "String"
+            if sort.get("primitive", {}).get("name") == "String"
         )
     elif mutation == "default":
         view["params"][0]["default"] = 0
@@ -558,7 +558,7 @@ def test_classmethod_pretty_infers_owner_from_uniform_tail(
     signature.output = next(
         i
         for i, sort in enumerate(vec_catalog_program.sorts)
-        if sort.kind is not None and sort.kind.field == "application" and sort.kind.value.name == "i64"
+        if sort.kind is not None and sort.kind.field == "primitive" and sort.kind.value.name == "i64"
     )
     view["form"] = "CLASS_METHOD"
     view["path"] = ["count"]
@@ -681,8 +681,8 @@ def test_function_sort_annotations_recurse_through_canonical_records():
         pb.Sort(kind=Oneof[Literal["func"], pb.FuncSort]("func", pb.FuncSort(params=[left], result=right))),
         pb.Sort(kind=Oneof[Literal["func"], pb.FuncSort]("func", pb.FuncSort(params=[index], result=index))),
         pb.Sort(
-            kind=Oneof[Literal["application"], pb.SortApplication](
-                "application", pb.SortApplication(name="Vec", args=[index + 1])
+            kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+                "primitive", pb.PrimitiveSortRef(name="Vec", args=[index + 1])
             )
         ),
     ])
@@ -763,7 +763,7 @@ def test_pair_stub_rejects_invalid_or_unadmitted_generic_views(pair_catalog_prog
         mapping["callables"][first.name][0]["params"] = [{"name": "extra", "coreInput": 0}]
     elif mutation == "owner_duplicate":
         view = mapping["callables"][make.name][0]
-        owner_args = mapping["fragment"]["sorts"][view["owner"]]["application"]["args"]
+        owner_args = mapping["fragment"]["sorts"][view["owner"]]["primitive"]["args"]
         owner_args[1] = owner_args[0]
     elif mutation == "unknown_binder":
         signature.type_param_count += 1
@@ -792,8 +792,8 @@ def test_pair_stub_uses_sort_structure_after_relocation(pair_catalog_program):
     view = mapping["callables"][make.name][0]
     sorts = mapping["fragment"]["sorts"]
     duplicated = copy.deepcopy(sorts[view["owner"]])
-    arguments = duplicated["application"]["args"]
-    duplicated["application"]["args"] = [len(sorts) + 1, len(sorts) + 2]
+    arguments = duplicated["primitive"]["args"]
+    duplicated["primitive"]["args"] = [len(sorts) + 1, len(sorts) + 2]
     view["owner"] = len(sorts)
     sorts.extend([duplicated, *(copy.deepcopy(sorts[index]) for index in arguments)])
     before = renderer(pair_catalog_program, mapping=mapping)
@@ -822,16 +822,16 @@ def test_pair_stub_rejects_specialized_owner_as_universal_class_view(pair_catalo
     i64_sort = next(
         i
         for i, s in enumerate(pair_catalog_program.sorts)
-        if s.kind.field == "application" and s.kind.value.name == "i64"
+        if s.kind.field == "primitive" and s.kind.value.name == "i64"
     )
     signature.inputs[0].sort = i64_sort
     signature.inputs[1].sort = i64_sort
     pair_catalog_program.sorts[signature.output].kind.value.args = [i64_sort, i64_sort]
     view = mapping["callables"][make.name][0]
     local_i64 = next(
-        i for i, sort in enumerate(mapping["fragment"]["sorts"]) if sort.get("application", {}).get("name") == "i64"
+        i for i, sort in enumerate(mapping["fragment"]["sorts"]) if sort.get("primitive", {}).get("name") == "i64"
     )
-    mapping["fragment"]["sorts"][view["owner"]]["application"]["args"] = [local_i64, local_i64]
+    mapping["fragment"]["sorts"][view["owner"]]["primitive"]["args"] = [local_i64, local_i64]
     with pytest.raises(ValueError, match="distinct in-range family parameters"):
         renderer(pair_catalog_program, mapping=mapping)
 
@@ -870,9 +870,7 @@ def test_stub_generation_rejects_invalid_or_unmigrated_shapes(mutation, message)
         view["params"][0]["name"] = "rhs"
     elif mutation == "numeric_default":
         fragment = mapping["fragment"]
-        integer = next(
-            i for i, sort in enumerate(fragment["sorts"]) if sort.get("application", {}).get("name") == "i64"
-        )
+        integer = next(i for i, sort in enumerate(fragment["sorts"]) if sort.get("primitive", {}).get("name") == "i64")
         view["params"][0]["default"] = len(fragment["nodes"])
         fragment["nodes"].append({"sortId": integer, "primitiveValue": {"i64": "2"}})
     with pytest.raises(ValueError, match=message):
@@ -895,7 +893,7 @@ def test_numeric_forward_signature_does_not_imply_reflection(method, argument, o
     sorts = {
         s.kind.value.name: i
         for i, s in enumerate(program.sorts)
-        if s.kind is not None and isinstance(s.kind.value, pb.SortApplication)
+        if s.kind is not None and isinstance(s.kind.value, pb.PrimitiveSortRef)
     }
     signature.inputs[1].sort = sorts[argument]
     signature.output = sorts[output]
@@ -947,9 +945,7 @@ def test_stub_defaults_are_inert_and_presence_controls_arity():
     mapping["callables"][addition.name][0]["path"] = ["plus"]
     parameter = mapping["callables"][addition.name][0]["params"][0]
     fragment = mapping["fragment"]
-    scalar_sort = next(
-        i for i, sort in enumerate(fragment["sorts"]) if sort.get("application", {}).get("name") == "i64"
-    )
+    scalar_sort = next(i for i, sort in enumerate(fragment["sorts"]) if sort.get("primitive", {}).get("name") == "i64")
     literal = len(fragment["nodes"])
     fragment["nodes"].extend([
         {"sortId": scalar_sort, "primitiveValue": {"i64": "2"}},
@@ -1019,7 +1015,7 @@ def catalog_fixture():
     catalog = pb.BuiltinCatalog(
         sorts=[
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="Number"))
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="Number"))
             )
         ],
         primitive_sorts=[pb.PrimitiveSort(name="Number")],
@@ -1043,7 +1039,7 @@ def catalog_fixture():
                 }
             ]
         },
-        "fragment": {"sorts": [{"application": {"name": "Number"}}], "nodes": []},
+        "fragment": {"sorts": [{"primitive": {"name": "Number"}}], "nodes": []},
     }
     return catalog, mapping
 
@@ -1107,14 +1103,14 @@ def test_nominal_and_primitive_sort_member_owners_recover_independently(generic)
         signature.type_param_count = 1
         descriptors.sorts[0].kind.value.args = [1]
         descriptors.sorts.append(pb.Sort(kind=Oneof[Literal["var"], int]("var", 0)))
-        mapping["fragment"]["sorts"][0]["application"]["args"] = [1]
+        mapping["fragment"]["sorts"][0]["primitive"]["args"] = [1]
         mapping["fragment"]["sorts"].append({"var": 0})
     ambient = builtin_owner(descriptors, mapping=mapping)
     source = pb.Program(
         sorts=[
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication](
-                    "application", pb.SortApplication(name="Number", args=[1] if generic else [])
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+                    "primitive", pb.PrimitiveSortRef(name="Number", args=[1] if generic else [])
                 )
             ),
             pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Number")),
@@ -1187,7 +1183,7 @@ def test_class_and_pretty_recovery_never_use_other_sort_kind(nominal):
             pb.Sort(
                 kind=Oneof[Literal["eq"], str]("eq", "Number")
                 if nominal
-                else Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="Number"))
+                else Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="Number"))
             )
         ],
         declarations=[]
@@ -1264,9 +1260,7 @@ def test_runtime_free_function_names_preserve_exact_callee_and_core_order(monkey
     )
     source = pb.Program(
         sorts=[
-            pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
-            )
+            pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64")))
         ],
         declarations=[
             pb.Declaration(
@@ -1351,9 +1345,7 @@ def test_constant_presentation_accepts_each_concrete_nullary_callable(kind):
         descriptors = pb.BuiltinCatalog(
             sorts=[
                 pb.Sort(
-                    kind=Oneof[Literal["application"], pb.SortApplication](
-                        "application", pb.SortApplication(name="i64")
-                    )
+                    kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))
                 )
             ],
             primitive_sorts=[pb.PrimitiveSort(name="i64")],
@@ -1388,9 +1380,7 @@ def test_constant_presentation_accepts_each_concrete_nullary_callable(kind):
         source = pb.Program(
             sorts=[
                 pb.Sort(
-                    kind=Oneof[Literal["application"], pb.SortApplication](
-                        "application", pb.SortApplication(name="i64")
-                    )
+                    kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))
                 ),
                 pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "E")),
             ],
@@ -1592,7 +1582,7 @@ def test_multiset_method_local_binders_from_actual_catalog():
     view = mapping["callables"][declaration.name][0]
     assert signature.type_param_count == 2
     assert "owner" in view
-    owner = mapping["fragment"]["sorts"][view["owner"]]["application"]
+    owner = mapping["fragment"]["sorts"][view["owner"]]["primitive"]
     assert owner["name"] == "MultiSet"
     assert len(owner["args"]) == 1
     assert mapping["fragment"]["sorts"][owner["args"][0]] == {"var": 0}
@@ -1630,7 +1620,7 @@ def test_multiset_method_local_binders_from_actual_catalog():
             assert kind is not None
             if kind.field == "var":
                 record.kind = Oneof[Literal["var"], int]("var", order[kind.value])
-            elif kind.field == "application":
+            elif kind.field == "primitive":
                 kind.value.args = [sort(child) for child in kind.value.args]
             elif kind.field == "func":
                 kind.value.params = [sort(child) for child in kind.value.params]

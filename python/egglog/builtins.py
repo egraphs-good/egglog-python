@@ -63,7 +63,7 @@ def _pair_value(expr: RuntimeExpr) -> tuple[RuntimeExpr, RuntimeExpr]:
     node: pb.Node = reference.read()
     sort = reference.owner.ref("sorts", node.sort_id)
     record: pb.Sort = sort.read()
-    if record.kind is None or record.kind.field != "application" or record.kind.value.name != "Pair":
+    if record.kind is None or record.kind.field != "primitive" or record.kind.value.name != "Pair":
         raise ExprValueError(expr, "Pair(left, right)")
     arguments = record.kind.value.args
     if len(arguments) != 2:
@@ -102,7 +102,7 @@ def _maybe_value(expr: RuntimeExpr) -> RuntimeExpr | None:
     record: pb.Sort = sort.read()
     if (
         record.kind is None
-        or record.kind.field != "application"
+        or record.kind.field != "primitive"
         or record.kind.value.name != "Maybe"
         or len(record.kind.value.args) != 1
     ):
@@ -156,7 +156,7 @@ def _container_items(expr: RuntimeExpr) -> tuple[RuntimeExpr, ...]:
     record: pb.Sort = sort.read()
     if (
         record.kind is None
-        or record.kind.field != "application"
+        or record.kind.field != "primitive"
         or record.kind.value.name not in {"Vec", "Set", "MultiSet"}
     ):
         raise ExprValueError(expr, "a Vec, Set or MultiSet value")
@@ -217,7 +217,7 @@ def _map_entries(expr: RuntimeExpr) -> tuple[tuple[Ref, Ref], ...]:
         record: pb.Sort = sort.read()
         if (
             record.kind is None
-            or record.kind.field != "application"
+            or record.kind.field != "primitive"
             or record.kind.value.name != "Map"
             or len(record.kind.value.args) != 2
         ):

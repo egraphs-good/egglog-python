@@ -393,15 +393,13 @@ def test_host_model_contract_rejects_before_callbacks(case):
     sorts = pb.Program(
         sorts=[
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))
             ),
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication](
-                    "application", pb.SortApplication(name="PyObject")
-                )
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="PyObject"))
             ),
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="bool"))
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="bool"))
             ),
         ],
     )
@@ -575,7 +573,7 @@ def _callback_program(tag, callback=_observed_pyerr_callback):
     program = pb.Program(
         sorts=[
             next(
-                record for record in catalog.sorts if record.kind == Oneof("application", pb.SortApplication(name=name))
+                record for record in catalog.sorts if record.kind == Oneof("primitive", pb.PrimitiveSortRef(name=name))
             )
             for name in ("PyObject", "i64", "Unit")
         ],
@@ -997,7 +995,7 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
         next(
             index
             for index, sort in enumerate(program.sorts)
-            if sort.kind == Oneof("application", pb.SortApplication(name=name))
+            if sort.kind == Oneof("primitive", pb.PrimitiveSortRef(name=name))
         )
         for name in ("i64", "Unit")
     )
@@ -1328,7 +1326,7 @@ def test_function_sizes_include_unavailable_and_subsumed_native_bytes(table_tran
     program = pb.Program(
         sorts=[
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))
             ),
             pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "CountedHidden")),
         ],
@@ -1387,9 +1385,7 @@ def test_table_callable_projection_keeps_first_view_without_invocation(monkeypat
         pb.Program(
             sorts=[
                 pb.Sort(
-                    kind=Oneof[Literal["application"], pb.SortApplication](
-                        "application", pb.SortApplication(name="i64")
-                    )
+                    kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))
                 )
             ],
             declarations=[
@@ -1572,7 +1568,7 @@ def test_function_values_unavailable_cells_raise_from_native_bytes(table_transpo
     graph, requests, responses = table_transport
     # Canonical backend fixture: public unextractable authoring stays guarded.
     sorts = [
-        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
+        pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))),
         pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Hidden")),
     ]
     nodes = [
@@ -1676,9 +1672,7 @@ def test_function_values_rejects_malformed_response_without_engine(monkeypatch, 
     )
     response = pb.RunProgramOutput(
         sorts=[
-            pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name=name))
-            )
+            pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name=name)))
             for name in ("i64", "Bool")
         ],
         nodes=[
@@ -1750,9 +1744,7 @@ def test_function_values_rejects_primitives_without_table_request(table_transpor
         pb.Program(
             sorts=[
                 pb.Sort(
-                    kind=Oneof[Literal["application"], pb.SortApplication](
-                        "application", pb.SortApplication(name="i64")
-                    )
+                    kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))
                 )
             ],
             nodes=[
@@ -2821,8 +2813,8 @@ def test_response_owner_keeps_nominal_and_ambient_family_contexts(monkeypatch):
                     sorts=[
                         pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Pair")),
                         pb.Sort(
-                            kind=Oneof[Literal["application"], pb.SortApplication](
-                                "application", pb.SortApplication(name="i64")
+                            kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+                                "primitive", pb.PrimitiveSortRef(name="i64")
                             )
                         ),
                     ],
@@ -2884,7 +2876,7 @@ def test_public_bytes_requests_and_response_ownership(monkeypatch: pytest.Monkey
             assert request.options is not None
             cost_kind = request.sorts[request.options.cost_sort].kind
             assert cost_kind is not None
-            assert cost_kind.field == "application"
+            assert cost_kind.field == "primitive"
             assert cost_kind.value.name == "i64"
             return pb.CreateEGraphResponse(egraph_id=1, threads=1).to_binary()
 
@@ -2897,8 +2889,8 @@ def test_public_bytes_requests_and_response_ownership(monkeypatch: pytest.Monkey
                 pb.RunProgramOutput(
                     sorts=[
                         pb.Sort(
-                            kind=Oneof[Literal["application"], pb.SortApplication](
-                                "application", pb.SortApplication(name="i64")
+                            kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+                                "primitive", pb.PrimitiveSortRef(name="i64")
                             )
                         )
                     ],

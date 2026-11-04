@@ -328,8 +328,8 @@ def test_method_result_binding_preserves_independent_input_polymorphism(monkeypa
     receiver_sort = len(program.sorts)
     program.sorts.append(
         pb.Sort(
-            kind=Oneof[Literal["application"], pb.SortApplication](
-                "application", pb.SortApplication(name="Vec", args=[first_var])
+            kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+                "primitive", pb.PrimitiveSortRef(name="Vec", args=[first_var])
             )
         )
     )
@@ -338,8 +338,8 @@ def test_method_result_binding_preserves_independent_input_polymorphism(monkeypa
     signature.output = len(program.sorts)
     program.sorts.append(
         pb.Sort(
-            kind=Oneof[Literal["application"], pb.SortApplication](
-                "application", pb.SortApplication(name="Pair", args=[third_var, second_var])
+            kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+                "primitive", pb.PrimitiveSortRef(name="Pair", args=[third_var, second_var])
             )
         )
     )
@@ -383,8 +383,8 @@ def test_method_result_binding_preserves_independent_input_polymorphism(monkeypa
     bad_owner = len(program.sorts)
     program.sorts.append(
         pb.Sort(
-            kind=Oneof[Literal["application"], pb.SortApplication](
-                "application", pb.SortApplication(name="Vec", args=[second_var])
+            kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+                "primitive", pb.PrimitiveSortRef(name="Vec", args=[second_var])
             )
         )
     )

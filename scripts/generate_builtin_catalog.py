@@ -64,7 +64,7 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
             raise ValueError(msg)
         children = (
             kind.value.args
-            if kind.field == "application"
+            if kind.field == "primitive"
             else [*kind.value.params, kind.value.result]
             if kind.field == "func"
             else ()
@@ -253,7 +253,7 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
             if input_type:
                 return f"Callable[[{', '.join(args)}], {result}]"
             return f"UnstableFn[{', '.join([result, *args])}]"
-        if kind is None or kind.field != "application" or kind.value.name not in families:
+        if kind is None or kind.field != "primitive" or kind.value.name not in families:
             msg = "Static callable generation requires catalog family or function sorts"
             raise ValueError(msg)
         family = kind.value
@@ -314,7 +314,7 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
             assert kind is not None
             if kind.field == "var":
                 referenced_parameters.add(kind.value)
-            elif kind.field == "application":
+            elif kind.field == "primitive":
                 pending_sorts.extend(kind.value.args)
             elif kind.field == "func":
                 pending_sorts.extend([kind.value.result, *kind.value.params])
@@ -364,7 +364,7 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                     msg = "Unsupported builtin Python static view"
                     raise ValueError(msg)
                 owner_kind = view.owner.read().kind
-                if owner_kind is None or owner_kind.field != "application" or owner_kind.value.name not in families:
+                if owner_kind is None or owner_kind.field != "primitive" or owner_kind.value.name not in families:
                     msg = "Static owner must be a catalog family"
                     raise ValueError(msg)
                 family_name = owner_kind.value.name
@@ -461,7 +461,7 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                 if (
                     tail
                     and expected_kind is not None
-                    and expected_kind.field == "application"
+                    and expected_kind.field == "primitive"
                     and expected_kind.value.name == "Vec"
                 ):
                     element = sort_type(expected_kind.value.args[0], parameters=parameters)

@@ -102,7 +102,7 @@ def infer_sort(pattern: Ref, actual: Ref, binder_size: int, bindings: dict[int, 
                         msg = "Actual argument sorts must be closed"
                         raise TypeConstraintError(msg)
                     match record.kind.field:
-                        case "application":
+                        case "primitive":
                             indices = record.kind.value.args
                         case "func":
                             indices = [*record.kind.value.params, record.kind.value.result]
@@ -118,8 +118,8 @@ def infer_sort(pattern: Ref, actual: Ref, binder_size: int, bindings: dict[int, 
                 if lhs.kind.value != rhs.kind.value:
                     raise TypeConstraintError(f"Expected {lhs.kind.value}, got {rhs.kind.value}")
                 continue
-            case "application":
-                assert rhs.kind.field == "application"
+            case "primitive":
+                assert rhs.kind.field == "primitive"
                 if lhs.kind.value.name != rhs.kind.value.name:
                     raise TypeConstraintError(f"Expected {lhs.kind.value.name}, got {rhs.kind.value.name}")
                 expected_children = lhs.kind.value.args
@@ -169,7 +169,7 @@ def substitute_sort(pattern: Ref, bindings: dict[int, Ref]) -> Ref:  # noqa: C90
             resolved[current] = builder.import_ref(replacement)
             continue
         match record.kind.field:
-            case "application":
+            case "primitive":
                 children = record.kind.value.args
             case "func":
                 children = [*record.kind.value.params, record.kind.value.result]

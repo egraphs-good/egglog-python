@@ -147,7 +147,7 @@ def _snapshot_to_data(  # noqa: C901, PLR0912
                     assert sort is not None
                     if sort.field == "eq":
                         typ = type_names["eq_sort", sort.value]
-                    elif sort.field == "application":
+                    elif sort.field == "primitive":
                         typ = type_names["primitive_sort", sort.value.name]
                     else:
                         msg = "A nominal Python callable owner requires an equality or family sort"

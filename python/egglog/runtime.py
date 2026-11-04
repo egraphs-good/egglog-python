@@ -619,7 +619,7 @@ def _class_for_sort(sort: Ref) -> RuntimeClass:
         msg = "Expression sort is missing its kind"
         raise ValueError(msg)
     match record.kind.field:
-        case "application":
+        case "primitive":
             name = record.kind.value.name
             namespace = "primitive_sort"
         case "eq":
@@ -729,7 +729,7 @@ class RuntimeClass(type):
                 builder = Builder()
                 builder.import_ref(definition)
                 sort_kind = (
-                    Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name=kind.name))
+                    Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name=kind.name))
                     if isinstance(kind, pb.PrimitiveSort)
                     else Oneof[Literal["eq"], str]("eq", kind.name)
                 )
@@ -913,8 +913,8 @@ class RuntimeClass(type):
         else:
             assert isinstance(kind, pb.PrimitiveSort)
             sort_record = pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication](
-                    "application", pb.SortApplication(name=kind.name, args=indices)
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+                    "primitive", pb.PrimitiveSortRef(name=kind.name, args=indices)
                 )
             )
         index = builder.add("sorts", sort_record)
@@ -937,7 +937,7 @@ class RuntimeClass(type):
                 )
             return (
                 tuple(_class_for_sort(cls.__egg_sort__.owner.ref("sorts", index)) for index in record.kind.value.args)
-                if record.kind.field == "application"
+                if record.kind.field == "primitive"
                 else ()
             )
         if name == "__origin__":

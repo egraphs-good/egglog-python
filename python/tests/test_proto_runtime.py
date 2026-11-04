@@ -286,7 +286,7 @@ def test_object_annotated_constructor_roundtrips_native_payload():
         graph._state.destroy()
 
 
-@pytest.mark.parametrize("corruption", ["application", "arity", "declaration", "arm", "children"])
+@pytest.mark.parametrize("corruption", ["primitive", "arity", "declaration", "arm", "children"])
 def test_pyobject_materialization_rejects_malformed_shape(
     corruption, class_authoring_without_engine, monkeypatch, native_catalog_program
 ):
@@ -300,10 +300,10 @@ def test_pyobject_materialization_rejects_malformed_shape(
     program = pb.Program.from_binary(packed.program.to_binary())
     node = program.nodes[packed.indices[0]]
     sort = program.sorts[node.sort_id]
-    family = _required_oneof(sort.kind, "application", pb.SortApplication)
+    family = _required_oneof(sort.kind, "primitive", pb.PrimitiveSortRef)
     primitive = _required_oneof(node.kind, "primitive_value", pb.PrimitiveValue)
     custom = _required_oneof(primitive.value, "custom", pb.CustomValue)
-    if corruption == "application":
+    if corruption == "primitive":
         family.name = "String"
     elif corruption == "arity":
         family.args.append(node.sort_id)
@@ -403,7 +403,7 @@ def test_ne_uses_actual_generic_catalog_and_ordered_canonical_calls(monkeypatch)
     assert signature.inputs[0].sort == signature.inputs[1].sort
     assert declaration.owner.ref("sorts", signature.inputs[0].sort).read().kind == Oneof("var", 0)
     assert declaration.owner.ref("sorts", signature.output).read().kind == Oneof(
-        "application", pb.SortApplication(name="Unit")
+        "primitive", pb.PrimitiveSortRef(name="Unit")
     )
     function = RuntimeFunction(declaration)
     first, second = i64(1), i64(2)
@@ -1725,7 +1725,7 @@ def test_set_empty_converter_and_formed_pretty_use_retained_presentation(
 def test_map_from_pairs_stays_symbolic_with_forged_input_metadata(set_catalog_program, request):
     declaration = next(d for d in set_catalog_program.primitives if d.name == "egglog.core.map.of")
     input_sort = set_catalog_program.sorts[declaration.signature.inputs[0].sort]
-    assert input_sort.kind.field == "application"
+    assert input_sort.kind.field == "primitive"
     assert input_sort.kind.value.name == "Vec"
     input_sort.kind.value.name = "Set"
     generated = request.getfixturevalue("set_runtime")
@@ -2051,7 +2051,7 @@ def test_exact_pretty_uses_owned_type_presentation(
         sort = next(
             i
             for i, s in enumerate(rational_catalog_program.sorts)
-            if s.kind.field == "application" and s.kind.value.name == name
+            if s.kind.field == "primitive" and s.kind.value.name == name
         )
         builder = Builder(environment=(catalog_owner,))
         sort = builder.import_ref(catalog_owner.ref("sorts", sort))
@@ -2603,7 +2603,7 @@ def test_map_fixed_from_pairs_and_computed_vec_authoring():
     assert "Map" in {
         sort.kind.value.name
         for sort in pack([mapping.__egg_ref__]).program.sorts
-        if sort.kind is not None and sort.kind.field == "application"
+        if sort.kind is not None and sort.kind.field == "primitive"
     }
 
 
@@ -2830,8 +2830,8 @@ def test_map_shallow_inspection_preserves_equality_boundary_cycles():
     mapping = builder.add(
         "sorts",
         pb.Sort(
-            kind=Oneof[Literal["application"], pb.SortApplication](
-                "application", pb.SortApplication(name="Map", args=[integer, element])
+            kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+                "primitive", pb.PrimitiveSortRef(name="Map", args=[integer, element])
             )
         ),
     )
@@ -3374,7 +3374,7 @@ def test_vec_computed_value_is_not_locally_evaluated(vec_runtime):
         resolve_callable(computed_pair).read().kind.value.name
     ]
     assert {
-        sort.kind.value.name for sort in program.sorts if sort.kind is not None and sort.kind.field == "application"
+        sort.kind.value.name for sort in program.sorts if sort.kind is not None and sort.kind.field == "primitive"
     } >= {"Pair", "i64", "f64"}
     with pytest.raises(ExprValueError):
         pair.value
@@ -3789,9 +3789,7 @@ def test_class_and_initializer_documentation_presence(doc):
 def test_owned_definition_lookup_keeps_exact_refs_without_detaching(monkeypatch, name, later):
     requested = pb.Program(
         sorts=[
-            pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
-            )
+            pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64")))
         ],
         declarations=[
             pb.Declaration(
@@ -3873,7 +3871,7 @@ def test_owned_definition_lookup_and_deconstruction_are_linear(monkeypatch):
         unit = builder.add(
             "sorts",
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="Unit"))
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="Unit"))
             ),
         )
         for index in range(size):
@@ -7760,34 +7758,32 @@ def test_generic_inference_uses_binder_positions_and_is_transactional():
     builder.add(
         "sorts",
         pb.Sort(
-            kind=Oneof[Literal["application"], pb.SortApplication](
-                "application", pb.SortApplication(name="Pair", args=[0, 1])
+            kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+                "primitive", pb.PrimitiveSortRef(name="Pair", args=[0, 1])
             )
         ),
     )
     builder.add(
         "sorts",
-        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
+        pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))),
+    )
+    builder.add(
+        "sorts",
+        pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="String"))),
     )
     builder.add(
         "sorts",
         pb.Sort(
-            kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="String"))
-        ),
-    )
-    builder.add(
-        "sorts",
-        pb.Sort(
-            kind=Oneof[Literal["application"], pb.SortApplication](
-                "application", pb.SortApplication(name="Pair", args=[3, 4])
+            kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+                "primitive", pb.PrimitiveSortRef(name="Pair", args=[3, 4])
             )
         ),
     )
     builder.add(
         "sorts",
         pb.Sort(
-            kind=Oneof[Literal["application"], pb.SortApplication](
-                "application", pb.SortApplication(name="Pair", args=[4, 3])
+            kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+                "primitive", pb.PrimitiveSortRef(name="Pair", args=[4, 3])
             )
         ),
     )
@@ -7833,16 +7829,16 @@ def test_sort_inference_and_substitution_are_iterative():
         pattern = builder.add(
             "sorts",
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication](
-                    "application", pb.SortApplication(name="Vec", args=[pattern])
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+                    "primitive", pb.PrimitiveSortRef(name="Vec", args=[pattern])
                 )
             ),
         )
         concrete = builder.add(
             "sorts",
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication](
-                    "application", pb.SortApplication(name="Vec", args=[concrete])
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+                    "primitive", pb.PrimitiveSortRef(name="Vec", args=[concrete])
                 )
             ),
         )
@@ -7857,7 +7853,7 @@ def test_call_authoring_binds_keywords_defaults_and_core_input_order():
     builder = Builder()
     sort = builder.add(
         "sorts",
-        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
+        pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))),
     )
     default = builder.add(
         "nodes",
@@ -8283,20 +8279,20 @@ def test_generic_empty_call_requires_result_owner_and_keeps_signature_unchanged(
     pattern = builder.add(
         "sorts",
         pb.Sort(
-            kind=Oneof[Literal["application"], pb.SortApplication](
-                "application", pb.SortApplication(name="Vec", args=[variable])
+            kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+                "primitive", pb.PrimitiveSortRef(name="Vec", args=[variable])
             )
         ),
     )
     scalar = builder.add(
         "sorts",
-        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
+        pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))),
     )
     concrete = builder.add(
         "sorts",
         pb.Sort(
-            kind=Oneof[Literal["application"], pb.SortApplication](
-                "application", pb.SortApplication(name="Vec", args=[scalar])
+            kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+                "primitive", pb.PrimitiveSortRef(name="Vec", args=[scalar])
             )
         ),
     )

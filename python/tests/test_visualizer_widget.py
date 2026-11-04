@@ -16,18 +16,18 @@ def snapshot():
         sorts=[
             pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "A")),
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))
             ),
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="String"))
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="String"))
             ),
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication](
-                    "application", pb.SortApplication(name="Vec", args=[0])
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+                    "primitive", pb.PrimitiveSortRef(name="Vec", args=[0])
                 )
             ),
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="Unit"))
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="Unit"))
             ),
         ],
         declarations=[
@@ -171,11 +171,11 @@ def test_snapshot_function_type_labels_use_only_owned_records(monkeypatch):
         sorts=[
             pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "A")),
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="String"))
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="String"))
             ),
             pb.Sort(
-                kind=Oneof[Literal["application"], pb.SortApplication](
-                    "application", pb.SortApplication(name="Vec", args=[0])
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef](
+                    "primitive", pb.PrimitiveSortRef(name="Vec", args=[0])
                 )
             ),
             pb.Sort(kind=Oneof[Literal["func"], pb.FuncSort]("func", pb.FuncSort(params=[2], result=1))),
@@ -247,9 +247,7 @@ def test_snapshot_custom_costs_never_invoke_codec_or_debug(snapshot, monkeypatch
     program = snapshot.program
     cost_sort = len(program.sorts)
     program.sorts.append(
-        pb.Sort(
-            kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="Opaque"))
-        )
+        pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="Opaque")))
     )
     first = len(program.nodes)
     for payload in (b"declared", b"assigned!"):

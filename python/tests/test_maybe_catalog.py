@@ -363,7 +363,7 @@ def test_maybe_inspection_rejects_malformed_local_values(mutation, native_catalo
     assert node_kind.field == "primitive_value"
     sort_kind = program.sorts[node.sort_id].kind
     assert sort_kind is not None
-    assert sort_kind.field == "application"
+    assert sort_kind.field == "primitive"
     if mutation == "wrong_child":
         payload = node_kind.value.value
         assert payload is not None
