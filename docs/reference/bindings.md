@@ -22,7 +22,7 @@ the map does not repeat native signatures.
 Programs, snapshots and history contain user definitions and refer to configured
 builtins by canonical keys. They do not contain builtin descriptor snapshots.
 Every equality entry in an input `Program.sorts` establishes that nominal type,
-including unused entries. Its optional `doc` and `span` carry definition metadata.
+including unused entries. Its optional `doc` and input `span` carry definition metadata.
 Every typed `Node.binding` establishes a global slot in a separate name
 namespace; `Node.var` remains lexical. `Command.let` assigns a value to a binding
 node, supports same-sort rebinding and loops, and is excluded from rule heads.
@@ -48,6 +48,17 @@ Each frame contains either an output with its own arenas or an error; earlier
 outputs remain valid after a later error. Diagnostics carry a format and opaque
 bytes. Completion is acknowledged by an empty success frame or a final error.
 `EGraph.freeze()` returns an owned `EGraphSnapshot`.
+
+Successful execution frames and snapshots contain no source files or spans,
+including nested reconstruction Programs, saved rules and deferred lambda code.
+Documentation, readable names and diagnostic rule labels remain. Source-produced
+`Node.var` records keep the authored binder names; private backend hygiene does
+not alter these protocol names.
+
+An error frame carries only the source file referenced by its span, remapped to
+file index zero. An error without a span has no files. Recorded input history and
+live source diagnostics retain their input origins. `GetBuiltins` remains a
+separate provider catalog with its own metadata.
 
 ## Thread safety
 

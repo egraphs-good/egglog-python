@@ -961,6 +961,9 @@ It records logical state rather than request history or scheduler progress.
 The shared snapshot contains semantic definitions, types and values. Python
 names and call conventions remain in the frontend context; a detached snapshot
 does not carry enough information to reconstruct an identical Python API.
+Snapshots retain documentation and rule labels, but omit source files and spans,
+including origins in saved rules and callable bodies. Restoring a snapshot does
+not restore those source locations; later inputs can supply their own locations.
 Builtin signatures are also separate: the snapshot refers to the configured
 backend's canonical keys and needs that builtin environment for frontend typing.
 
@@ -976,7 +979,8 @@ Retrieve history before destroying the graph; destruction releases its retained
 inputs. Other live graphs and clones retain their own histories.
 
 History remaps each accepted program's references into shared arenas while
-preserving command order and node sharing. It includes observations such as
+preserving command order, node sharing and input source locations. It includes
+observations such as
 `freeze` and accepted inputs whose execution later fails. Validation and
 preparation rejects are omitted. `pop` restores the saved history prefix,
 discarding inputs from the consumed branch. History contains inputs rather than

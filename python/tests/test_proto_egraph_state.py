@@ -3,7 +3,7 @@
 """Record/bytes plumbing tests; the inert responder is not engine conformance."""
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from operator import index
 from pathlib import Path
 from threading import Barrier, Event
@@ -11,7 +11,7 @@ from typing import Literal, Never, NotRequired, Self, SupportsIndex, TypedDict, 
 
 import pytest
 from egglog_proto.egglog.v1 import egglog_pb as pb
-from protobuf import Oneof
+from protobuf import DescFieldValueList, Message, Oneof
 
 from egglog import (
     Action,
@@ -59,6 +59,18 @@ def _record_frames(encoded: list[bytes], prefix: Path) -> list[pb.RunProgramResp
     for position, frame in enumerate(encoded):
         (prefix.parent / f"{prefix.name}-{position}.pb").write_bytes(frame)
     return _decode_run_frames(encoded)
+
+
+def _nested_messages(root: Message) -> Iterator[Message]:
+    """Inspect every nested record, including saved code and reconstruction Programs."""
+    pending = [root]
+    while pending:
+        record = pending.pop()
+        yield record
+        for field in record.desc().fields:
+            value = record[field]
+            values = value if isinstance(field.value, DescFieldValueList) else (value,)
+            pending.extend(child for child in values if isinstance(child, Message))
 
 
 def _required_error(frames: list[pb.RunProgramResponse]) -> pb.Error:
@@ -267,12 +279,16 @@ def test_freeze_retains_unused_nominal_sorts_and_unset_binding_slots():
 
 def test_source_producer_returns_only_program_bytes_and_scope_counts():
     source = bindings._ProtoEngine.source(
-        "(function source_scoped () i64 :merge new) (set (source_scoped) 7)"
+        "(function source_scoped () i64 :merge new)"
+        " (relation source_scoped_seen (i64))"
+        " (rule ((= e (source_scoped))) ((source_scoped_seen e)))"
+        " (function e () i64 :merge new) (set (source_scoped) 7)"
         " (push 1) (set (source_scoped) 9) (check (= (source_scoped) 9))"
         " (pop 1) (check (= (source_scoped) 7))"
     )
     kinds = []
     commands = []
+    variables = set()
     while (submission := source.next_submission()) is not None:
         kind, encoded, count = submission
         kinds.append(kind)
@@ -282,12 +298,16 @@ def test_source_producer_returns_only_program_bytes_and_scope_counts():
             assert program.to_binary() == encoded
             assert count == 0
             commands.append([command.kind.field for command in program.commands if command.kind is not None])
+            variables.update(
+                node.kind.value for node in program.nodes if node.kind is not None and node.kind.field == "var"
+            )
         else:
             assert kind in {"push", "pop"}
             assert encoded is None
             assert count == 1
     assert kinds == ["program", "push", "program", "pop", "program"]
     assert commands == [["action"], ["action", "check"], ["check"]]
+    assert variables == {"e", "new"}
     with pytest.raises(ValueError, match="requires a host callback"):
         bindings._ProtoEngine.source("(print-function missing :mode csv)").next_submission()
 
@@ -341,10 +361,12 @@ def test_source_producer_later_error_rejects_only_unsubmitted_block(barrier):
             state.destroy()
 
 
-def test_source_block_streams_outputs_before_runtime_failure():
-    graph = EGraph()
+@pytest.mark.parametrize("located", [False, True])
+def test_source_block_streams_outputs_before_runtime_failure(located):
+    graph = EGraph(record_history=True)
     source = bindings._ProtoEngine.source(
         "(function source_streamed () i64 :merge new) (set (source_streamed) 7)"
+        " (rule ((= e (source_streamed))) ((set (source_streamed) (+ e 1))))"
         ' (print-size source_streamed) (panic "source stream marker") (set (source_streamed) 9)'
     )
     try:
@@ -361,6 +383,19 @@ def test_source_block_streams_outputs_before_runtime_failure():
             "action",
             "action",
         ]
+        assert len(program.files) == 1
+        original_file = pb.SourceFile.from_binary(program.files[0].to_binary())
+        program.files.insert(0, pb.SourceFile(name="unrelated.egg", contents="private unrelated source"))
+        for record in _nested_messages(program):
+            if isinstance(record, pb.Span):
+                record.file += 1
+            elif not located and any(field.name == "span" for field in record.desc().fields):
+                record.span = None
+        panic_span = program.commands[2].span
+        assert (panic_span is not None) is located
+        rule = program.rulesets[0].value.rules[0]
+        rule.doc = "retained rule documentation"
+        program.commands.insert(2, pb.Command(kind=Oneof("freeze", pb.Freeze())))
         events = []
         chunks = []
         encoded_chunks = []
@@ -373,6 +408,7 @@ def test_source_block_streams_outputs_before_runtime_failure():
             if chunk.result.field == "error":
                 events.append("error")
                 return False
+            assert all(not isinstance(record, pb.Span | pb.SourceFile) for record in _nested_messages(chunk))
             events.extend(output.kind.field for output in chunk.result.value.outputs if output.kind is not None)
             return True
 
@@ -381,12 +417,28 @@ def test_source_block_streams_outputs_before_runtime_failure():
         )
         events.append("returned")
         assert host_error is None
-        assert events == ["sizes", "error", "returned"]
+        assert events == ["sizes", "snapshot", "error", "returned"]
         failure = _required_error(_decode_run_frames([terminal]))
         assert failure.code == pb.ErrorCode.RUNTIME_FAILURE
-        assert failure.location == pb.CommandLocation(path=[2])
+        assert failure.location == pb.CommandLocation(path=[3])
         assert "source stream marker" in failure.message
         assert encoded_chunks[-1] == terminal
+        if located:
+            assert panic_span is not None
+            assert failure.span == pb.Span(file=0, start=panic_span.start, end=panic_span.end)
+            assert chunks[-1].files == [original_file]
+        else:
+            assert failure.span is None
+            assert chunks[-1].files == []
+        frozen = _required_data(chunks, "snapshot").outputs[0].kind.value
+        assert frozen.program is not None
+        assert frozen.program.rulesets[0].value.rules[0].doc == rule.doc
+        assert frozen.program.rulesets[0].value.rules[0].name == rule.name
+        history = graph.history()
+        if located:
+            assert original_file in history.files
+            assert any(isinstance(record, pb.Span) for record in _nested_messages(history))
+        assert history.rulesets[0].value.rules[0].doc == rule.doc
         sizes = _required_data(chunks, "sizes")
         assert sizes.outputs[0].kind == Oneof(
             "sizes", pb.TableSizes(sizes=[pb.TableSize(table="source_streamed", rows=1)])

@@ -177,6 +177,8 @@ def test_runtime_error_keeps_observation_prefix_when_terminal_callback_returns_f
     terminal = chunks[-1]
     assert terminal.result is not None
     assert terminal.result.field == "error"
+    assert terminal.files == []
+    assert terminal.result.value.span is None
     assert terminal.result.value.location == pb.CommandLocation(path=[1])
     assert caught.value.__dict__["_egglog_proto_error"] == terminal.result.value
     assert caught.value.__dict__["_egglog_proto_frame"] == terminal
