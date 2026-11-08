@@ -56,8 +56,8 @@ _SCALARS = cast("dict[str, ScalarProtocol]", _POLICY["SCALAR_PROTOCOLS"])
 _REFLECTED = cast("set[str]", _POLICY["NUMERIC_BINARY_METHODS"])
 
 
-def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | None = None) -> str:  # noqa: C901, PLR0912
-    """Derive catalog views and private helper types without executing frontend code."""
+def render_builtins(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | None = None) -> str:  # noqa: C901, PLR0912
+    """Generate ordinary Python declarations from canonical native records."""
     # Reject dangling sort addresses before owned references are traversed.
     for sort in program.sorts:
         kind = sort.kind
@@ -85,32 +85,28 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
         for view in supplied.views:
             _validate_view(reference, view)
     family_views: dict[str, TypePresentation | None] = {}
-    private_names = {"_container_member", "_maybe_value", "_pair_value", "_container_items", "_map_entries"}
-    private_helpers = {
-        node.name: node
-        for node in ast.parse((_PACKAGE / "builtins.py").read_text()).body
-        if isinstance(node, ast.FunctionDef) and node.name in private_names
+    private_names = {
+        "_collection_to_expr",
+        "_container_items",
+        "_dict_to_map",
+        "_function_to_expr",
+        "_map_value",
+        "_maybe_value",
+        "_none_to_maybe",
+        "_pair_value",
+        "_provided_default",
+        "_tuple_to_pair",
     }
-    if private_helpers.keys() != private_names:
-        msg = "Private builtin helper definitions are missing"
-        raise ValueError(msg)
-    for node in private_helpers.values():
-        arguments = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
-        if (
-            node.decorator_list
-            or node.args.vararg is not None
-            or node.args.kwarg is not None
-            or node.returns is None
-            or any(argument.annotation is None for argument in arguments)
-        ):
-            raise ValueError(f"Private builtin helper {node.name} requires a fully annotated fixed signature")
-        node.body = [ast.Expr(value=ast.Constant(value=Ellipsis))]
     module = ("egglog", "builtins")
     families: dict[str, pb.PrimitiveSort] = {}
     names: dict[str, str] = {}
     exported = {"ExprValueError"}
     reserved_names = {
         "AttributeError",
+        "FunctionType",
+        "MethodType",
+        "partial",
+        "expr_fact",
         "BaseExpr",
         "BuiltinExpr",
         "CallKind",
@@ -132,6 +128,11 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
         "dict",
         "set",
         "classmethod",
+        "method",
+        "function",
+        "convert",
+        "converter",
+        "cast",
         "str",
         "tuple",
         *private_names,
@@ -174,7 +175,7 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
         binding = binding.type_view if binding is not None else None
         path = tuple(binding.path) if binding is not None else (*module, family.name)
         if path[:-1] != module:
-            raise ValueError(f"Cannot emit a foreign Python type path in builtins.pyi: {path}")
+            raise ValueError(f"Cannot emit a foreign Python type path in builtins.py: {path}")
         name = identifier(path[-1])
         if name in reserved_names:
             raise ValueError(f"Python static name collision with a host/import name: {name}")
@@ -288,7 +289,9 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
     methods: dict[str, dict[str, str]] = {name: {} for name in families}
     method_variables: dict[str, list[str]] = {name: [] for name in families}
     functions: dict[str, str] = {}
-    for primitive in program.primitives:
+    member_defaults: dict[Ref, tuple[str, str]] = {}
+    free_defaults: dict[Ref, tuple[str, str]] = {}
+    for primitive in sorted(program.primitives, key=lambda declaration: declaration.name):
         key = "callable", primitive.name
         if key not in surface or not surface[key].views:
             # These native definitions have no admitted Python callable surface
@@ -325,7 +328,7 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
         ):
             msg = "Static signature requires all generic parameters in its sort closure"
             raise ValueError(msg)
-        for view in surface[key].views:
+        for view_index, view in enumerate(surface[key].views):
             free = view.kind == CallKind.FUNCTION
             if (
                 view.kind
@@ -478,15 +481,43 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                     ):
                         msg = "Default root has an invalid sort or index"
                         raise ValueError(msg)
-                    default = " = ..."
+                    defaults = free_defaults if free else member_defaults
+                    if parameter.default not in defaults:
+                        default_name = f"_default_{'free' if free else 'member'}_{len(defaults)}"
+                        node = parameter.default.read()
+                        expression = None
+                        if free and node.kind is not None and node.kind.field == "call" and not node.kind.value.args:
+                            candidates = surface.get(("callable", node.kind.value.func))
+                            for candidate in candidates.views if candidates is not None else ():
+                                if candidate.kind == CallKind.CLASS_METHOD and candidate.owner is not None:
+                                    target = sort_type(candidate.owner)
+                                    expression = f"{target}.{candidate.path[0]}()"
+                                    break
+                        if expression is None:
+                            expression = (
+                                f"cast({annotation!r}, _provided_default({primitive.name!r}, "
+                                f"{view_index}, {parameter.name!r}))"
+                            )
+                        defaults[parameter.default] = default_name, expression
+                    default = f" = {defaults[parameter.default][0]}"
                     has_default = True
                 elif has_default and not tail:
                     msg = "Required parameter follows a default"
                     raise ValueError(msg)
                 rendered_parameters.append(f"{'*' if tail else ''}{parameter_name}: {annotation}{default}")
-            prefix = "    @property\n" if view.kind == CallKind.PROPERTY else ""
+            reverse = ", reverse_args=True" if view.receiver is not None and view.receiver > 0 else ""
+            # Reciprocal rich-comparison decorators cause a MyPy inference
+            # cycle. BuiltinExpr already resolves these ordinary headers to the
+            # exact admitted native family/member view, with the same checks.
+            prefix = (
+                ""
+                if name in {"__lt__", "__le__", "__gt__", "__ge__"}
+                else (f"    @method(egg_fn={primitive.name!r}{reverse})\n")
+            )
+            if view.kind == CallKind.PROPERTY:
+                prefix = "    @property\n" + prefix
             if view.kind == CallKind.CLASS_METHOD:
-                prefix = "    @classmethod\n"
+                prefix += "    @classmethod\n"
             result_type = "None" if view.kind == CallKind.INITIALIZER else output
             if used_parameters != set(range(len(parameters))):
                 msg = "Unused static signature parameter" + (" in static owner view" if not free else "")
@@ -499,6 +530,7 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                 functions[name] = (
                     "".join(f'{variable} = TypeVar("{variable}", bound=BaseExpr)\n' for variable in parameters)
                     + ("\n" if parameters else "")
+                    + f"@function(egg_fn={primitive.name!r}, builtin=True)\n"
                     + f"def {name}({', '.join(rendered_parameters)}) -> {result_type}: ...\n"
                 )
                 continue
@@ -524,7 +556,11 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                 ):
                     reverse = "__r" + name[2:]
                     annotation = sort_type(effective_inputs[view.params[0].core_input], input_type=True)
-                    generated[reverse] = f"    def {reverse}(self, other: {annotation}) -> {output}: ..."
+                    generated[reverse] = (
+                        "    @method(preserve=True)\n"
+                        f"    def {reverse}(self, other: {annotation}) -> {output}:\n"
+                        f"        return convert(other, {owner}).{name}(self)"
+                    )
             for method_name, text in generated.items():
                 if method_name in methods[family_name]:
                     raise ValueError(f"Python member collision: {owner}.{method_name}")
@@ -578,33 +614,56 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
         ["Iterator"] if vec_protocol or map_protocol or set_protocol or multiset_protocol else []
     )
     lines = [
-        "# Generated from the native catalog, Python host protocols and helper annotations. Do not edit.",
+        "# Generated from the native catalog and Python host protocols. Do not edit.",
+        '# mypy: disable-error-code="empty-body"',
         "# ruff: noqa: N801, N816, PYI042 -- Preserve canonical Python presentation names.",
         "",
+        "from __future__ import annotations",
+        "",
         *(["from collections.abc import " + ", ".join(collections_imports)] if collections_imports else []),
-        "from dataclasses import dataclass",
         *(["from fractions import Fraction"] if any(name in families for name in ("Rational", "BigRat")) else []),
+        "from functools import partial",
+        "from types import FunctionType, MethodType",
         "from typing import Generic, Never"
         + (", Protocol" if pyobject_protocol else "")
         + ", TypeAlias, TypeVar"
         + (", TypeVarTuple, Unpack" if function_protocol else "")
+        + (
+            ", cast"
+            if member_defaults or any("cast(" in expression for _, expression in free_defaults.values())
+            else ""
+        )
         + (", overload" if function_protocol or any(p.conversion_sort for p in _SCALARS.values()) else ""),
         "",
         "from typing_extensions import deprecated",
         "",
-        "from ._presentation import CallKind",
-        "from ._program import Ref",
-        "from .egraph import BaseExpr, BuiltinExpr",
-        "from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction",
+        "from ._builtin_values import (",
+        "    ExprValueError,",
+        "    _collection_to_expr,",
+        "    _container_items,",
+        "    _dict_to_map,",
+        "    _function_to_expr,",
+        "    _map_value,",
+        "    _maybe_value,",
+        "    _none_to_maybe,",
+        "    _pair_value,",
+        *(
+            ["    _provided_default,"]
+            if member_defaults or any("_provided_default(" in expression for _, expression in free_defaults.values())
+            else []
+        ),
+        "    _tuple_to_pair,",
+        ")",
+        "from .conversion import convert, converter",
+        "from .egraph import BaseExpr, BuiltinExpr, expr_fact, function, method",
+        "from .runtime import RuntimeExpr, RuntimeFunction",
         "",
         "__all__ = " + json.dumps(sorted(exported)),
         "",
-        "@dataclass",
-        "class ExprValueError(AttributeError):",
-        "    expr: object",
-        "    allowed: str",
-        "",
     ]
+    lines.extend(f"{name} = {expression}" for name, expression in member_defaults.values())
+    if member_defaults:
+        lines.append("")
     if function_protocol:
         lines.extend([
             '_UnstableFn_T = TypeVar("_UnstableFn_T", bound=BaseExpr)',
@@ -612,7 +671,7 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
             '_UnstableFn_T1 = TypeVar("_UnstableFn_T1")',
             '_UnstableFn_T2 = TypeVar("_UnstableFn_T2")',
             "",
-            "class UnstableFn(BuiltinExpr, Generic[_UnstableFn_T, *_UnstableFn_TS]):",
+            'class UnstableFn(BuiltinExpr, Generic[_UnstableFn_T, *_UnstableFn_TS], egg_sort="UnstableFn"):',
             '    __match_args__ = ("value",)',
             "    @overload",
             "    def __init__(self, f: Callable[[Unpack[_UnstableFn_TS]], _UnstableFn_T]) -> None: ...",
@@ -620,14 +679,41 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
             "    def __init__(self, f: Callable[[_UnstableFn_T1, Unpack[_UnstableFn_TS]], _UnstableFn_T], _a: _UnstableFn_T1, /) -> None: ...",
             "    @overload",
             "    def __init__(self, f: Callable[[_UnstableFn_T1, _UnstableFn_T2, Unpack[_UnstableFn_TS]], _UnstableFn_T], _a: _UnstableFn_T1, _b: _UnstableFn_T2, /) -> None: ...",
+            "    def __init__(self, f: Callable[..., BaseExpr], *partial: object) -> None: ...",
             "    def __call__(self, *args: *_UnstableFn_TS) -> _UnstableFn_T: ...",
             "    @property",
-            "    def value(self) -> Callable[[Unpack[_UnstableFn_TS]], _UnstableFn_T]: ...",
+            "    @method(preserve=True)",
+            "    def value(self) -> Callable[[Unpack[_UnstableFn_TS]], _UnstableFn_T]:",
+            "        from .deconstruct import get_literal_value  # noqa: PLC0415 -- avoid the inspection import cycle",
+            "        value = get_literal_value(self)",
+            "        if value is None:",
+            '            raise ExprValueError(self, "UnstableFn(f, *args)")',
+            "        return value",
+            "    @method(preserve=True)",
             '    @deprecated("use .value")',
-            "    def eval(self) -> Callable[[Unpack[_UnstableFn_TS]], _UnstableFn_T]: ...",
+            "    def eval(self) -> Callable[[Unpack[_UnstableFn_TS]], _UnstableFn_T]:",
+            "        return self.value",
             "",
         ])
-    for family_name in families:
+    # A widening Like alias includes its symbolic conversion source. Emit that
+    # source class first as well, so reciprocal operator inference sees its
+    # already-checked methods rather than a deferred decorated class.
+    class_order: list[str] = []
+    pending = dict(families)
+    while pending:
+        ready = [
+            family_name
+            for family_name in pending
+            if (protocol := _SCALARS.get(family_name)) is None or protocol.conversion_sort not in pending
+        ]
+        if not ready:
+            msg = "Cyclic host conversion aliases"
+            raise ValueError(msg)
+        for family_name in ready:
+            class_order.append(family_name)
+            del pending[family_name]
+    aliases: dict[str, list[str]] = {}
+    for family_name in class_order:
         name = names[family_name]
         family_variables = variables[family_name]
         lines.extend(
@@ -637,7 +723,7 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
         if family_variables or method_variables[family_name]:
             lines.append("")
         generic = f", Generic[{', '.join(family_variables)}]" if family_variables else ""
-        lines.append(f"class {name}(BuiltinExpr{generic}):")
+        lines.append(f"class {name}(BuiltinExpr{generic}, egg_sort={family_name!r}):")
         protocol = _SCALARS.get(family_name)
         reserved = set()
         if protocol is None:
@@ -653,7 +739,9 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                 lines.extend([
                     '    __match_args__ = ("value",)',
                     "    @property",
-                    f"    def value(self) -> tuple[{', '.join(family_variables)}]: ...",
+                    "    @method(preserve=True)",
+                    f"    def value(self) -> tuple[{', '.join(family_variables)}]:",
+                    "        return _pair_value(self)",
                 ])
                 reserved.update({"value", "__match_args__"})
             elif family_name == "Maybe":
@@ -663,7 +751,9 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                 lines.extend([
                     '    __match_args__ = ("value",)',
                     "    @property",
-                    f"    def value(self) -> {family_variables[0]} | None: ...",
+                    "    @method(preserve=True)",
+                    f"    def value(self) -> {family_variables[0]} | None:",
+                    "        return _maybe_value(self)",
                 ])
                 reserved.update({"value", "__match_args__"})
             elif (
@@ -680,12 +770,29 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                 lines.extend([
                     '    __match_args__ = ("value",)',
                     "    @property",
-                    f"    def value(self) -> {value_type}: ...",
-                    f"    def __iter__(self) -> Iterator[{element}]: ...",
-                    "    def __len__(self) -> int: ...",
-                    f"    def __contains__(self, item: {element}) -> bool: ...",
+                    "    @method(preserve=True)",
+                    f"    def value(self) -> {value_type}:",
+                    "        return "
+                    + (
+                        "_container_items(self)"
+                        if family_name == "Vec"
+                        else f"{'set' if family_name == 'Set' else 'list'}(_container_items(self))"
+                    ),
+                    "    @method(preserve=True)",
+                    f"    def __iter__(self) -> Iterator[{element}]:",
+                    "        return iter(dict.fromkeys(_container_items(self)))"
+                    if family_name == "Set"
+                    else "        return iter(self.value)",
+                    "    @method(preserve=True)",
+                    "    def __len__(self) -> int:",
+                    "        return len(self.value)",
+                    "    @method(preserve=True)",
+                    f"    def __contains__(self, item: {element}) -> bool:",
+                    "        return item in self.value",
+                    "    @method(preserve=True)",
                     '    @deprecated("use .value")',
-                    f"    def eval(self) -> {value_type}: ...",
+                    f"    def eval(self) -> {value_type}:",
+                    "        return self.value",
                 ])
                 reserved.update({"value", "__match_args__", "__iter__", "__len__", "__contains__", "eval"})
             elif family_name == "Map":
@@ -694,20 +801,51 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                 lines.extend([
                     '    __match_args__ = ("value",)',
                     "    @property",
-                    f"    def value(self) -> {value_type}: ...",
-                    f"    def __iter__(self) -> Iterator[{key}]: ...",
-                    "    def __len__(self) -> int: ...",
-                    f"    def __contains__(self, key: {key}) -> bool: ...",
+                    "    @method(preserve=True)",
+                    f"    def value(self) -> {value_type}:",
+                    "        return _map_value(self)",
+                    "    @method(preserve=True)",
+                    f"    def __iter__(self) -> Iterator[{key}]:",
+                    "        return iter(self.value)",
+                    "    @method(preserve=True)",
+                    "    def __len__(self) -> int:",
+                    "        return len(self.value)",
+                    "    @method(preserve=True)",
+                    f"    def __contains__(self, key: {key}) -> bool:",
+                    "        return key in self.value",
+                    "    @method(preserve=True)",
                     '    @deprecated("use .value")',
-                    f"    def eval(self) -> {value_type}: ...",
+                    f"    def eval(self) -> {value_type}:",
+                    "        return self.value",
                 ])
                 reserved.update({"value", "__match_args__", "__iter__", "__len__", "__contains__", "eval"})
         else:
             value_type = protocol.value_type.__name__
-            if protocol.conversion_sort and "__init__" in methods[family_name]:
-                methods[family_name]["__init__"] = methods[family_name]["__init__"].replace(
-                    ") -> None:", ", /) -> None:"
-                )
+            if "__init__" in methods[family_name]:
+                # RuntimeClass owns scalar codec/native dispatch; this is a real
+                # Python typing header, not a second semantic initializer.
+                initializer = methods[family_name]["__init__"].splitlines()[-1]
+                initializer = initializer.replace(") -> None:", ", /) -> None:")
+                if protocol.value_type.__name__ == "Fraction":
+                    header = ast.parse("class _Header:\n" + initializer).body[0]
+                    assert isinstance(header, ast.ClassDef)
+                    declaration = header.body[0]
+                    assert isinstance(declaration, ast.FunctionDef)
+                    arguments = declaration.args.posonlyargs[1:]
+                    if len(arguments) != 2 or any(argument.annotation is None for argument in arguments):
+                        msg = "Fraction codec requires its two native initializer inputs"
+                        raise ValueError(msg)
+                    first, second = arguments
+                    first_type = ast.unparse(first.annotation)
+                    second_type = ast.unparse(second.annotation)
+                    initializer = (
+                        "    @overload\n"
+                        "    def __init__(self, value: int | Fraction, /) -> None: ...\n"
+                        "    @overload\n" + initializer + "\n"
+                        f"    def __init__(self, {first.arg}: {first_type} | Fraction, "
+                        f"{second.arg}: {second_type} | None = None, /) -> None: ..."
+                    )
+                methods[family_name]["__init__"] = initializer
             if protocol.literal_types:
                 if protocol.conversion_sort is None:
                     lines.append(f"    def __init__(self, value: {value_type}, /) -> None: ...")
@@ -715,50 +853,72 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                 elif "__init__" not in methods[family_name]:
                     lines.append("    def __init__(self, _unavailable: Never, /) -> None: ...")
                     reserved.add("__init__")
-                elif protocol.value_type.__name__ == "Fraction":
-                    methods[family_name]["__init__"] = (
-                        "    @overload\n"
-                        "    def __init__(self, value: int | Fraction, /) -> None: ...\n"
-                        "    @overload\n" + methods[family_name]["__init__"]
-                    )
                 lines.extend([
                     '    __match_args__ = ("value",)',
                     "    @property",
-                    f"    def value(self) -> {value_type}: ...",
+                    "    @method(preserve=True)",
+                    f"    def value(self) -> {value_type}:",
+                ])
+                if family_name == "PyObject":
+                    lines.extend([
+                        "        from .deconstruct import _pyobject_value  # noqa: PLC0415 -- materialize only on explicit inspection",
+                        "        if not isinstance(self, RuntimeExpr):",
+                        '            msg = "Expected a runtime expression"',
+                        "            raise TypeError(msg)",
+                        "        return _pyobject_value(self)",
+                    ])
+                else:
+                    lines.extend([
+                        "        from .deconstruct import get_literal_value  # noqa: PLC0415 -- avoid the inspection import cycle",
+                        "        value = get_literal_value(self)",
+                        "        if value is None:",
+                        f"            raise ExprValueError(self, {name!r})",
+                        "        return value",
+                    ])
+                lines.extend([
+                    "    @method(preserve=True)",
                     '    @deprecated("use .value")',
-                    f"    def eval(self) -> {value_type}: ...",
+                    f"    def eval(self) -> {value_type}:",
+                    "        return self.value",
                 ])
                 reserved.update({"value", "eval", "__match_args__"})
             else:
                 lines.append("    def __init__(self) -> None: ...")
                 reserved.add("__init__")
             for hook, result in protocol.hooks:
-                lines.append(f"    def {hook}(self) -> {result.__name__}: ...")
+                lines.extend([
+                    "    @method(preserve=True)",
+                    f"    def {hook}(self) -> {result.__name__}:",
+                    "        return bool(expr_fact(self))"
+                    if family_name == "Unit"
+                    else f"        return {result.__name__}(self.value)",
+                ])
                 reserved.add(hook)
         if reserved & methods[family_name].keys():
             raise ValueError(f"Python member collides with host protocol: {name}")
         lines.extend(methods[family_name].values())
         lines.append("")
+        alias_lines = aliases[family_name] = []
         if family_name == "Vec" and vec_protocol:
-            lines.extend([
+            alias_lines.extend([
                 f'{host_variable} = TypeVar("{host_variable}")',
                 f"{alias}: TypeAlias = {name}[{family_variables[0]}] | tuple[{host_variable}, ...] | list[{host_variable}]",
                 "",
             ])
         if family_name == "Map" and map_protocol:
-            lines.extend(f'{host} = TypeVar("{host}")' for host in map_hosts)
-            lines.extend([
+            alias_lines.extend(f'{host} = TypeVar("{host}")' for host in map_hosts)
+            alias_lines.extend([
                 f"{map_alias}: TypeAlias = {name}[{', '.join(family_variables)}] | dict[{', '.join(map_hosts)}]",
                 "",
             ])
         if family_name == "Set" and set_protocol:
-            lines.extend([
+            alias_lines.extend([
                 f'{set_host} = TypeVar("{set_host}")',
                 f"{set_alias}: TypeAlias = {name}[{family_variables[0]}] | set[{set_host}]",
                 "",
             ])
         if family_name == "MultiSet" and multiset_protocol:
-            lines.extend([
+            alias_lines.extend([
                 f'{multiset_host} = TypeVar("{multiset_host}")',
                 f"{multiset_alias}: TypeAlias = {name}[{family_variables[0]}] | tuple[{multiset_host}, ...]",
                 "",
@@ -770,7 +930,7 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                     msg = "Host conversion requires its catalog source family"
                     raise ValueError(msg)
                 converted.append(names[protocol.conversion_sort] + "Like")
-            lines.append(
+            alias_lines.append(
                 f"{name}Like: TypeAlias = "
                 + " | ".join([
                     name,
@@ -782,7 +942,43 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                     *converted,
                 ])
             )
-            lines.append("")
+            alias_lines.append("")
+    # Method annotations are postponed; bind runtime aliases after all classes.
+    for family_name in class_order:
+        lines.extend(aliases[family_name])
+    # Explicit registrations are generated from the same host-codec policy as
+    # the declaration bodies. No runtime scan creates or exposes API members.
+    lines.extend([
+        "converter(RuntimeFunction, UnstableFn, _function_to_expr)",
+        "converter(FunctionType, UnstableFn, _function_to_expr)",
+        "converter(MethodType, UnstableFn, _function_to_expr)",
+        "converter(partial, UnstableFn, _function_to_expr)",
+    ])
+    if "Pair" in names:
+        lines.append(f"converter(tuple, {names['Pair']}, _tuple_to_pair)")
+    if "Maybe" in names:
+        lines.append(f"converter(type(None), {names['Maybe']}, _none_to_maybe)")
+    for family_name, host_types in (("Vec", ("list", "tuple")), ("Set", ("set",)), ("MultiSet", ("tuple",))):
+        if family_name in names:
+            lines.extend(
+                f"converter({host}, {names[family_name]}, lambda value: _collection_to_expr(value, {family_name!r}))"
+                for host in host_types
+            )
+    if "Map" in names:
+        lines.append(f"converter(dict, {names['Map']}, _dict_to_map)")
+    for family_name, protocol in _SCALARS.items():
+        if family_name not in names:
+            continue
+        name = names[family_name]
+        for literal in protocol.literal_types:
+            implementation = f"lambda value: {name}(float(value))" if protocol.value_type is float else name
+            lines.append(f"converter({literal.__name__}, {name}, {implementation})")
+        if protocol.conversion_sort is not None:
+            implementation = name if protocol.value_type is int else f"lambda value: {name}(value, 1)"
+            lines.append(f"converter({names[protocol.conversion_sort]}, {name}, {implementation})")
+    lines.append("")
+    lines.extend(f"{name} = {expression}" for name, expression in free_defaults.values())
+    lines.append("")
     lines.extend(functions.values())
     if pyobject_protocol:
         name = names["PyObject"]
@@ -792,11 +988,11 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
             f"    def __call__(self, *__args: {name}) -> {name}: ...",
             "",
             '@deprecated("use PyObject(fn) directly")',
-            "def py_eval_fn(fn: Callable) -> PyObjectFunction: ...",
+            "def py_eval_fn(fn: Callable) -> PyObjectFunction:",
+            f"    return {name}(fn)",
         ])
-    lines.extend(["", *(ast.unparse(private_helpers[name]) for name in sorted(private_names))])
     result = "\n".join(lines) + "\n"
-    ast.parse(result, filename="builtins.pyi")
+    ast.parse(result, filename="builtins.py")
     return result
 
 
@@ -806,7 +1002,7 @@ def main() -> None:
     source.add_argument("export", type=Path, nargs="?")
     source.add_argument("--extension", type=Path, help="compiled bindings extension (no frontend import)")
     parser.add_argument("--output", type=Path, default=_PACKAGE / "_builtin_catalog.pb")
-    parser.add_argument("--stubs-output", type=Path, default=_PACKAGE / "builtins.pyi")
+    parser.add_argument("--python-output", type=Path, default=_PACKAGE / "builtins.py")
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     if args.extension is None:
@@ -830,19 +1026,23 @@ def main() -> None:
         names.add(key)
     # Validate/render every artifact before replacing either output.
     try:
-        stub = render_stubs(program)
+        source = render_builtins(program)
     except ValueError as error:
         parser.error(str(error))
+    obsolete_stub = args.python_output.with_suffix(".pyi")
     if args.check:
+        if obsolete_stub.exists():
+            parser.error("Obsolete generated builtin stub shadows the Python declarations; regenerate them")
         if args.output.read_bytes() != encoded:
             parser.error("Packaged catalog differs from the native export; regenerate it")
-        if args.stubs_output.read_text() != stub:
-            parser.error("Packaged builtin stubs differ from the native catalog/protocols; regenerate them")
+        if args.python_output.read_text() != source:
+            parser.error("Packaged builtin declarations differ from the native catalog/protocols; regenerate them")
     else:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_bytes(encoded)
-        args.stubs_output.parent.mkdir(parents=True, exist_ok=True)
-        args.stubs_output.write_text(stub)
+        args.python_output.parent.mkdir(parents=True, exist_ok=True)
+        args.python_output.write_text(source)
+        obsolete_stub.unlink(missing_ok=True)
     print(f"{len(names)} native definitions; SHA-256 {hashlib.sha256(encoded).hexdigest()}")
 
 

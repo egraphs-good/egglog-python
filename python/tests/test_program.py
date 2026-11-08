@@ -15,7 +15,7 @@ from protobuf import DescFieldValueList, Oneof
 
 from egglog import Bool, String, Unit, _program, bindings, join, rule, ruleset
 from egglog._catalog import builtin_catalog
-from egglog._presentation import Parameter, Presentation, TypePresentation, presentation
+from egglog._presentation import CallKind, CallPresentation, Parameter, Presentation, TypePresentation, presentation
 from egglog._program import Builder, StructuralView, clone_nodes, pack
 from egglog.egraph import Action, RewriteOrRule
 
@@ -1096,6 +1096,36 @@ def test_template_expansion_freshens_nodes_not_definition_identity():
         == 1
     )
     assert sum(node.kind is not None and node.kind.field == "eq" for node in combined.program.nodes) == 2
+
+
+@pytest.mark.parametrize("conflicting", [False, True])
+def test_template_native_copies_retain_local_presentation_and_reject_conflicts(conflicting):
+    builder = Builder()
+    scalar = builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Scalar")))
+    primitive = builder.add("primitives", pb.Primitive(name="native", signature=pb.GenericSignature(output=scalar)))
+    native = builder.publish()
+    builder = Builder(environment=(native,))
+    scalar = builder.import_ref(native.ref("sorts", scalar))
+    record = native.ref("primitives", primitive).read()
+    if conflicting:
+        assert record.signature is not None
+        record.signature.output = builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Different")))
+    copied = builder.add("primitives", record)
+    builder.presentations["callable", "native"] = Presentation(
+        views=(CallPresentation(kind=CallKind.FUNCTION, path=("local",)),)
+    )
+    root = builder.add(
+        "nodes", pb.Node(sort_id=scalar, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="native")))
+    )
+    owner = builder.publish()
+    if conflicting:
+        with pytest.raises(ValueError, match="Template requires one canonical definition"):
+            clone_nodes([owner.ref("nodes", root)])
+    else:
+        (cloned,) = clone_nodes([owner.ref("nodes", root)])
+        assert cloned != owner.ref("nodes", root)
+        assert cloned.owner.ref("primitives", 0) == owner.ref("primitives", copied)
+        assert presentation(cloned.owner.ref("primitives", 0)).views[0].path == ("local",)
 
 
 @pytest.fixture(autouse=True)

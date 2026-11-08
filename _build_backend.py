@@ -1,4 +1,4 @@
-"""PEP 517 builds regenerate Python catalog resources from the compiled transport."""
+"""PEP 517 builds regenerate Python declarations and catalog resources from the compiled transport."""
 
 import importlib.machinery
 import subprocess

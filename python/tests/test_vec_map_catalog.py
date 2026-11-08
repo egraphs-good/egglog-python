@@ -98,7 +98,7 @@ def test_vec_union_checks_native_equality_applicability_before_mutation():
 
 def test_generator_rejects_mismatched_signature_binder_counts(native_catalog_program):
     render = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
-        "render_stubs"
+        "render_builtins"
     ]
     primitive = next(p for p in native_catalog_program.primitives if p.name == "egglog.core.i64.add")
     signature = primitive.signature

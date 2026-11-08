@@ -737,13 +737,23 @@ def clone_nodes(roots: Iterable[Ref]) -> tuple[Ref, ...]:  # noqa: C901
         source = pending.pop()
 
         def dependency(namespace: str, name: str, origin: Owner = source.owner) -> None:
-            matches = {origin.ref(role, index) for role, index in origin.definition_indices.get((namespace, name), ())}
+            matches = dict.fromkeys(
+                origin.ref(role, index) for role, index in origin.definition_indices.get((namespace, name), ())
+            )
+            role = "primitives" if namespace == "callable" else "primitive_sorts"
+            for index in range(len(origin._slots[role])):
+                reference = origin.ref(role, index)
+                if _definition_key(cast("Message", reference.owner._slots[role][reference.index])) == (namespace, name):
+                    matches[reference] = None
             for environment in (*origin._environment, origin):
                 if (slot := environment._builtin_indices.get((namespace, name))) is not None:
-                    matches.add(environment.ref(*slot))
-            if len(matches) != 1:
+                    matches[environment.ref(*slot)] = None
+            first = next(iter(matches), None)
+            if first is None or any(
+                not _structural_equal(first, other, exact_literals=True) for other in matches if other != first
+            ):
                 raise ValueError(f"Template requires one canonical definition for {namespace} {name!r}")
-            builder.import_ref(next(iter(matches)))
+            builder.import_ref(first)
 
         def relocate(role: str, index: int, origin: Owner = source.owner) -> int:
             return allocate(origin.ref(role, index))

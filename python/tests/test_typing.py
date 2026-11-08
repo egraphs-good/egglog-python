@@ -12,56 +12,43 @@ import sys
 import pytest
 
 
-@pytest.mark.parametrize("defect", [None, "missing", "annotation"])
-def test_generated_private_builtin_helpers_match_runtime_annotations(defect, monkeypatch, tmp_path):
+def test_generated_private_builtin_helpers_are_shared_typed_implementations():
     from egglog_proto.egglog.v1 import egglog_pb as pb  # noqa: PLC0415
+
+    from egglog import _builtin_values, builtins  # noqa: PLC0415
 
     root = pathlib.Path(__file__).resolve().parents[2]
     package = root / "python/egglog"
-    implementation = ast.parse((package / "builtins.py").read_text())
-    pretty = ast.parse((package / "pretty.py").read_text())
+    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
+    program = pb.BuiltinCatalog.from_binary((package / "_builtin_catalog.pb").read_bytes())
+    rendered = render(program)
+    assert rendered == (package / "builtins.py").read_text()
+    generated = ast.parse(rendered)
+    implementation = ast.parse((package / "_builtin_values.py").read_text())
     names = {
         alias.name
-        for node in ast.walk(pretty)
-        if isinstance(node, ast.ImportFrom) and node.level == 1 and node.module == "builtins"
+        for node in generated.body
+        if isinstance(node, ast.ImportFrom) and node.level == 1 and node.module == "_builtin_values"
         for alias in node.names
         if alias.name.startswith("_")
     }
     helpers = {
         node.name: node for node in implementation.body if isinstance(node, ast.FunctionDef) and node.name in names
     }
-    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
-    program = pb.Program.from_binary((package / "_builtin_catalog.pb").read_bytes())
-    if defect is not None:
-        helper = helpers[min(names)]
-        if defect == "missing":
-            implementation.body.remove(helper)
-        else:
-            helper.args.args[0].annotation = None
-        (tmp_path / "builtins.py").write_text(ast.unparse(implementation))
-        monkeypatch.setitem(render.__globals__, "_PACKAGE", tmp_path)
-        with pytest.raises(ValueError, match="definitions are missing" if defect == "missing" else "fully annotated"):
-            render(program)
-        return
-    rendered = render(program)
-    assert rendered == (package / "builtins.pyi").read_text()
-    stub = ast.parse(rendered)
-    signatures = {
-        node.name: node for node in stub.body if isinstance(node, ast.FunctionDef) and node.name.startswith("_")
-    }
-    assert signatures.keys() == names
-    for name, source in helpers.items():
-        signature = signatures[name]
-        assert ast.dump(signature.args) == ast.dump(source.args)
-        assert signature.returns is not None
-        assert source.returns is not None
-        assert ast.dump(signature.returns) == ast.dump(source.returns)
-        body = signature.body[0]
-        assert isinstance(body, ast.Expr)
-        assert ast.literal_eval(body.value) is Ellipsis
+    assert helpers.keys() == names
+    assert not any(isinstance(node, ast.FunctionDef) and node.name in names for node in generated.body)
+    for name, helper in helpers.items():
+        parameters = [*helper.args.posonlyargs, *helper.args.args, *helper.args.kwonlyargs]
+        if helper.args.vararg is not None:
+            parameters.append(helper.args.vararg)
+        if helper.args.kwarg is not None:
+            parameters.append(helper.args.kwarg)
+        assert all(parameter.annotation is not None for parameter in parameters)
+        assert helper.returns is not None
+        assert getattr(builtins, name) is getattr(_builtin_values, name)
     exports = next(
         ast.literal_eval(node.value)
-        for node in stub.body
+        for node in generated.body
         if isinstance(node, ast.Assign)
         and any(isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets)
     )
@@ -124,8 +111,9 @@ def test_generated_builtin_installed_types(family, kind, tmp_path):
             (
                 "import egglog, json; from pathlib import Path; "
                 "p = Path(egglog.__file__).resolve().parent; "
-                "s = p / 'builtins.pyi'; "
-                "print(json.dumps([str(p), s.read_text() if s.is_file() else None, (p / 'py.typed').is_file()]))"
+                "s = p / 'builtins.py'; "
+                "print(json.dumps([str(p), s.read_text() if s.is_file() else None, "
+                "(p / 'py.typed').is_file(), (p / 'builtins.pyi').exists()]))"
             ),
         ],
         cwd=tmp_path,
@@ -134,11 +122,12 @@ def test_generated_builtin_installed_types(family, kind, tmp_path):
         capture_output=True,
         text=True,
     )
-    package, stub, has_marker = json.loads(provenance.stdout)
+    package, source, has_marker, has_stub = json.loads(provenance.stdout)
     assert "site-packages" in pathlib.Path(package).parts
-    assert stub is not None, "Install the wheel containing generated builtins.pyi before this gate"
+    assert source is not None, "Install the wheel containing generated builtins.py before this gate"
     assert has_marker
-    assert stub == (root / "python/egglog/builtins.pyi").read_text()
+    assert not has_stub, "The generated Python declarations must be the installed typing source"
+    assert source == (root / "python/egglog/builtins.py").read_text()
     result = subprocess.run(
         [
             sys.executable,
@@ -188,14 +177,14 @@ def test_generated_builtin_installed_types(family, kind, tmp_path):
 )
 @pytest.mark.parametrize("kind", ["positive", "negative"])
 def test_generated_builtin_source_types(family, kind, tmp_path, request):
-    """Actual catalog-derived source stub; shadowing cannot replace the installed gate."""
+    """Actual catalog-derived source module; shadowing cannot replace the installed gate."""
     root = pathlib.Path(__file__).resolve().parents[2]
-    stub = root / "python/egglog/builtins.pyi"
+    source = root / "python/egglog/builtins.py"
     if family == "rational":
         program = request.getfixturevalue("rational_catalog_program")
-        render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
-        stub = tmp_path / "generated_builtins.pyi"
-        stub.write_text(render(program))
+        render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
+        source = tmp_path / "generated_builtins.py"
+        source.write_text(render(program))
     environment = os.environ.copy()
     environment.pop("MYPYPATH", None)
     environment.pop("PYTHONPATH", None)
@@ -203,7 +192,7 @@ def test_generated_builtin_source_types(family, kind, tmp_path, request):
         [
             sys.executable,
             "-c",
-            "import egglog; from pathlib import Path; print(Path(egglog.__file__).parent / 'builtins.pyi')",
+            "import egglog; from pathlib import Path; print(Path(egglog.__file__).parent / 'builtins.py')",
         ],
         cwd=tmp_path,
         env=environment,
@@ -252,7 +241,7 @@ wrong_mapped: Vec[f64] = mapped  # error: assignment
             "--show-absolute-path",
             "--shadow-file",
             installed,
-            str(stub),
+            str(source),
             *(
                 [
                     "--shadow-file",

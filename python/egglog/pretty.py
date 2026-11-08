@@ -466,7 +466,7 @@ def pretty_ref(  # noqa: C901, PLR0912
                         frames.extend(reversed(pieces))
                         continue
                     elif primitive.field == "maybe":
-                        from .builtins import _container_member, _maybe_value  # noqa: PLC0415
+                        from ._builtin_values import _container_member, _maybe_value  # noqa: PLC0415
                         from .runtime import RuntimeExpr, _class_for_sort  # noqa: PLC0415
 
                         child = _maybe_value(RuntimeExpr(reference))
@@ -482,7 +482,7 @@ def pretty_ref(  # noqa: C901, PLR0912
                         frames.extend(reversed(pieces))
                         continue
                     elif primitive.field == "pair":
-                        from .builtins import _pair_value  # noqa: PLC0415
+                        from ._builtin_values import _pair_value  # noqa: PLC0415
                         from .runtime import RuntimeExpr  # noqa: PLC0415
 
                         left, right = _pair_value(RuntimeExpr(reference))
@@ -548,7 +548,7 @@ def pretty_ref(  # noqa: C901, PLR0912
                         frames.extend(reversed(pieces))
                         continue
                     elif primitive.field in {"vec", "set", "multiset"}:
-                        from .builtins import _container_items, _container_member  # noqa: PLC0415
+                        from ._builtin_values import _container_items, _container_member  # noqa: PLC0415
                         from .runtime import RuntimeExpr, _class_for_sort  # noqa: PLC0415
 
                         children = _container_items(RuntimeExpr(reference))
@@ -571,7 +571,7 @@ def pretty_ref(  # noqa: C901, PLR0912
                         frames.extend(reversed(pieces))
                         continue
                     elif primitive.field == "map":
-                        from .builtins import _container_member, _map_entries  # noqa: PLC0415
+                        from ._builtin_values import _container_member, _map_entries  # noqa: PLC0415
                         from .runtime import RuntimeExpr, _class_for_sort  # noqa: PLC0415
 
                         entries = _map_entries(RuntimeExpr(reference))

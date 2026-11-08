@@ -1,5 +1,5 @@
 name: Generate builtin package resources
-description: Generate catalog and stubs with a native host wheel before cross-target release builds
+description: Generate catalog and Python declarations with a native host wheel before cross-target release builds
 runs:
   using: composite
   steps:

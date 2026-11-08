@@ -16,7 +16,7 @@ from functools import partial
 from itertools import pairwise
 from threading import Event
 from time import sleep
-from typing import ClassVar, Literal, TypeVar, cast, get_type_hints
+from typing import ClassVar, Generic, Literal, TypeVar, cast, get_type_hints
 from weakref import ref as weakref
 
 import black
@@ -26,8 +26,10 @@ from protobuf import Oneof
 
 from egglog import (
     Action,
+    BaseExpr,
     Bool,
     BoolLike,
+    BuiltinExpr,
     ConvertError,
     EGraph,
     Expr,
@@ -67,6 +69,7 @@ from egglog import (
     var,
     vars_,
 )
+from egglog._builtin_values import _container_items, _map_entries, _pair_value
 from egglog._catalog import builtin_catalog
 from egglog._presentation import (
     CallKind,
@@ -77,7 +80,7 @@ from egglog._presentation import (
     presentation,
 )
 from egglog._program import Builder, Packed, Ref, StructuralView, _copy_record, _definition_key, pack, rule_equal
-from egglog.builtins import ExprValueError, _container_items, _map_entries, _pair_value
+from egglog.builtins import ExprValueError
 from egglog.deconstruct import get_callable_args, get_callable_fn, get_constant_name, get_literal_value
 from egglog.egraph import get_current_ruleset, set_current_ruleset, to_runtime_expr
 from egglog.runtime import (
@@ -91,6 +94,77 @@ from egglog.runtime import (
     resolve_type_annotation,
 )
 from egglog.type_constraint_solver import TypeConstraintError, infer_sort, substitute_sort
+
+_NativeValueT = TypeVar("_NativeValueT", bound=BaseExpr)
+_NativeResultT = TypeVar("_NativeResultT", bound=BaseExpr)
+
+
+def test_builtin_class_headers_bind_native_members_without_catalog_exposure(monkeypatch):
+    monkeypatch.setattr(runtime, "_BASE_CLASSES", dict(runtime._BASE_CLASSES))
+
+    class NativeInteger(BuiltinExpr, egg_sort="i64"):
+        def __init__(self, value: int) -> None: ...
+
+        @method(egg_fn="egglog.core.i64.add")
+        def __add__(self, other: "NativeInteger | int") -> "NativeInteger": ...
+
+        @method(preserve=True)
+        def number(self) -> int:
+            value = get_literal_value(self)
+            assert isinstance(value, int)
+            return value
+
+    expression = NativeInteger(2) + 3
+    reference = resolve_callable(NativeInteger.__add__)
+    assert StructuralView(reference) == StructuralView(builtin_catalog().definitions["callable", "egglog.core.i64.add"])
+    graph = EGraph()
+    result = graph.extract(expression)
+    assert isinstance(result, NativeInteger)
+    assert result.number() == 5
+    assert "__add__" in NativeInteger.__dict__
+    assert not hasattr(NativeInteger, "__mul__")
+
+
+def test_builtin_generic_class_headers_preserve_native_tails_and_returned_context(monkeypatch):
+    monkeypatch.setattr(runtime, "_BASE_CLASSES", dict(runtime._BASE_CLASSES))
+
+    class NativeVector(BuiltinExpr, Generic[_NativeValueT], egg_sort="Vec"):
+        @method(egg_fn="egglog.core.vec.of")
+        def __init__(self, *items: _NativeValueT) -> None: ...
+
+        @method(egg_fn="egglog.core.vec.push")
+        def push(self, item: _NativeValueT) -> "NativeVector[_NativeValueT]": ...
+
+        @method(egg_fn="egglog.core.vec.length")
+        def length(self) -> i64: ...
+
+        @method(egg_fn="egglog.core.vec.map", reverse_args=True)
+        def map(self, fn: Callable[[_NativeValueT], _NativeResultT]) -> "NativeVector[_NativeResultT]": ...
+
+    vector = NativeVector[i64](i64(2), i64(3))
+    assert isinstance(vector, NativeVector)
+    graph = EGraph()
+    result = graph.extract(vector.push(i64(4)))
+    assert isinstance(result, NativeVector)
+    assert expr_parts(result) == expr_parts(NativeVector[i64](i64(2), i64(3), i64(4)))
+    assert graph.extract(result.length()).value == 3
+    assert graph.extract(NativeVector[i64]().length()).value == 0
+    assert graph.extract(vector.map(lambda item: item + 1).length()).value == 2
+    empty = graph.extract(Map[i64, i64].empty())
+    assert str(empty) == "Map[i64, i64].empty()"
+    assert empty.value == {}
+    assert not hasattr(NativeVector[i64], "pop")
+
+
+def test_builtin_class_rejects_header_layout_mismatch_before_conversion(monkeypatch):
+    monkeypatch.setattr(runtime, "_BASE_CLASSES", dict(runtime._BASE_CLASSES))
+
+    class WrongLayout(BuiltinExpr, Generic[_NativeValueT], egg_sort="Vec"):
+        @method(egg_fn="egglog.core.vec.map")
+        def map(self, fn: Callable[[_NativeValueT], _NativeResultT]) -> "WrongLayout[_NativeResultT]": ...
+
+    with pytest.raises(ValueError, match="reverse_args differs"):
+        resolve_callable(WrongLayout.map)
 
 
 def _pack_rule(reference: Ref) -> Packed:
@@ -897,11 +971,11 @@ def test_rule_key_shared_dag_work_is_bounded(monkeypatch, allocating, bidirectio
     original = _program._structural_parts
     visits = 0
 
-    def counted(reference, *, identity=True):
+    def counted(reference, *, identity=True, exact_literals=False):
         nonlocal visits
         visits += 1
         assert visits <= 16 * (depth + 20), "Comparison/hash expanded the shared expression DAG"
-        return original(reference, identity=identity)
+        return original(reference, identity=identity, exact_literals=exact_literals)
 
     monkeypatch.setattr(_program, "_structural_parts", counted)
     assert _program.rule_equal(first, second)
@@ -3273,7 +3347,7 @@ def test_vec_annotation_protocol_preserves_lookup_and_pending_classes(vec_runtim
 
     with pytest.raises(TypeError, match="Type arguments must resolve"):
         get_type_hints(wrong)
-    with pytest.raises(AttributeError, match="no generated Python member"):
+    with pytest.raises(AttributeError, match="no declared Python member"):
         _ = vec_runtime[i64].missing
     with pytest.raises(AttributeError):
         _ = Token.missing  # type: ignore[attr-defined]
@@ -3318,7 +3392,7 @@ def test_vec_value_rejects_invalid_payload_and_provenance(vec_runtime, malformed
             def __init__(self) -> None: ...
 
         with pytest.raises(AttributeError):
-            _container_items(NominalVec())  # type: ignore[arg-type]
+            _container_items(to_runtime_expr(NominalVec()))
         return
     builder = Builder()
     child = builder.import_ref((f64(1.0) if malformed == "wrong_sort" else i64(1)).__egg_ref__)
@@ -3682,7 +3756,7 @@ def test_pair_value_rejects_nominal_and_user_call_provenance(pair_runtime):
         def __init__(self, left: i64, right: f64) -> None: ...
 
     with pytest.raises(ExprValueError):
-        _pair_value(NominalPair(1, 2.0))  # type: ignore[arg-type]
+        _pair_value(to_runtime_expr(NominalPair(i64(1), f64(2.0))))
     builder = Builder()
     output = builder.import_ref(pair_runtime[i64, f64].__egg_sort__)
     builder.add(
@@ -5517,23 +5591,24 @@ def test_classvar_annotations_are_late_and_owner_scoped(future):
 
 
 @pytest.mark.parametrize("descriptor", [property, classmethod])
-def test_member_decorator_order_preserves_value_error(descriptor):
-    class Invalid(Expr):
+def test_member_decorator_order_uses_the_shared_declaration_path(descriptor):
+    class Declared(Expr):
         def __init__(self) -> None: ...
 
         @descriptor
-        @method(egg_fn="wrong order")
+        @method(egg_fn="declared member")
         def member(self) -> i64: ...
 
-    runtime_invalid, invalid_context = _required_authored_class(Invalid)
-    with pytest.raises(ValueError, match="above @classmethod or @property"):
-        Invalid()
-    assert invalid_context.catalog is not None
-    assert {name for _, name in invalid_context.catalog.members} == {"__init__"}
-    assert not runtime_invalid.__egg_attr_cache__
-    assert isinstance(Invalid(), Invalid)
-    with pytest.raises(AttributeError):
-        _ = Invalid.member
+    runtime_declared, context = _required_authored_class(Declared)
+    value = Declared()
+    expression = value.member if descriptor is property else Declared.member()
+    arguments = _required_callable_args(expression)
+    assert len(arguments) == (1 if descriptor is property else 0)
+    if arguments:
+        assert expr_parts(arguments[0]) == expr_parts(value)
+    assert context.catalog is not None
+    assert {name for _, name in context.catalog.members} == {"__init__", "member"}
+    assert "member" in runtime_declared.__dict__
 
 
 @pytest.mark.parametrize("doc", [None, "", "member documentation"])

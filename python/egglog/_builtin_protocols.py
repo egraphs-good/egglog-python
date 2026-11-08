@@ -1,7 +1,7 @@
 """
 Python host codecs/protocols, not native callable signatures or sort records.
 
-Kept import-independent so the offline stub generator can load this file without
+Kept import-independent so the offline declaration generator can load this file without
 executing egglog's package initializer, runtime, or native extension.
 """
 

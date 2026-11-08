@@ -131,7 +131,7 @@ def test_pyobject_generated_surface_uses_real_defaults_and_host_policy():
         (Path(__file__).resolve().parents[1] / "egglog/_builtin_catalog.pb").read_bytes()
     )
     renderer = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
-        "render_stubs"
+        "render_builtins"
     ]
     stub = renderer(program, mapping=mapping)
     for signature in (
@@ -140,8 +140,8 @@ def test_pyobject_generated_surface_uses_real_defaults_and_host_policy():
         "def __call__(self, *args: PyObjectLike) -> PyObject:",
         "def dict(cls, *keys_and_values: PyObjectLike) -> PyObject:",
         "def dict_update(self, *keys_and_values: PyObjectLike) -> PyObject:",
-        "def py_eval(code: StringLike, globals_: PyObjectLike = ..., locals_: PyObjectLike = ...) -> PyObject:",
-        "def py_exec(code: StringLike, globals_: PyObjectLike = ..., locals_: PyObjectLike = ...) -> PyObject:",
+        "def py_eval(code: StringLike, globals_: PyObjectLike = _default_free_0, locals_: PyObjectLike = _default_free_0) -> PyObject:",
+        "def py_exec(code: StringLike, globals_: PyObjectLike = _default_free_1, locals_: PyObjectLike = _default_free_1) -> PyObject:",
         "class PyObjectFunction(Protocol):",
         "def py_eval_fn(fn: Callable) -> PyObjectFunction:",
     ):
@@ -183,7 +183,7 @@ def test_pyobject_generator_rejects_invalid_default(corruption):
         )
         mapping["fragment"]["nodes"][parameter["default"]]["sortId"] = integer_sort
     renderer = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
-        "render_stubs"
+        "render_builtins"
     ]
     expected = "Default root has an invalid index" if corruption == "index" else "Default root has an invalid sort"
     with pytest.raises(ValueError, match=expected):
@@ -193,7 +193,7 @@ def test_pyobject_generator_rejects_invalid_default(corruption):
 def test_set_generated_surface_from_actual_catalog(set_catalog_program):
     mapping = copy.deepcopy(DATA)
     render = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
-        "render_stubs"
+        "render_builtins"
     ]
     stub = render(set_catalog_program, mapping=mapping)
     body = stub.split("class Set(", 1)[1].split("\nclass ", 1)[0]
@@ -232,7 +232,7 @@ def test_set_generated_surface_from_actual_catalog(set_catalog_program):
 def test_set_generated_protocol_name_collisions(set_catalog_program, name):
     mapping = copy.deepcopy(DATA)
     render = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
-        "render_stubs"
+        "render_builtins"
     ]
     family = next(d for d in set_catalog_program.primitive_sorts if d.name == "Vec")
     mapping["types"][family.name]["path"][-1] = name
@@ -244,7 +244,7 @@ def test_set_stub_uses_relocated_actual_sort_records(set_catalog_program):
     mapping = copy.deepcopy(DATA)
 
     render = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
-        "render_stubs"
+        "render_builtins"
     ]
     relocated = _relocate_builtins(set_catalog_program)
     assert relocated.sorts != set_catalog_program.sorts
@@ -258,7 +258,7 @@ def test_set_stub_uses_relocated_actual_sort_records(set_catalog_program):
 def test_exact_generated_surface_includes_host_and_symbolic_constructors(rational_catalog_program):
     mapping = copy.deepcopy(DATA)
     render = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
-        "render_stubs"
+        "render_builtins"
     ]
     stub = render(rational_catalog_program, mapping=mapping)
     for signature in (
@@ -279,7 +279,7 @@ def test_exact_generated_surface_includes_host_and_symbolic_constructors(rationa
         ("BigInt", "int", "__index__"),
     ):
         body = stub.split(f"class {family}(", 1)[1].split("\nclass ", 1)[0]
-        assert body.count("def __init__(") == (1 if family == "BigInt" else 2)
+        assert body.count("def __init__(") == (1 if family == "BigInt" else 3)
         assert f"def value(self) -> {value}:" in body
         assert f"def eval(self) -> {value}:" in body
         assert f"def {hook}(self) ->" in body
@@ -297,7 +297,7 @@ def test_scalar_generated_surface_uses_actual_variadic_providers():
     mapping = copy.deepcopy(DATA)
     root = Path(__file__).resolve().parents[2]
     program = pb.BuiltinCatalog.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
-    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
     declarations: dict[str, pb.Primitive] = {}
     for declaration in program.primitives:
         declarations[declaration.name] = declaration
@@ -337,7 +337,7 @@ def test_scalar_specialized_stub_rejects_invalid_views(mutation):
     mapping = copy.deepcopy(DATA)
     root = Path(__file__).resolve().parents[2]
     program = pb.BuiltinCatalog.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
-    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
     declaration = next(primitive for primitive in program.primitives if primitive.name == "egglog.core.bool.or")
     signature = _primitive_signature(declaration)
     view = mapping["callables"][declaration.name][0]
@@ -381,7 +381,7 @@ def test_scalar_free_stub_rejects_unsupported_views(mutation):
     mapping = copy.deepcopy(DATA)
     root = Path(__file__).resolve().parents[2]
     program = pb.BuiltinCatalog.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
-    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
     declaration = next(primitive for primitive in program.primitives if primitive.name == "egglog.core.string.concat")
     view = mapping["callables"][declaration.name][0]
     if mutation == "generic":
@@ -404,7 +404,7 @@ def test_map_generated_surface_from_actual_catalog():
     mapping = copy.deepcopy(DATA)
     root = Path(__file__).resolve().parents[2]
     program = pb.BuiltinCatalog.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
-    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
     stub = render(program, mapping=mapping)
     assert "def from_pairs(cls, entries: Vec[Pair[_Map_K_0, _Map_V_1]]) -> Map[_Map_K_0, _Map_V_1]:" in stub
     assert "def empty(cls) -> Map[_Map_K_0, _Map_V_1]:" in stub
@@ -420,7 +420,7 @@ def test_absent_initializer_keeps_nonabstract_type_token(vec_catalog_program):
     mapping = copy.deepcopy(DATA)
     mapping["callables"]["egglog.core.vec.of"] = []
     render = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
-        "render_stubs"
+        "render_builtins"
     ]
     stub = render(vec_catalog_program, mapping=mapping)
     vec = stub.split("class Vec(", 1)[1].split("class ", 1)[0]
@@ -433,7 +433,7 @@ def test_absent_initializer_keeps_nonabstract_type_token(vec_catalog_program):
 def test_vec_uniform_tail_and_classmethod_stub_from_native_signatures(vec_catalog_program):
     mapping = copy.deepcopy(DATA)
     renderer = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
-        "render_stubs"
+        "render_builtins"
     ]
     stub = renderer(vec_catalog_program, mapping=mapping)
     assert "def __init__(self, *args: _Vec_T_0) -> None:" in stub
@@ -478,7 +478,7 @@ def test_vec_map_view_and_static_signature_come_from_actual_catalog():
     local_owner = resolved.owner
     assert local_owner is not None
     assert StructuralView(owner.ref("sorts", signature.inputs[1])) == StructuralView(local_owner)
-    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
     stub = render(program, mapping=mapping)
     assert "def map(self, f: Callable[[_Vec_T_0], _Vec_map_T1]) -> Vec[_Vec_map_T1]:" in stub
     assert '_Vec_map_T1 = TypeVar("_Vec_map_T1", bound=BaseExpr)' in stub
@@ -492,7 +492,7 @@ def test_vec_map_view_and_static_signature_come_from_actual_catalog():
 def test_vec_static_tail_rejects_unrepresentable_or_invalid_views(vec_catalog_program, mutation):
     mapping = copy.deepcopy(DATA)
     renderer = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
-        "render_stubs"
+        "render_builtins"
     ]
     of = next(d for d in vec_catalog_program.primitives if d.name == "egglog.core.vec.of")
     signature = _primitive_signature(of)
@@ -529,7 +529,7 @@ def test_vec_static_tail_rejects_unrepresentable_or_invalid_views(vec_catalog_pr
 def test_uniform_tail_can_follow_fixed_inputs(vec_catalog_program):
     mapping = copy.deepcopy(DATA)
     renderer = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
-        "render_stubs"
+        "render_builtins"
     ]
     of = next(d for d in vec_catalog_program.primitives if d.name == "egglog.core.vec.of")
     signature = _primitive_signature(of)
@@ -568,7 +568,7 @@ def test_classmethod_pretty_infers_owner_from_uniform_tail(
         view["params"].insert(0, {"coreInput": 0, "name": "first"})
     vec_catalog_program.primitives.append(count)
     renderer = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
-        "render_stubs"
+        "render_builtins"
     ]
     prefix = "first: _Vec_T_0, " if fixed else ""
     assert f"def count(cls, {prefix}*items: _Vec_T_0) -> i64:" in renderer(vec_catalog_program, mapping=mapping)
@@ -601,11 +601,11 @@ def test_classmethod_pretty_infers_owner_from_uniform_tail(
 def test_pair_generic_stub_uses_native_signature_and_presentation(pair_catalog_program):
     mapping = copy.deepcopy(DATA)
     root = Path(__file__).resolve().parents[2]
-    renderer = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    renderer = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
     stub = renderer(pair_catalog_program, mapping=mapping)
     assert "def __init__(self, left: _Pair_L_0, right: _Pair_R_1) -> None:" in stub
-    assert "@property\n    def left(self) -> _Pair_L_0:" in stub
-    assert "@property\n    def right(self) -> _Pair_R_1:" in stub
+    assert "@property\n    @method(egg_fn='egglog.core.pair.first')\n    def left(self) -> _Pair_L_0:" in stub
+    assert "@property\n    @method(egg_fn='egglog.core.pair.second')\n    def right(self) -> _Pair_R_1:" in stub
     assert "def value(self) -> tuple[_Pair_L_0, _Pair_R_1]:" in stub
     declarations = {d.name: d for d in pair_catalog_program.primitives}
     mapping["types"]["Pair"]["typeParams"] = ["X", "Y"]
@@ -627,23 +627,23 @@ def test_generated_stub_matches_catalog_without_frontend_imports(monkeypatch):
         return original_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", reject_frontend)
-    renderer = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    renderer = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
     encoded = (root / "python/egglog/_builtin_catalog.pb").read_bytes()
     program = pb.BuiltinCatalog.from_binary(encoded)
-    assert renderer(program, mapping=mapping) == (root / "python/egglog/builtins.pyi").read_text()
+    assert renderer(program, mapping=mapping) == (root / "python/egglog/builtins.py").read_text()
     assert program.to_binary() == encoded
 
 
 def test_function_generated_surface_uses_intrinsic_application_without_a_descriptor():
     mapping = copy.deepcopy(DATA)
     root = Path(__file__).resolve().parents[2]
-    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
     program = pb.BuiltinCatalog.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
     assert all(primitive.name != "egglog.core.fn.apply" for primitive in program.primitives)
     assert "egglog.core.fn.apply" not in mapping["callables"]
     stub = render(program, mapping=mapping)
     for signature in (
-        "class UnstableFn(BuiltinExpr, Generic[_UnstableFn_T, *_UnstableFn_TS]):",
+        'class UnstableFn(BuiltinExpr, Generic[_UnstableFn_T, *_UnstableFn_TS], egg_sort="UnstableFn"):',
         '    __match_args__ = ("value",)',
         "def __init__(self, f: Callable[[Unpack[_UnstableFn_TS]], _UnstableFn_T]) -> None:",
         "def __init__(self, f: Callable[[_UnstableFn_T1, Unpack[_UnstableFn_TS]], _UnstableFn_T], _a: _UnstableFn_T1, /) -> None:",
@@ -670,7 +670,7 @@ def test_function_generated_surface_uses_intrinsic_application_without_a_descrip
 def test_function_sort_annotations_recurse_through_canonical_records():
     mapping = copy.deepcopy(DATA)
     root = Path(__file__).resolve().parents[2]
-    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
     program = pb.BuiltinCatalog.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
     declarations = {d.name: d for d in program.primitives}
     signatures = {d.name: d.signature for d in program.primitives if d.signature is not None}
@@ -714,7 +714,7 @@ def test_function_sort_annotations_recurse_through_canonical_records():
 def test_stub_generation_uses_canonical_ordinary_method_view():
     mapping = copy.deepcopy(DATA)
     root = Path(__file__).resolve().parents[2]
-    renderer = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    renderer = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
     program = pb.BuiltinCatalog.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
     addition = next(primitive for primitive in program.primitives if primitive.name == "egglog.core.i64.add")
     view = mapping["callables"][addition.name][0]
@@ -730,26 +730,39 @@ def test_stub_generation_uses_canonical_ordinary_method_view():
 
 
 @pytest.mark.parametrize(
-    "name", ["int", "_Vec_T_0", "AttributeError", "tuple", "dict", "Never", "_Map_HostK", "MapLike"]
+    "name",
+    [
+        "int",
+        "_Vec_T_0",
+        "AttributeError",
+        "tuple",
+        "dict",
+        "Never",
+        "_Map_HostK",
+        "MapLike",
+        "_function_to_expr",
+        "partial",
+        "expr_fact",
+    ],
 )
 def test_stub_generation_rejects_host_and_internal_name_collisions(name):
     mapping = copy.deepcopy(DATA)
     root = Path(__file__).resolve().parents[2]
-    renderer = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    renderer = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
     program = pb.BuiltinCatalog.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
     scalar = next(sort for sort in program.primitive_sorts if sort.name == "i64")
     mapping["types"][scalar.name]["path"][-1] = name
     with pytest.raises(ValueError, match="Python static name collision"):
         renderer(program, mapping=mapping)
     mapping["types"][scalar.name]["path"][-1] = "Integer"
-    assert "class Integer(BuiltinExpr):" in renderer(program, mapping=mapping)
+    assert "class Integer(BuiltinExpr, egg_sort='i64'):" in renderer(program, mapping=mapping)
 
 
 @pytest.mark.parametrize("mutation", ["output", "receiver", "params", "owner_duplicate", "unknown_binder", "default"])
 def test_pair_stub_rejects_invalid_or_unadmitted_generic_views(pair_catalog_program, mutation):
     mapping = copy.deepcopy(DATA)
     renderer = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
-        "render_stubs"
+        "render_builtins"
     ]
     declarations = {d.name: d for d in pair_catalog_program.primitives}
     make = declarations["egglog.core.pair.make"]
@@ -784,7 +797,7 @@ def test_pair_stub_uses_sort_structure_after_relocation(pair_catalog_program):
     mapping = copy.deepcopy(DATA)
 
     renderer = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
-        "render_stubs"
+        "render_builtins"
     ]
     declarations = {d.name: d for d in pair_catalog_program.primitives}
     make = declarations["egglog.core.pair.make"]
@@ -811,7 +824,7 @@ def test_pair_stub_uses_sort_structure_after_relocation(pair_catalog_program):
 def test_pair_stub_rejects_specialized_owner_as_universal_class_view(pair_catalog_program):
     mapping = copy.deepcopy(DATA)
     renderer = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
-        "render_stubs"
+        "render_builtins"
     ]
     declarations = {d.name: d for d in pair_catalog_program.primitives}
     for name in ("first", "second"):
@@ -850,7 +863,7 @@ def test_pair_stub_rejects_specialized_owner_as_universal_class_view(pair_catalo
 def test_stub_generation_rejects_invalid_or_unmigrated_shapes(mutation, message):
     mapping = copy.deepcopy(DATA)
     root = Path(__file__).resolve().parents[2]
-    renderer = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    renderer = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
     program = pb.BuiltinCatalog.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
     addition = next(primitive for primitive in program.primitives if primitive.name == "egglog.core.i64.add")
     primitive = addition
@@ -885,7 +898,7 @@ def test_numeric_forward_signature_does_not_imply_reflection(method, argument, o
     """Mutated descriptor shapes test emission policy, not native availability."""
     mapping = copy.deepcopy(DATA)
     root = Path(__file__).resolve().parents[2]
-    renderer = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    renderer = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
     program = pb.BuiltinCatalog.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
     addition = next(d for d in program.primitives if d.name == "egglog.core.i64.add")
     signature = addition.signature
@@ -910,7 +923,7 @@ def test_numeric_forward_signature_does_not_imply_reflection(method, argument, o
 def test_bignum_generated_surface_uses_actual_forward_signatures(rational_catalog_program):
     mapping = copy.deepcopy(DATA)
     renderer = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
-        "render_stubs"
+        "render_builtins"
     ]
     declarations = {d.name: d for d in rational_catalog_program.primitives}
     assert len([name for name in declarations if name.startswith("egglog.core.bigrat.")]) == 24
@@ -920,7 +933,8 @@ def test_bignum_generated_surface_uses_actual_forward_signatures(rational_catalo
     ratio = stub.split("class BigRat(", 1)[1].split("\nclass ", 1)[0]
     catalog = Catalog(builtin_owner(rational_catalog_program, mapping=mapping))
     for member in ("numer", "denom"):
-        assert f"@property\n    def {member}(self) -> BigInt:" in ratio
+        key = declarations[f"egglog.core.bigrat.{member}"].name
+        assert f"@property\n    @method(egg_fn={key!r})\n    def {member}(self) -> BigInt:" in ratio
         view = presentation(catalog.definitions["callable", declarations[f"egglog.core.bigrat.{member}"].name]).views[0]
         assert view.kind == CallKind.PROPERTY
         assert view.receiver == 0
@@ -936,10 +950,10 @@ def test_bignum_generated_surface_uses_actual_forward_signatures(rational_catalo
             assert f"def __r{member[2:]}(self, other: {family}Like) -> {family}:" in body
 
 
-def test_stub_defaults_are_inert_and_presence_controls_arity():
+def test_generated_defaults_borrow_validated_roots_and_presence_controls_arity(monkeypatch):
     mapping = copy.deepcopy(DATA)
     root = Path(__file__).resolve().parents[2]
-    renderer = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    renderer = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
     program = pb.BuiltinCatalog.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
     addition = next(primitive for primitive in program.primitives if primitive.name == "egglog.core.i64.add")
     mapping["callables"][addition.name][0]["path"] = ["plus"]
@@ -952,15 +966,27 @@ def test_stub_defaults_are_inert_and_presence_controls_arity():
         {"sortId": scalar_sort, "call": {"func": "egglog.core.i64.add", "args": [literal, literal]}},
     ])
     parameter["default"] = literal + 1
-    assert "def plus(self, other: i64Like = ...) -> i64:" in renderer(program, mapping=mapping)
+    generated = renderer(program, mapping=mapping)
+    assert "def plus(self, other: i64Like = _default_member_0) -> i64:" in generated
+    assert "_provided_default('egglog.core.i64.add', 0, 'other')" in generated
+    assert "from_binary" not in generated
     owner = builtin_owner(program, mapping=mapping)
-    method = RuntimeFunction(owner.ref("primitives", program.primitives.index(addition)), 0, to_runtime_expr(i64(1)))
+    from egglog import _catalog  # noqa: PLC0415
+    from egglog._builtin_values import _provided_default  # noqa: PLC0415
+
+    monkeypatch.setattr(_catalog, "builtin_catalog", lambda: Catalog(owner))
+    borrowed = _provided_default(addition.name, 0, "other")
+    declaration = owner.ref("primitives", program.primitives.index(addition))
+    assert borrowed.__egg_ref__ == presentation(declaration).views[0].params[0].default
+    children = borrowed.__egg_ref__.read().kind.value.args
+    assert children[0] == children[1]
+    method = RuntimeFunction(declaration, 0, to_runtime_expr(i64(1)))
     result = method()
     assert result is not None
     argument = result.__egg_ref__.read().kind.value.args[1]
     assert result.__egg_ref__.owner.ref("nodes", argument).read().kind.value.func == "egglog.core.i64.add"
     parameter.pop("default", None)
-    assert "other: i64Like = ..." not in renderer(program, mapping=mapping)
+    assert "other: i64Like = " not in renderer(program, mapping=mapping)
     parameter["default"] = len(fragment["nodes"])
     with pytest.raises(ValueError, match="Default root"):
         renderer(program, mapping=mapping)
@@ -969,7 +995,7 @@ def test_stub_defaults_are_inert_and_presence_controls_arity():
 def test_generator_cold_import_and_failed_render_preserve_both_outputs(tmp_path):
     root = Path(__file__).resolve().parents[2]
     source = root / "python/egglog/_builtin_catalog.pb"
-    binary, stub = tmp_path / "catalog.pb", tmp_path / "builtins.pyi"
+    binary, stub = tmp_path / "catalog.pb", tmp_path / "builtins.py"
     command = [
         sys.executable,
         "-c",
@@ -989,12 +1015,19 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         str(source),
         "--output",
         str(binary),
-        "--stubs-output",
+        "--python-output",
         str(stub),
     ]
     subprocess.run(command, check=True, capture_output=True, text=True)
     assert binary.read_bytes() == source.read_bytes()
-    assert stub.read_text() == (root / "python/egglog/builtins.pyi").read_text()
+    assert stub.read_text() == (root / "python/egglog/builtins.py").read_text()
+    obsolete = stub.with_suffix(".pyi")
+    obsolete.write_text("# obsolete generated declarations\n")
+    shadowed = subprocess.run([*command, "--check"], capture_output=True, text=True, check=False)
+    assert shadowed.returncode != 0
+    assert "Obsolete generated builtin stub shadows" in shadowed.stderr
+    subprocess.run(command, check=True, capture_output=True, text=True)
+    assert not obsolete.exists()
     old_binary, old_stub = binary.read_bytes(), stub.read_bytes()
     malformed = pb.BuiltinCatalog.from_binary(old_binary)
     addition = next(primitive for primitive in malformed.primitives if primitive.name == "egglog.core.i64.add")
@@ -1217,7 +1250,7 @@ def test_runtime_type_names_do_not_weaken_static_generator_identifiers(name):
     assert restored_view is not None
     assert restored_view.path[-1] == name
     assert path not in Catalog(Builder.from_builtins(source).publish()).types
-    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
     with pytest.raises(ValueError, match="Invalid Python identifier"):
         render(source, mapping=mapping)
     source.primitive_sorts.append(pb.PrimitiveSort(name="different.core"))
@@ -1312,7 +1345,7 @@ def test_runtime_free_names_do_not_weaken_static_generator_identifiers(name):
     view = mapping["callables"]["egglog.core.string.concat"][0]
     view["path"][-1] = name
     assert tuple(view["path"]) in Catalog(builtin_owner(source, mapping=mapping)).functions
-    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
     with pytest.raises(ValueError, match="Invalid Python identifier"):
         render(source, mapping=mapping)
 
@@ -1446,7 +1479,7 @@ def test_multiset_generated_surface_from_actual_catalog():
         (Path(__file__).resolve().parents[1] / "egglog/_builtin_catalog.pb").read_bytes()
     )
     render = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
-        "render_stubs"
+        "render_builtins"
     ]
     stub = render(program, mapping=mapping)
     body = stub.split("class MultiSet(", 1)[1].split("\nclass ", 1)[0]
@@ -1535,7 +1568,7 @@ def test_multiset_generic_free_static_guards(corruption, message):
     else:
         mapping["types"]["MultiSet"]["path"][-1] = "_multiset_remove_swapped_T0"
     render = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
-        "render_stubs"
+        "render_builtins"
     ]
     with pytest.raises(ValueError, match=message):
         render(program, mapping=mapping)
@@ -1567,14 +1600,14 @@ def test_multiset_method_local_binders_from_actual_catalog():
     result_kind = program.sorts[callback.kind.value.result].kind
     assert result_kind is not None
     assert result_kind.value == 1
-    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
     stub = render(program, mapping=mapping)
     local = "_MultiSet_map_T1"
     assert f'{local} = TypeVar("{local}", bound=BaseExpr)' in stub
     assert f"def map(self, f: Callable[[_MultiSet_T_0], {local}]) -> MultiSet[{local}]:" in stub
-    assert "class MultiSet(BuiltinExpr, Generic[_MultiSet_T_0]):" in stub
+    assert "class MultiSet(BuiltinExpr, Generic[_MultiSet_T_0], egg_sort='MultiSet'):" in stub
     assert "Any" not in stub
-    assert "Callable[...," not in stub
+    assert "Callable[...," not in stub.split("class MultiSet(", 1)[1].split("\nclass ", 1)[0]
 
     def relocated(order):
         # Alpha-permute only this real signature's owned sort closure. Other
@@ -1609,7 +1642,7 @@ def test_multiset_method_local_binders_from_actual_catalog():
 
     reordered, reordered_mapping = relocated((1, 0))
     reordered_stub = render(reordered, mapping=reordered_mapping)
-    assert "class MultiSet(BuiltinExpr, Generic[_MultiSet_T_0]):" in reordered_stub
+    assert "class MultiSet(BuiltinExpr, Generic[_MultiSet_T_0], egg_sort='MultiSet'):" in reordered_stub
     assert (
         "def map(self, f: Callable[[_MultiSet_T_0], _MultiSet_map_T0]) -> MultiSet[_MultiSet_map_T0]:" in reordered_stub
     )

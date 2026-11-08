@@ -492,11 +492,17 @@ class _ClassContext:
     """Owner-retained Python lifecycle/hooks; all declaration semantics remain refs."""
 
     def __init__(
-        self, prepare: Callable[[RuntimeClass], Catalog], hooks: dict[str, Any], match_args: tuple[str, ...]
+        self,
+        prepare: Callable[[RuntimeClass], Catalog],
+        hooks: dict[str, Any],
+        match_args: tuple[str, ...],
+        *,
+        native_members: frozenset[str] | None = None,
     ) -> None:
         self.prepare: Callable[[RuntimeClass], Catalog] | None = prepare
         self.hooks = hooks
         self.match_args = match_args
+        self.native_members = native_members
         self.runtime_class: RuntimeClass
         self.catalog: Catalog | None = None
         self.resolving = False
@@ -536,6 +542,12 @@ class _ClassContext:
 
     def _publish_callables(self, catalog: Catalog) -> None:
         """Stage canonical callables, preserving Python attributes and class variables."""
+        if self.native_members is not None:
+            for name in self.native_members:
+                member = self.runtime_class.__egg_attr_cache__.get(name)
+                if isinstance(member, RuntimeFunction):
+                    type.__setattr__(self.runtime_class, name, member)
+            return
         assert isinstance(self.runtime_class.__egg_definition__, Ref)
         definition = _definition_key(self.runtime_class.__egg_definition__.read())
         # Bypass the public __dict__ trigger while staging publication.
@@ -637,7 +649,9 @@ def _class_for_sort(sort: Ref) -> RuntimeClass:
     definition = _definition_at(sort, namespace, name)
     for context in definition.owner._keepalive:
         if isinstance(context, _ClassContext):
-            return context.runtime_class
+            if record.kind.field == "eq":
+                return context.runtime_class
+            break
     result = RuntimeClass(definition, sort=sort)
     cache[sort.index] = result
     return result
@@ -669,7 +683,12 @@ class RuntimeClass(type):
     """A Python type presentation over an owned sort/family declaration."""
 
     def __new__(  # noqa: C901, PLR0912
-        cls, definition: Ref | _Intrinsic, *, sort: Ref | None = None, arguments: tuple[object, ...] = ()
+        cls,
+        definition: Ref | _Intrinsic,
+        *,
+        sort: Ref | None = None,
+        arguments: tuple[object, ...] = (),
+        context: _ClassContext | None = None,
     ) -> RuntimeClass:
         structural_function = definition is _Intrinsic.APPLY
         declaration = definition.read() if isinstance(definition, Ref) else None
@@ -705,20 +724,23 @@ class RuntimeClass(type):
         result.__egg_attr_cache__ = {}
         result.__egg_hooks__ = {}
         result.__egg_pending__ = None
-        result.__egg_context__ = (
+        result.__egg_context__ = context or (
             next((context for context in definition.owner._keepalive if isinstance(context, _ClassContext)), None)
             if isinstance(definition, Ref)
             else None
         )
         if result.__egg_context__ is not None:
-            result.__egg_context__.runtime_class = result
+            if sort is None and not arguments:
+                result.__egg_context__.runtime_class = result
             result.__egg_hooks__ = result.__egg_context__.hooks
             result.__egg_pending__ = result.__egg_context__.resolve
         if structural_function:
             if sort is None and not arguments:
                 _BASE_CLASSES["UnstableFn"] = result
-            elif "UnstableFn" in _BASE_CLASSES:
+            elif result.__egg_context__ is None and "UnstableFn" in _BASE_CLASSES:
                 result.__egg_hooks__ = _BASE_CLASSES["UnstableFn"].__egg_hooks__
+                result.__egg_context__ = _BASE_CLASSES["UnstableFn"].__egg_context__
+                result.__egg_pending__ = _BASE_CLASSES["UnstableFn"].__egg_pending__
         elif sort is None and not arguments:
             assert isinstance(definition, Ref)
             assert isinstance(kind, pb.PrimitiveSort | pb.Sort)
@@ -744,9 +766,18 @@ class RuntimeClass(type):
                 result.__egg_sort__ = builder.publish().ref("sorts", index)
             if isinstance(kind, pb.PrimitiveSort):
                 _BASE_CLASSES[kind.name] = result
-        if sort is not None and isinstance(kind, pb.PrimitiveSort) and kind.name in _BASE_CLASSES:
-            result.__egg_hooks__ = _BASE_CLASSES[kind.name].__egg_hooks__
-            result.__egg_pending__ = _BASE_CLASSES[kind.name].__egg_pending__
+        if (
+            result.__egg_context__ is None
+            and sort is not None
+            and isinstance(kind, pb.PrimitiveSort)
+            and (base := _BASE_CLASSES.get(kind.name)) is not None
+            and isinstance(definition, Ref)
+            and isinstance(base.__egg_definition__, Ref)
+            and StructuralView(definition) == StructuralView(base.__egg_definition__)
+        ):
+            result.__egg_hooks__ = base.__egg_hooks__
+            result.__egg_pending__ = base.__egg_pending__
+            result.__egg_context__ = base.__egg_context__
         if result.__egg_sort__ is not None:
             actual = result.__egg_sort__
             _CLASS_CACHE.setdefault(actual.owner, WeakValueDictionary())[actual.index] = result
@@ -755,7 +786,12 @@ class RuntimeClass(type):
     if TYPE_CHECKING:
 
         def __init__(
-            cls, definition: Ref | _Intrinsic, *, sort: Ref | None = None, arguments: tuple[object, ...] = ()
+            cls,
+            definition: Ref | _Intrinsic,
+            *,
+            sort: Ref | None = None,
+            arguments: tuple[object, ...] = (),
+            context: _ClassContext | None = None,
         ) -> None: ...
 
     else:
@@ -966,6 +1002,18 @@ class RuntimeClass(type):
             raise AttributeError(name)
         if name in cls.__egg_hooks__:
             return cls.__egg_hooks__[name]
+        context = cls.__egg_context__
+        if context is not None and context.native_members is not None:
+            if name not in context.native_members:
+                if _missing_ok:
+                    return _OMITTED
+                raise AttributeError(f"{cls} has no declared Python member {name!r}")
+            context.resolve()
+            template = context.runtime_class.__egg_attr_cache__.get(name)
+            if isinstance(template, RuntimeFunction):
+                result = RuntimeFunction(template.__egg_ref__, template.__egg_view__, cls)
+                cls.__egg_attr_cache__[name] = result
+                return result
         if cls.__egg_definition__ is _Intrinsic.APPLY:
             if name == "__call__":
                 if name not in cls.__egg_attr_cache__:

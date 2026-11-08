@@ -25,7 +25,6 @@ from egglog import (
     var,
     vars_,
 )
-from egglog.run_report import RuleKey
 
 
 class Node(Expr):
@@ -154,8 +153,10 @@ run() * "three"  # error: operator
 seq(run(), i64(1))  # error: arg-type
 run(i64(1))  # error: arg-type
 bad_report: i64 = EGraph().run(run())  # error: assignment
-bad_key: str = next(iter(EGraph().stats().num_matches_per_rule))  # error: assignment
-RuleKey("not a canonical reference")  # error: arg-type
+bad_updated: str = EGraph().run(run()).updated  # error: assignment
+bad_can_stop: bytes = EGraph().run(run()).can_stop  # error: assignment
+bad_format: int = EGraph().stats().format  # error: assignment
+bad_content: str = EGraph().stats().content  # error: assignment
 
 
 class ObjectHolder(Expr):

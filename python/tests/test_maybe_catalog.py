@@ -270,9 +270,9 @@ def test_maybe_nested_equality_rebuilds():
     EGraph().extract(formed)
 
 
-def test_maybe_stub_joins_actual_signatures_and_local_presentation(python_presentation_mapping):
+def test_maybe_source_joins_actual_signatures_and_local_presentation(python_presentation_mapping):
     render = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
-        "render_stubs"
+        "render_builtins"
     ]
     program = pb.BuiltinCatalog.from_binary(
         (Path(__file__).resolve().parents[1] / "egglog/_builtin_catalog.pb").read_bytes()

@@ -4495,7 +4495,7 @@ def test_builtin_free_callable_alias_resolves_actual_canonical_provider() -> Non
 
 
 @pytest.mark.parametrize("frontier", ["mutation", "variadic", "generic"])
-def test_bodyless_builtin_rejects_unmigrated_frontiers_before_conversion(monkeypatch, frontier: str) -> None:
+def test_bodyless_builtin_rejects_unknown_or_mutating_headers_before_conversion(monkeypatch, frontier: str) -> None:
     engine = MagicMock(side_effect=AssertionError("Invalid builtin headers must not create an engine"))
     monkeypatch.setattr(egg_bindings, "_ProtoEngine", engine)
 
@@ -4527,7 +4527,7 @@ def test_bodyless_builtin_rejects_unmigrated_frontiers_before_conversion(monkeyp
         def generic(value: Vec[_BuiltinExprT]) -> i64: ...
 
         candidate = cast("Callable[[object], object]", generic)
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(NotImplementedError if frontier == "mutation" else LookupError):
         candidate(Host())
     assert calls == []
     engine.assert_not_called()

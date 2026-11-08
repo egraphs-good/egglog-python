@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from typing import ClassVar, assert_type
 
+from egglog_proto.egglog.v1 import egglog_pb as pb
+
 from egglog import (
     Action,
     EGraph,
@@ -13,7 +15,7 @@ from egglog import (
     Pair,
     RewriteOrRule,
     Ruleset,
-    RunReport,
+    RunResult,
     Schedule,
     UnstableFn,
     Vec,
@@ -34,7 +36,6 @@ from egglog import (
     var,
     vars_,
 )
-from egglog.run_report import RuleKey
 
 
 class Node(Expr):
@@ -187,10 +188,13 @@ assert_type(schedule, Schedule)
 assert_type(seq(destination, run()), Schedule)
 graph = EGraph()
 report = graph.run(schedule)
-assert_type(report, RunReport)
-assert_type(graph.stats(), RunReport)
-assert_type(next(iter(report.num_matches_per_rule)), RuleKey)
-assert_type(next(iter(report.num_matches_per_rule.values())), int)
+assert_type(report, RunResult)
+assert_type(report.updated, bool)
+assert_type(report.can_stop, bool)
+diagnostic = graph.stats()
+assert_type(diagnostic, pb.Diagnostic)
+assert_type(diagnostic.format, str)
+assert_type(diagnostic.content, bytes)
 
 
 class ObjectHolder(Expr):

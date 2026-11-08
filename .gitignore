@@ -2,7 +2,7 @@
 
 # Derived from the compiled provider and authored presentation policy.
 /python/egglog/_builtin_catalog.pb
-/python/egglog/builtins.pyi
+/python/egglog/builtins.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

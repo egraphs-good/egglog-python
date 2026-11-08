@@ -280,7 +280,7 @@ module-name = "egglog.bindings"
 features = ["pyo3/extension-module"]
 include = [
     "egglog/_builtin_catalog.pb",
-    "egglog/builtins.pyi",
+    "egglog/builtins.py",
     { path = "_build_backend.py", format = "sdist" },
     { path = "scripts/generate_builtin_catalog.py", format = "sdist" },
 ]

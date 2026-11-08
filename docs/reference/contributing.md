@@ -40,7 +40,7 @@ uv sync --all-extras
 Anytime you change the rust code, you can run `uv sync --reinstall-package egglog --all-extras` to force recompiling the rust code.
 
 `uv build` and editable installs regenerate the ignored builtin catalog and
-stubs from the compiled transport before packaging them. For an explicit local
+`builtins.py` declarations from the compiled transport before packaging them. For an explicit local
 bootstrap, run `make builtin-bootstrap`. Direct maturin commands bypass this
 Python build step.
 

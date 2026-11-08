@@ -58,17 +58,22 @@ def pair_catalog_program():
 
 
 @pytest.fixture
-def pair_runtime(pair_catalog_program, python_presentation_mapping, monkeypatch, request):
+def pair_runtime(pair_catalog_program, python_presentation_mapping, monkeypatch, request, tmp_path):
     """Run real wrapper generation over one coherent fixture-owned catalog."""
-    from egglog import _catalog, conversion, runtime  # noqa: PLC0415
+    from egglog import _catalog, conversion, egraph, runtime  # noqa: PLC0415
     from egglog._catalog import Catalog  # noqa: PLC0415
     from egglog._presentation import builtin_owner  # noqa: PLC0415
 
     catalog = Catalog(builtin_owner(pair_catalog_program, mapping=python_presentation_mapping))
     monkeypatch.setattr(_catalog, "builtin_catalog", lambda: catalog)
+    monkeypatch.setattr(egraph, "builtin_catalog", lambda: catalog)
     monkeypatch.setattr(runtime, "_BASE_CLASSES", dict(runtime._BASE_CLASSES))
     monkeypatch.setattr(conversion, "CONVERSIONS", {})
-    generated = runpy.run_path(str(Path(__file__).parents[1] / "egglog/builtins.py"), run_name="egglog.builtins")
+    root = Path(__file__).resolve().parents[2]
+    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
+    source = tmp_path / "builtins.py"
+    source.write_text(render(pair_catalog_program, mapping=python_presentation_mapping))
+    generated = runpy.run_path(str(source), run_name="egglog.builtins")
     for name in ("i64", "f64", "Pair", "Vec", "ExprValueError", "_pair_value"):
         if hasattr(request.module, name):
             monkeypatch.setattr(request.module, name, generated[name])
@@ -82,17 +87,22 @@ def vec_catalog_program(pair_catalog_program):
 
 
 @pytest.fixture
-def vec_runtime(vec_catalog_program, python_presentation_mapping, monkeypatch, request):
+def vec_runtime(vec_catalog_program, python_presentation_mapping, monkeypatch, request, tmp_path):
     """Run ordinary wrapper generation with the proposed fixture-only Vec views."""
-    from egglog import _catalog, conversion, runtime  # noqa: PLC0415
+    from egglog import _catalog, conversion, egraph, runtime  # noqa: PLC0415
     from egglog._catalog import Catalog  # noqa: PLC0415
     from egglog._presentation import builtin_owner  # noqa: PLC0415
 
     catalog = Catalog(builtin_owner(vec_catalog_program, mapping=python_presentation_mapping))
     monkeypatch.setattr(_catalog, "builtin_catalog", lambda: catalog)
+    monkeypatch.setattr(egraph, "builtin_catalog", lambda: catalog)
     monkeypatch.setattr(runtime, "_BASE_CLASSES", dict(runtime._BASE_CLASSES))
     monkeypatch.setattr(conversion, "CONVERSIONS", {})
-    generated = runpy.run_path(str(Path(__file__).parents[1] / "egglog/builtins.py"), run_name="egglog.builtins")
+    root = Path(__file__).resolve().parents[2]
+    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
+    source = tmp_path / "builtins.py"
+    source.write_text(render(vec_catalog_program, mapping=python_presentation_mapping))
+    generated = runpy.run_path(str(source), run_name="egglog.builtins")
     for name in ("i64", "f64", "Pair", "Vec", "VecLike", "ExprValueError"):
         if hasattr(request.module, name):
             monkeypatch.setattr(request.module, name, generated[name])
@@ -119,9 +129,9 @@ def set_catalog_program():
 
 
 @pytest.fixture
-def set_runtime(set_catalog_program, python_presentation_mapping, monkeypatch):
+def set_runtime(set_catalog_program, python_presentation_mapping, monkeypatch, tmp_path):
     """Exercise catalog-derived Set authoring while forbidding native execution."""
-    from egglog import _catalog, bindings, conversion, runtime  # noqa: PLC0415
+    from egglog import _catalog, bindings, conversion, egraph, runtime  # noqa: PLC0415
     from egglog._catalog import Catalog  # noqa: PLC0415
     from egglog._presentation import builtin_owner  # noqa: PLC0415
 
@@ -131,16 +141,21 @@ def set_runtime(set_catalog_program, python_presentation_mapping, monkeypatch):
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
     catalog = Catalog(builtin_owner(set_catalog_program, mapping=python_presentation_mapping))
     monkeypatch.setattr(_catalog, "builtin_catalog", lambda: catalog)
+    monkeypatch.setattr(egraph, "builtin_catalog", lambda: catalog)
     monkeypatch.setattr(runtime, "_BASE_CLASSES", {})
     monkeypatch.setattr(runtime, "_CLASS_CACHE", runtime.WeakKeyDictionary())
     monkeypatch.setattr(conversion, "CONVERSIONS", {})
-    return runpy.run_path(str(Path(__file__).parents[1] / "egglog/builtins.py"), run_name="egglog.builtins")
+    root = Path(__file__).resolve().parents[2]
+    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
+    source = tmp_path / "builtins.py"
+    source.write_text(render(set_catalog_program, mapping=python_presentation_mapping))
+    return runpy.run_path(str(source), run_name="egglog.builtins")
 
 
 @pytest.fixture
-def rational_runtime(rational_catalog_program, python_presentation_mapping, monkeypatch):
+def rational_runtime(rational_catalog_program, python_presentation_mapping, monkeypatch, tmp_path):
     """Use real catalog records without replacing package data or a native engine."""
-    from egglog import _catalog, bindings, conversion, runtime  # noqa: PLC0415
+    from egglog import _catalog, bindings, conversion, egraph, runtime  # noqa: PLC0415
     from egglog._catalog import Catalog  # noqa: PLC0415
     from egglog._presentation import builtin_owner  # noqa: PLC0415
 
@@ -150,7 +165,12 @@ def rational_runtime(rational_catalog_program, python_presentation_mapping, monk
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
     catalog = Catalog(builtin_owner(rational_catalog_program, mapping=python_presentation_mapping))
     monkeypatch.setattr(_catalog, "builtin_catalog", lambda: catalog)
+    monkeypatch.setattr(egraph, "builtin_catalog", lambda: catalog)
     monkeypatch.setattr(runtime, "_BASE_CLASSES", {})
     monkeypatch.setattr(runtime, "_CLASS_CACHE", runtime.WeakKeyDictionary())
     monkeypatch.setattr(conversion, "CONVERSIONS", {})
-    return runpy.run_path(str(Path(__file__).parents[1] / "egglog/builtins.py"), run_name="egglog.builtins")
+    root = Path(__file__).resolve().parents[2]
+    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
+    source = tmp_path / "builtins.py"
+    source.write_text(render(rational_catalog_program, mapping=python_presentation_mapping))
+    return runpy.run_path(str(source), run_name="egglog.builtins")

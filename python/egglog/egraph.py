@@ -12,7 +12,7 @@ from dataclasses import dataclass, field, replace
 from functools import partial
 from inspect import Parameter, currentframe, getmodule, signature
 from operator import index as index_integer
-from types import CellType, FrameType, FunctionType
+from types import CellType, FrameType, FunctionType, UnionType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -26,8 +26,11 @@ from typing import (
     TypeAlias,
     TypedDict,
     TypeVar,
+    Union,
     Unpack,
     cast,
+    get_args,
+    get_origin,
     get_type_hints,
     overload,
 )
@@ -43,7 +46,7 @@ from protobuf import Oneof
 from typing_extensions import ParamSpec, TypeForm
 
 from ._catalog import Catalog, builtin_catalog
-from ._presentation import CallKind, CallPresentation, Presentation, TypePresentation, presentation
+from ._presentation import CallKind, CallPresentation, Presentation, TypePresentation, presentation, validate_view
 from ._presentation import Parameter as PresentationParameter
 from ._program import (
     Builder,
@@ -63,9 +66,9 @@ from .egraph_state import *
 from .egraph_state import _CostModelObservation
 from .pretty import _format_pyobject, pretty_ref
 from .runtime import *
-from .runtime import _ClassContext, _definition_at
+from .runtime import _ClassContext, _definition_at, _Intrinsic
 from .thunk import *
-from .type_constraint_solver import infer_sort
+from .type_constraint_solver import infer_sort, substitute_sort
 
 if TYPE_CHECKING:
     import graphviz
@@ -384,6 +387,26 @@ def function(*args, **kwargs) -> Any:
     return _FunctionConstructor(fn_locals, **kwargs)
 
 
+def _unwrap_method_descriptors(namespace: dict[str, Any]) -> dict[str, Any]:
+    """Normalize either decorator order while retaining wrapped method options."""
+    namespace = dict(namespace)
+    for member_name, value in namespace.items():
+        if isinstance(value, property) and isinstance(value.fget, _WrappedMethod):
+            wrapped = value.fget
+            if not isinstance(wrapped.fn, FunctionType):
+                msg = "A property method must wrap a Python function"
+                raise TypeError(msg)
+            doc = wrapped.fn.__doc__ if value.__doc__ == _WrappedMethod.__doc__ else value.__doc__
+            namespace[member_name] = replace(wrapped, fn=property(wrapped.fn, value.fset, value.fdel, doc))
+        elif isinstance(value, classmethod) and isinstance(value.__func__, _WrappedMethod):
+            wrapped = value.__func__
+            if not isinstance(wrapped.fn, FunctionType):
+                msg = "A class method must wrap a Python function"
+                raise TypeError(msg)
+            namespace[member_name] = replace(wrapped, fn=classmethod(wrapped.fn))
+    return namespace
+
+
 class _ExprMetaclass(type):
     """
     Metaclass of Expr.
@@ -406,6 +429,7 @@ class _ExprMetaclass(type):
         assert frame
         prev_frame = frame.f_back
         assert prev_frame
+        namespace = _unwrap_method_descriptors(namespace)
         hooks = {
             key: value.fn if isinstance(value, _WrappedMethod) else value
             for key, value in namespace.items()
@@ -415,10 +439,40 @@ class _ExprMetaclass(type):
             partial(_prepare_expr_class, namespace=namespace, frame=prev_frame, bases=bases, ruleset=ruleset),
             hooks,
             namespace.get("__match_args__", ()),
+            native_members=frozenset(namespace) if BuiltinExpr in bases else None,
         )
         module = namespace.get("__module__", "")
         path = [*module.split("."), name] if module else [name]
         builder = Builder()
+        if BuiltinExpr in bases:
+            if ruleset is not None:
+                msg = "Builtin classes cannot use a ruleset"
+                raise ValueError(msg)
+            if egg_sort == "UnstableFn":
+                return RuntimeClass(_Intrinsic.APPLY, context=context)
+            native = builtin_catalog().definitions.get(("primitive_sort", egg_sort or name))
+            if native is None:
+                msg = f"No native sort family {egg_sort or name!r}"
+                raise LookupError(msg)
+            builder = Builder(environment=(native.owner,))
+            definition = builder.add("primitive_sorts", native.read())
+            parameters = tuple(
+                argument
+                for base in namespace.get("__orig_bases__", ())
+                if get_origin(base) is Generic
+                for argument in get_args(base)
+            )
+            record: pb.PrimitiveSort = native.read()
+            if len(parameters) != record.arity or any(not isinstance(parameter, TypeVar) for parameter in parameters):
+                msg = f"{name} requires {record.arity} type parameters"
+                raise TypeError(msg)
+            builder.presentations["primitive_sort", record.name] = Presentation(
+                type_view=TypePresentation(tuple(path), tuple(parameter.__name__ for parameter in parameters))
+            )
+            result = RuntimeClass(builder.publish(keepalive=(context,)).ref("primitive_sorts", definition))
+            if parameters:
+                result.__egg_arguments__ = parameters
+            return result
         definition = builder.add(
             "sorts",
             pb.Sort(
@@ -480,13 +534,13 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
     ruleset: Ruleset | None,
 ) -> Catalog:
     """Stage member headers before source-ordered value/body completion."""
-    if bases != (Expr,):
+    native = BuiltinExpr in bases
+    if not native and bases != (Expr,):
         msg = "Only direct nongeneric Expr classes are migrated"
         raise NotImplementedError(msg)
     context = runtime_cls.__egg_context__
     assert context is not None
-    assert isinstance(runtime_cls.__egg_definition__, Ref)
-    definitions = [runtime_cls.__egg_definition__]
+    definitions = [runtime_cls.__egg_definition__] if isinstance(runtime_cls.__egg_definition__, Ref) else []
     context.catalog = Catalog.from_refs(definitions)
     runtime_cls.__egg_attr_cache__.clear()
     hint_locals = {**frame.f_locals, runtime_cls.__name__: runtime_cls}
@@ -501,13 +555,16 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
         globalns=frame.f_globals,
         localns=hint_locals,
     )
-    assert runtime_cls.__egg_sort__ is not None
+    if not native:
+        assert runtime_cls.__egg_sort__ is not None
     for name, annotation in hints.items():
         if getattr(annotation, "__origin__", None) is not ClassVar:
-            raise NotImplementedError(f"On class {runtime_cls}, for attribute {name!r}, expected a ClassVar")
+            msg_0 = f"On class {runtime_cls}, for attribute {name!r}, expected a ClassVar"
+            raise NotImplementedError(msg_0)
         sort = resolve_type_annotation(annotation.__args__[0])
         if not isinstance(sort, Ref) or sort.role != "sorts":
-            raise NotImplementedError(f"Class variable {runtime_cls}.{name} requires a concrete sort")
+            msg_0 = f"Class variable {runtime_cls}.{name} requires a concrete sort"
+            raise NotImplementedError(msg_0)
         builder = Builder()
         output = builder.import_ref(sort)
         sort_record: pb.Sort = sort.read()
@@ -570,11 +627,13 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
                     or value.subsume
                 )
             ) or (value.preserve and (value.egg_fn is not None or name == "__init__")):
-                raise NotImplementedError(f"Method options for {runtime_cls}.{name} are not migrated")
+                msg_0 = f"Method options for {runtime_cls}.{name} are not migrated"
+                raise NotImplementedError(msg_0)
             fn = value.fn
             preserve = value.preserve
             compiler = _FunctionConstructor(
                 hint_locals,
+                builtin=native,
                 egg_fn=value.egg_fn,
                 cost=value.cost,
                 merge=value.merge,
@@ -585,11 +644,22 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
             )
         else:
             fn, preserve = value, False
-            compiler = _FunctionConstructor(hint_locals, mutates_first_arg=name in ALWAYS_MUTATES_SELF, ruleset=ruleset)
+            compiler = _FunctionConstructor(
+                hint_locals, builtin=native, mutates_first_arg=name in ALWAYS_MUTATES_SELF, ruleset=ruleset
+            )
         if preserve or name in ALWAYS_PRESERVED:
             continue
+        if native and runtime_cls.__egg_definition__ is _Intrinsic.APPLY and name in {"__init__", "__call__"}:
+            continue
+        if native and name == "__init__" and compiler.egg_fn is None:
+            assert isinstance(runtime_cls.__egg_definition__, Ref)
+            family: pb.PrimitiveSort = runtime_cls.__egg_definition__.read()
+            selected = builtin_catalog().members.get((("primitive_sort", family.name), "__init__"))
+            if selected is None:
+                continue
         if name in IGNORED_ATTRIBUTES:
-            raise NotImplementedError(f"Symbolic reflected member {runtime_cls}.{name} is not migrated")
+            msg_0 = f"Symbolic reflected member {runtime_cls}.{name} is not migrated"
+            raise NotImplementedError(msg_0)
         view_kind = CallKind.INITIALIZER if name == "__init__" else CallKind.METHOD
         if isinstance(fn, classmethod):
             fn, view_kind = fn.__func__, CallKind.CLASS_METHOD
@@ -605,6 +675,14 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
             member_name=name,
             reverse_args=value.reverse_args if isinstance(value, _WrappedMethod) else False,
         )
+        if native:
+            reference = function.__egg_ref__
+            runtime_cls.__egg_attr_cache__[name] = function
+            record: pb.Primitive = reference.read()
+            if ("callable", record.name) not in context.catalog.definitions:
+                definitions.append(reference)
+                context.catalog = Catalog.from_refs(definitions)
+            continue
         header = function.__egg_pending_declaration__
         assert header is not None
 
@@ -615,7 +693,8 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
 
             duplicate |= previous_header.name == key[1]
         if duplicate:
-            raise ValueError(f"Duplicate catalog definition: {key}")
+            msg_0 = f"Duplicate catalog definition: {key}"
+            raise ValueError(msg_0)
         assert isinstance(fn, FunctionType)
         if _function_has_body(fn) and ruleset is not None:
             bodies.append((fn, function, compiler.subsume))
@@ -699,6 +778,257 @@ class _FunctionConstructor:
     def __call__(self, fn: Callable) -> RuntimeFunction:
         return RuntimeFunction(partial(self.prepare, fn), 0)
 
+    def _prepare_builtin(  # noqa: C901, PLR0912
+        self,
+        fn: FunctionType,
+        *,
+        owner: RuntimeClass | None,
+        view_kind: CallKind,
+        member_name: str | None,
+        reverse_args: bool,
+    ) -> Ref | RuntimeFunction:
+        """Validate a Python header against native records, retaining their signature."""
+        if self.merge is not None:
+            msg = "Builtin callables cannot use merge"
+            raise ValueError(msg)
+        if self.ruleset is not None:
+            msg = "Builtin callables cannot use an explicit ruleset"
+            raise ValueError(msg)
+        if self.mutates_first_arg:
+            msg = "Builtin mutation is not migrated"
+            raise NotImplementedError(msg)
+        if self.cost is not None:
+            msg = "Primitive-returning callables cannot use cost"
+            raise ValueError(msg)
+        if self.unextractable:
+            msg = "Unextractable can only be set for constructors"
+            raise ValueError(msg)
+        catalog = builtin_catalog()
+        selected = None
+        family = None
+        if owner is not None:
+            assert isinstance(owner.__egg_definition__, Ref)
+            family = owner.__egg_definition__.read()
+            assert isinstance(family, pb.PrimitiveSort)
+            selected = catalog.members.get((("primitive_sort", family.name), member_name or fn.__name__))
+            if selected is not None and self.egg_fn is not None and selected[0].read().name != self.egg_fn:
+                selected = None
+        literal_header = family is not None and family.name in LIT_IDENTS and member_name == "__init__"
+        if literal_header and selected is None:
+            msg = "Scalar constructors require their native initializer view"
+            raise ValueError(msg)
+        if not literal_header and _function_has_body(fn):
+            msg = "Builtin callables cannot have a body"
+            raise ValueError(msg)
+        name = self.egg_fn or (
+            selected[0].read().name
+            if selected is not None
+            else re.sub(r"[^\w\-+*/?!=<>&|^/%]", "_", f"{fn.__module__}.{fn.__name__}")
+        )
+        try:
+            reference = catalog.definitions["callable", name]
+        except KeyError as error:
+            msg = f"No owned canonical definition for callable {name!r}"
+            raise LookupError(msg) from error
+        record = reference.read()
+        if not isinstance(record, pb.Primitive) or record.signature is None:
+            msg = "Builtin annotations require an owned primitive signature"
+            raise ValueError(msg)
+        native = record.signature
+        if not native.has_field("output"):
+            msg = "Builtin signature has no output"
+            raise ValueError(msg)
+        parameters = list(signature(fn).parameters.values())
+        if owner is not None and view_kind in {CallKind.CLASS_METHOD, CallKind.INITIALIZER}:
+            parameters = parameters[1:]
+        receiver = owner is not None and view_kind in {CallKind.METHOD, CallKind.PROPERTY}
+        if receiver and not parameters:
+            msg = "A builtin method requires its receiver"
+            raise ValueError(msg)
+        if not literal_header:
+            _last_param_variable(parameters)
+        source_parameters = parameters[1:] if receiver else parameters
+        templates = presentation(reference).views
+        if selected is not None:
+            template_index = selected[1]
+            template = templates[template_index]
+        else:
+            template_index = next(
+                (
+                    index
+                    for index, candidate in enumerate(templates)
+                    if owner is None and candidate.kind == CallKind.FUNCTION
+                ),
+                None,
+            )
+            if template_index is not None:
+                template = templates[template_index]
+            else:
+                receiver_slot = len(parameters) - 1 if reverse_args else 0
+                template = CallPresentation(
+                    kind=view_kind,
+                    owner=owner.__egg_sort__ if owner is not None else None,
+                    receiver=receiver_slot if receiver else None,
+                    params=tuple(
+                        PresentationParameter(len(parameters) - index - 1 if reverse_args else index, parameter.name)
+                        for index, parameter in enumerate(parameters)
+                        if not receiver or index
+                    ),
+                )
+        if template.kind != view_kind:
+            msg = "Builtin declaration has a different Python call form"
+            raise ValueError(msg)
+        slots = ([template.receiver] if template.receiver is not None else []) + [
+            parameter.core_input for parameter in template.params
+        ]
+        expected_slots = list(range(len(slots)))
+        if reverse_args:
+            expected_slots.reverse()
+        if slots != expected_slots:
+            msg = "Builtin reverse_args differs from its native parameter layout"
+            raise ValueError(msg)
+        if not literal_header and len(source_parameters) != len(template.params):
+            msg = "Builtin header does not match its native parameter layout"
+            raise ValueError(msg)
+        hints = (
+            {}
+            if literal_header
+            else get_type_hints(
+                fn,
+                globalns=fn.__globals__,
+                localns={**fn.__globals__, **self.hint_locals},
+            )
+        )
+        variables: dict[TypeVar, Ref] = {}
+        concrete: dict[int, Ref] = {}
+
+        def match_annotation(expected: Ref, annotation: object) -> None:  # noqa: C901, PLR0912
+            pattern: pb.Sort = expected.read()
+            if pattern.kind is None:
+                msg = "Builtin signature sort has no kind"
+                raise ValueError(msg)
+            if isinstance(annotation, TypeVar):
+                if pattern.kind.field != "var":
+                    msg = "Python type parameter does not match a native signature parameter"
+                    raise ValueError(msg)
+                previous = variables.setdefault(annotation, expected)
+                if StructuralView(previous) != StructuralView(expected) or pattern.kind.value in concrete:
+                    msg = "Inconsistent Python type parameter in builtin header"
+                    raise ValueError(msg)
+                if any(
+                    other is not annotation and StructuralView(bound) == StructuralView(expected)
+                    for other, bound in variables.items()
+                ):
+                    msg = "Distinct Python parameters alias one native parameter"
+                    raise ValueError(msg)
+                return
+            origin = get_origin(annotation)
+            if origin in {UnionType, Union}:
+                match_annotation(expected, get_args(annotation)[0])
+                return
+            if origin is Callable:
+                arguments = get_args(annotation)
+                if pattern.kind.field != "func" or len(arguments) != 2 or not isinstance(arguments[0], list):
+                    msg = "Builtin callable annotation does not match its native Func sort"
+                    raise ValueError(msg)
+                function = pattern.kind.value
+                if len(arguments[0]) != len(function.params):
+                    msg = "Builtin callable annotation has a different arity"
+                    raise ValueError(msg)
+                for index, child in zip(function.params, arguments[0], strict=True):
+                    match_annotation(expected.owner.ref("sorts", index), child)
+                match_annotation(expected.owner.ref("sorts", function.result), arguments[1])
+                return
+            resolved = resolve_type_annotation(annotation)
+            if isinstance(resolved, RuntimeClass):
+                definition = resolved.__egg_definition__
+                kind = definition.read() if isinstance(definition, Ref) else None
+                if isinstance(kind, pb.PrimitiveSort) and pattern.kind.field == "primitive":
+                    if kind.name != pattern.kind.value.name:
+                        msg = "Builtin family annotation differs from its native signature"
+                        raise ValueError(msg)
+                    children = pattern.kind.value.args
+                    arguments = resolved.__egg_arguments__
+                elif definition is _Intrinsic.APPLY and pattern.kind.field == "func":
+                    children = [pattern.kind.value.result, *pattern.kind.value.params]
+                    arguments = resolved.__egg_arguments__
+                else:
+                    msg = "Unresolved builtin annotation does not match its native sort"
+                    raise ValueError(msg)
+                if len(children) != len(arguments):
+                    msg = "Builtin family annotation has a different arity"
+                    raise ValueError(msg)
+                for index, child in zip(children, arguments, strict=True):
+                    match_annotation(expected.owner.ref("sorts", index), child)
+                return
+            if not isinstance(resolved, Ref):
+                msg = "Builtin annotation requires a canonical sort"
+                raise TypeError(msg)
+            infer_sort(expected, resolved, native.type_param_count, concrete)
+            if any(bound.read().kind.value in concrete for bound in variables.values()):
+                msg = "A generic Python parameter was specialized by another annotation"
+                raise ValueError(msg)
+
+        def input_sort(index: int) -> Ref:
+            if index < len(native.inputs):
+                return reference.owner.ref("sorts", native.inputs[index])
+            if not native.varargs:
+                msg = "Builtin header references a missing native input"
+                raise ValueError(msg)
+            return reference.owner.ref("sorts", native.varargs[(index - len(native.inputs)) % len(native.varargs)])
+
+        if not literal_header:
+            if receiver:
+                assert template.receiver is not None
+                match_annotation(input_sort(template.receiver), owner)
+            for parameter, layout in zip(source_parameters, template.params, strict=True):
+                if parameter.kind == Parameter.VAR_POSITIONAL:
+                    if not native.varargs or template.tail_repetitions is not None:
+                        msg = "Builtin variadic header does not match a native tail"
+                        raise ValueError(msg)
+                    for index in native.varargs:
+                        match_annotation(reference.owner.ref("sorts", index), hints[parameter.name])
+                else:
+                    match_annotation(input_sort(layout.core_input), hints[parameter.name])
+            match_annotation(
+                reference.owner.ref("sorts", native.output),
+                owner if view_kind == CallKind.INITIALIZER else hints["return"],
+            )
+        completed = []
+        for position, layout in enumerate(template.params):
+            if literal_header:
+                completed.append(layout)
+                continue
+            parameter = source_parameters[position]
+            default = None
+            if parameter.default is not Parameter.empty:
+                if isinstance(parameter.default, RuntimeExpr):
+                    default = parameter.default.__egg_ref__
+                else:
+                    expected = substitute_sort(input_sort(layout.core_input), concrete)
+                    default = resolve_literal(expected, parameter.default).__egg_ref__
+            completed.append(replace(layout, name=parameter.name, default=default))
+        path = (
+            (() if view_kind == CallKind.INITIALIZER else (member_name or fn.__name__,))
+            if owner is not None
+            else (*fn.__module__.split("."), fn.__name__)
+        )
+        view = replace(template, path=path, params=tuple(completed))
+        builder = Builder()
+        index = builder.add(
+            "primitives",
+            _copy_record(record, relocate=lambda role, index: builder.import_ref(reference.owner.ref(role, index))),
+        )
+        if template_index is None:
+            views, view_index = (view,), 0
+        else:
+            views = (*templates[:template_index], view, *templates[template_index + 1 :])
+            view_index = template_index
+        builder.presentations["callable", record.name] = Presentation(views=views)
+        bound = builder.publish().ref("primitives", index)
+        validate_view(bound, view)
+        return bound if owner is None else RuntimeFunction(bound, view_index, owner)
+
     @overload
     def prepare(
         self,
@@ -735,7 +1065,12 @@ class _FunctionConstructor:
             msg = "Inside of classes, wrap methods with the `method` decorator, not `function`"
             raise ValueError(msg)  # noqa: TRY004
         if not isinstance(fn, FunctionType):
-            raise NotImplementedError(f"Can only generate function declarations for functions, not {type(fn)}")
+            msg_0 = f"Can only generate function declarations for functions, not {type(fn)}"
+            raise NotImplementedError(msg_0)
+        if self.builtin:
+            return self._prepare_builtin(
+                fn, owner=owner, view_kind=view_kind, member_name=member_name, reverse_args=reverse_args
+            )
         module_globals = vars(sys.modules[fn.__module__]) if fn.__module__ in sys.modules else {}
         hint_namespace = {**module_globals, **fn.__globals__, **self.hint_locals}
         hints = get_type_hints(fn, globalns=hint_namespace, localns=hint_namespace)
@@ -784,9 +1119,6 @@ class _FunctionConstructor:
         equality = output_record.kind.field == "eq"
         has_body = _function_has_body(fn)
         has_merge = self.merge is not None
-        if self.builtin and has_merge:
-            msg = "Builtin callables cannot use merge"
-            raise ValueError(msg)
         if self.subsume:
             if not equality:
                 msg = "Primitive-returning callables cannot use subsume"
@@ -794,9 +1126,6 @@ class _FunctionConstructor:
             if self.ruleset is None:
                 msg = "subsume requires an explicit ruleset"
                 raise ValueError(msg)
-        if equality and self.builtin:
-            msg = "Eqsort-returning callables cannot be builtin"
-            raise ValueError(msg)
         if not equality:
             if self.cost is not None:
                 msg = "Primitive-returning callables cannot use cost"
@@ -814,12 +1143,6 @@ class _FunctionConstructor:
             if self.unextractable:
                 msg = "Unextractable can only be set for constructors"
                 raise ValueError(msg)
-        if self.builtin and self.ruleset is not None:
-            msg = "Builtin callables cannot use an explicit ruleset"
-            raise ValueError(msg)
-        if self.builtin and has_body:
-            msg = "Builtin callables cannot have a body"
-            raise ValueError(msg)
         if has_body:
             if equality:
                 if has_merge:
@@ -854,7 +1177,7 @@ class _FunctionConstructor:
         if self.subsume and not has_body:
             msg = "subsume requires a body"
             raise ValueError(msg)
-        if variable or (self.builtin and (owner is not None or self.mutates_first_arg)):
+        if variable:
             msg = "Builtin, mutation and variadic free functions are not migrated"
             raise NotImplementedError(msg)
         if any(not isinstance(sort, Ref) or sort.role != "sorts" for sort in input_sorts):
@@ -902,29 +1225,6 @@ class _FunctionConstructor:
             owner=None if owner is None else owner.__egg_sort__,
             receiver=python_first_input if receiver else None,
         )
-        builtin_reference = None
-        if self.builtin:
-            builtin_reference = _definition_at(output, "callable", name)
-            actual: pb.Primitive = builtin_reference.read()
-            if not isinstance(actual, pb.Primitive) or actual.signature is None:
-                msg = "Builtin annotations require an owned concrete primitive signature"
-                raise ValueError(msg)
-            actual_signature = actual.signature
-            if (
-                actual_signature.type_param_count
-                or actual_signature.varargs
-                or len(actual_signature.inputs) != len(input_sorts)
-                or not actual_signature.has_field("output")
-            ):
-                msg = "Builtin annotations must match the configured fixed signature"
-                raise ValueError(msg)
-            for supplied, expected in zip(
-                (*input_sorts, output),
-                (*actual_signature.inputs, actual_signature.output),
-                strict=True,
-            ):
-                assert isinstance(supplied, Ref)
-                infer_sort(builtin_reference.owner.ref("sorts", expected), supplied, 0, {})
         kind = (
             pb.UserDefinedPrimitive(name=name, inputs=inputs, output=output_index)
             if has_body and self.ruleset is None
@@ -1030,21 +1330,13 @@ class _FunctionConstructor:
                 )
                 if isinstance(kind, pb.UserDefinedPrimitive):
                     kind.body = body
-            if builtin_reference is None:
-                role = {
-                    pb.Constructor: "constructors",
-                    pb.Function: "functions",
-                    pb.Relation: "relations",
-                    pb.UserDefinedPrimitive: "user_defined_primitives",
-                }[type(declaration)]
-                index = builder.add(role, declaration)
-            else:
-                actual = _copy_record(
-                    builtin_reference.read(),
-                    relocate=lambda arena, index: builder.import_ref(builtin_reference.owner.ref(arena, index)),
-                )
-                index = builder.add("primitives", actual)
-                role = "primitives"
+            role = {
+                pb.Constructor: "constructors",
+                pb.Function: "functions",
+                pb.Relation: "relations",
+                pb.UserDefinedPrimitive: "user_defined_primitives",
+            }[type(declaration)]
+            index = builder.add(role, declaration)
             builder.presentations["callable", name] = Presentation(
                 views=(replace(view, params=tuple(completed_parameters)),)
             )
@@ -1096,7 +1388,8 @@ def _lower_function_body(  # noqa: C901
             elif rewrite_body:
                 name = f"_{node.kind.value}"
             else:
-                raise ValueError(f"Free variable {node.kind.value!r} in named eager body")
+                msg_0 = f"Free variable {node.kind.value!r} in named eager body"
+                raise ValueError(msg_0)
             node.kind = Oneof[Literal["var"], str]("var", name)
         elif node.kind.field == "eq" and not rewrite_body:
             msg = "Union in named eager bodies is not supported"
@@ -1442,7 +1735,8 @@ def _last_param_variable(params: list[Parameter]) -> bool:
         if kind == Parameter.VAR_POSITIONAL:
             found_var_arg = True
         elif kind != Parameter.POSITIONAL_OR_KEYWORD:
-            raise ValueError(f"Can only register functions with positional or keyword args, not {param.kind}")
+            msg_0 = f"Can only register functions with positional or keyword args, not {param.kind}"
+            raise ValueError(msg_0)
     return found_var_arg
 
 
@@ -1849,7 +2143,8 @@ class EGraph:
         Extract the lowest cost expression from the egraph.
         """
         if extractor not in {"tree", "greedy-dag"}:
-            raise ValueError(f"Unknown extractor {extractor!r}; expected 'tree' or 'greedy-dag'")
+            msg = f"Unknown extractor {extractor!r}; expected 'tree' or 'greedy-dag'"
+            raise ValueError(msg)
         if cost_model is not None and extractor == "greedy-dag" and not isinstance(cost_model, DagCostModel):
             msg = "greedy-dag extraction requires a DagCostModel"
             raise TypeError(msg)
@@ -2012,7 +2307,8 @@ class EGraph:
             msg = "The number of variants exceeds the protocol's uint32 range"
             raise OverflowError(msg)
         if extractor not in {"tree", "greedy-dag"}:
-            raise ValueError(f"Unknown extractor {extractor!r}; expected 'tree' or 'greedy-dag'")
+            msg_0 = f"Unknown extractor {extractor!r}; expected 'tree' or 'greedy-dag'"
+            raise ValueError(msg_0)
         if cost_model is not None and extractor == "greedy-dag" and not isinstance(cost_model, DagCostModel):
             msg = "greedy-dag extraction requires a DagCostModel"
             raise TypeError(msg)
@@ -2092,7 +2388,8 @@ class EGraph:
     ) -> None:
         """Compact selected tables through the shared KeepBest command."""
         if extractor not in {"tree", "greedy-dag"}:
-            raise ValueError(f"Unknown extractor {extractor!r}; expected 'tree' or 'greedy-dag'")
+            msg = f"Unknown extractor {extractor!r}; expected 'tree' or 'greedy-dag'"
+            raise ValueError(msg)
         if cost_model is not None and extractor == "greedy-dag" and not isinstance(cost_model, DagCostModel):
             msg = "greedy-dag extraction requires a DagCostModel"
             raise TypeError(msg)
@@ -2382,7 +2679,8 @@ class EGraph:
             or len(response.outputs[0].kind.value.sizes) != 1
             or response.outputs[0].kind.value.sizes[0].table != table
         ):
-            raise ValueError(f"Shared adapter did not return the requested table size for {table!r}")
+            msg_0 = f"Shared adapter did not return the requested table size for {table!r}"
+            raise ValueError(msg_0)
         return response.outputs[0].kind.value.sizes[0].rows
 
     def all_function_sizes(self) -> list[tuple[ExprCallable, int]]:
@@ -2472,31 +2770,37 @@ class EGraph:
             or response.outputs[0].location != pb.CommandLocation(path=[0])
             or response.outputs[0].kind.value.table != signature.name
         ):
-            raise ValueError(f"Shared adapter did not return the requested table {signature.name!r}")
+            msg_0 = f"Shared adapter did not return the requested table {signature.name!r}"
+            raise ValueError(msg_0)
         builder = Builder()
         builder.import_ref(reference)
         rows: list[tuple[int, Ref]] = []
         for row_index, row in enumerate(response.outputs[0].kind.value.rows):
             if len(row.args) != len(signature.inputs) or row.output is None:
-                raise ValueError(f"Malformed table {signature.name!r} row {row_index}")
+                msg_0 = f"Malformed table {signature.name!r} row {row_index}"
+                raise ValueError(msg_0)
             values = []
             for position, cell in enumerate([*row.args, row.output]):
                 location = f"argument {position}" if position < len(row.args) else "output"
                 context = f"Table {signature.name!r} row {row_index} {location}"
                 if cell.kind is None:
-                    raise ValueError(f"{context} omitted its cell kind")
+                    msg_0 = f"{context} omitted its cell kind"
+                    raise ValueError(msg_0)
                 if cell.kind.field == "term":
                     if cell.kind.value >= len(response.nodes):
-                        raise ValueError(f"{context} references an invalid term")
+                        msg_0 = f"{context} references an invalid term"
+                        raise ValueError(msg_0)
                     value = owner.ref("nodes", cell.kind.value)
                     node: pb.Node = value.read()
                     if node.kind is None or node.sort_id >= len(response.sorts):
-                        raise ValueError(f"{context} references an invalid node")
+                        msg_0 = f"{context} references an invalid node"
+                        raise ValueError(msg_0)
                     actual_sort = owner.ref("sorts", node.sort_id)
                     values.append(value)
                 else:
                     if cell.kind.value >= len(response.sorts):
-                        raise ValueError(f"{context} references an invalid unavailable sort")
+                        msg_0 = f"{context} references an invalid unavailable sort"
+                        raise ValueError(msg_0)
                     actual_sort = owner.ref("sorts", cell.kind.value)
                 expected = (
                     signature.inputs[position]
@@ -2511,9 +2815,11 @@ class EGraph:
                     else StructuralView(actual_sort) == StructuralView(reference.owner.ref("sorts", expected))
                 )
                 if not valid_sort:
-                    raise ValueError(f"{context} has the wrong sort")
+                    msg_0 = f"{context} has the wrong sort"
+                    raise ValueError(msg_0)
                 if cell.kind.field == "unavailable_sort":
-                    raise ValueError(f"{context} has no extractable representative")
+                    msg_0 = f"{context} has no extractable representative"
+                    raise ValueError(msg_0)
             key = builder.add(
                 "nodes",
                 pb.Node(
@@ -2619,7 +2925,7 @@ class _WrappedMethod:
     egg_fn: str | None
     cost: int | None
     merge: Callable[[object, object], object] | None
-    fn: Callable
+    fn: object
     preserve: bool
     mutates_self: bool
     unextractable: bool
@@ -3562,7 +3868,8 @@ class _RuleBuilder:
             "unsafe-seminaive": pb.RuleEvalMode.UNSAFE_SEMINAIVE,
         }
         if self.eval_mode not in modes:
-            raise ValueError(f"Unknown rule evaluation mode: {self.eval_mode!r}")
+            msg_0 = f"Unknown rule evaluation mode: {self.eval_mode!r}"
+            raise ValueError(msg_0)
         if self.name is not None and not isinstance(cast("object", self.name), str):
             msg = "Rule names must be strings when supplied"
             raise TypeError(msg)
@@ -3624,13 +3931,15 @@ def expr_parts(expr: BaseExpr) -> StructuralView:
     Returns the underlying type and decleration of the expression. Useful for testing structural equality or debugging.
     """
     if not isinstance(cast("object", expr), RuntimeExpr):
-        raise TypeError(f"Expected a RuntimeExpr not {expr}")
+        msg = f"Expected a RuntimeExpr not {expr}"
+        raise TypeError(msg)
     return StructuralView(cast("RuntimeExpr", expr).__egg_ref__)
 
 
 def to_runtime_expr(expr: BaseExpr) -> RuntimeExpr:
     if not isinstance(cast("object", expr), RuntimeExpr):
-        raise TypeError(f"Expected a RuntimeExpr not {expr}")
+        msg = f"Expected a RuntimeExpr not {expr}"
+        raise TypeError(msg)
     return cast("RuntimeExpr", expr)
 
 
@@ -3701,7 +4010,8 @@ def back_off(match_limit: None | int = None, ban_length: None | int = None) -> B
         if value is not None:
             numeric = index_integer(value)
             if not 0 <= numeric < 2**64:
-                raise OverflowError(f"Scheduler {name} must fit unsigned uint64")
+                msg = f"Scheduler {name} must fit unsigned uint64"
+                raise OverflowError(msg)
             setattr(options, name, numeric)
     builder = Builder()
     index = builder.add(

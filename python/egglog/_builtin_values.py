@@ -1,23 +1,29 @@
-"""Catalog-generated builtin wrappers and handwritten Python value protocols."""
+"""Validated builtin value inspection and host conversions, independent of API generation."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
-from types import FunctionType, GenericAlias, MethodType
-from typing import Any, Literal, Protocol, TypeVar, cast
+from types import FunctionType, MethodType
+from typing import TYPE_CHECKING, Literal, TypeVar, overload
 
 from egglog_proto.egglog.v1 import egglog_pb as pb
 from protobuf import Oneof
-from typing_extensions import deprecated
 
-from ._builtin_protocols import SCALAR_PROTOCOLS
-from ._catalog import builtin_catalog
-from ._presentation import CallKind, presentation
+from ._presentation import CallKind, presentation, validate_default, validate_view
 from ._program import Builder, Ref, StructuralView
-from .conversion import converter, get_type_args, resolve_literal
-from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction, _Intrinsic
+from .conversion import get_type_args, resolve_literal
+from .egraph import BaseExpr
+from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction
+
+if TYPE_CHECKING:
+    from .builtins import Map, Maybe, MultiSet, Pair, Set, Vec
+
+_T = TypeVar("_T", bound=BaseExpr)
+_L = TypeVar("_L", bound=BaseExpr)
+_R = TypeVar("_R", bound=BaseExpr)
+_K = TypeVar("_K", bound=BaseExpr)
+_V = TypeVar("_V", bound=BaseExpr)
 
 
 @dataclass
@@ -31,34 +37,17 @@ class ExprValueError(AttributeError):
         return f"Cannot get Python value of {self.expr}, must be of form {self.allowed}. Try calling `extract` on it to get the underlying value."
 
 
-def _scalar_value(expr: RuntimeExpr) -> object:
-    from .deconstruct import get_literal_value  # noqa: PLC0415
-
-    value = get_literal_value(expr)
-    if value is not None:
-        return value
-    node: pb.Node = expr.__egg_ref__.read()
-    from .runtime import _class_for_sort  # noqa: PLC0415
-
-    cls = _class_for_sort(expr.__egg_ref__.owner.ref("sorts", node.sort_id))
-    raise ExprValueError(expr, str(cls))
+@overload
+def _pair_value(expr: Pair[_L, _R]) -> tuple[_L, _R]: ...
 
 
-@deprecated("use .value")
-def _eval(expr: RuntimeExpr) -> object:
-    return expr.value
+@overload
+def _pair_value(expr: RuntimeExpr) -> tuple[RuntimeExpr, RuntimeExpr]: ...
 
 
-def _integer(expr: RuntimeExpr) -> int:
-    return int(cast("Any", expr.value))
-
-
-def _float(expr: RuntimeExpr) -> float:
-    return float(cast("Any", expr.value))
-
-
-def _pair_value(expr: RuntimeExpr) -> tuple[RuntimeExpr, RuntimeExpr]:
+def _pair_value(expr: object) -> tuple[object, object]:
     """Inspect owned children, never evaluate or manufacture a semantic Call."""
+    assert isinstance(expr, RuntimeExpr)
     reference = expr.__egg_ref__
     node: pb.Node = reference.read()
     sort = reference.owner.ref("sorts", node.sort_id)
@@ -92,8 +81,17 @@ def _pair_value(expr: RuntimeExpr) -> tuple[RuntimeExpr, RuntimeExpr]:
     return RuntimeExpr(children[0]), RuntimeExpr(children[1])
 
 
-def _maybe_value(expr: RuntimeExpr) -> RuntimeExpr | None:
+@overload
+def _maybe_value(expr: Maybe[_T]) -> _T | None: ...
+
+
+@overload
+def _maybe_value(expr: RuntimeExpr) -> RuntimeExpr | None: ...
+
+
+def _maybe_value(expr: object) -> object:
     """Inspect exact optional presence while leaving a present child symbolic."""
+    assert isinstance(expr, RuntimeExpr)
     from .runtime import _definition_at  # noqa: PLC0415
 
     reference = expr.__egg_ref__
@@ -148,8 +146,17 @@ def _tuple_to_pair(value: tuple[object, ...]) -> RuntimeExpr:
     return result
 
 
-def _container_items(expr: RuntimeExpr) -> tuple[RuntimeExpr, ...]:
+@overload
+def _container_items(expr: Vec[_T] | Set[_T] | MultiSet[_T]) -> tuple[_T, ...]: ...
+
+
+@overload
+def _container_items(expr: RuntimeExpr) -> tuple[RuntimeExpr, ...]: ...
+
+
+def _container_items(expr: object) -> tuple[object, ...]:
     """Validate ordered collection children without evaluating or normalizing them."""
+    assert isinstance(expr, RuntimeExpr)
     reference = expr.__egg_ref__
     node: pb.Node = reference.read()
     sort = reference.owner.ref("sorts", node.sort_id)
@@ -189,6 +196,7 @@ def _container_member(target: RuntimeClass | RuntimeExpr, name: str, kind: CallK
     from .runtime import _definition_at  # noqa: PLC0415
 
     origin = target.__egg_definition__ if isinstance(target, RuntimeClass) else target.__egg_ref__
+    assert isinstance(origin, Ref), "A container member requires a native family definition"
     reference = _definition_at(origin, "callable", name)
     views = presentation(reference).views
     view = next((index for index, candidate in enumerate(views) if candidate.kind == kind), None)
@@ -203,6 +211,7 @@ def _collection_to_expr(value: list[object] | tuple[object, ...] | set[object], 
     (element,) = get_type_args()
     assert element.__egg_sort__ is not None
     target = _BASE_CLASSES[family][element]
+    assert isinstance(target, RuntimeClass), "A concrete collection codec requires a concrete element sort"
     result = target(*(resolve_literal(element.__egg_sort__, item) for item in value))
     assert isinstance(result, RuntimeExpr)
     return result
@@ -255,6 +264,7 @@ def _dict_to_map(value: dict[object, object]) -> RuntimeExpr:
     assert key.__egg_sort__ is not None
     assert item.__egg_sort__ is not None
     target = _BASE_CLASSES["Map"][key, item]
+    assert isinstance(target, RuntimeClass), "A concrete Map codec requires concrete key and value sorts"
     assert target.__egg_sort__ is not None
     builder = Builder()
     entries = []
@@ -279,170 +289,53 @@ def _dict_to_map(value: dict[object, object]) -> RuntimeExpr:
     return RuntimeExpr(builder.publish().ref("nodes", root))
 
 
-def _function_value(expr: RuntimeExpr) -> object:
-    from .deconstruct import get_literal_value  # noqa: PLC0415
-
-    value = get_literal_value(expr)
-    if value is None:
-        raise ExprValueError(expr, "UnstableFn(f, *args)")
-    return value
+@overload
+def _map_value(expr: Map[_K, _V]) -> dict[_K, _V]: ...
 
 
-__all__ = ["ExprValueError"]
-_catalog = builtin_catalog()
-UnstableFn = RuntimeClass(_Intrinsic.APPLY)
-UnstableFn.__egg_hooks__.update(value=property(_function_value), eval=_eval)
-__all__ += ["UnstableFn"]
-converter(RuntimeFunction, UnstableFn, lambda value: UnstableFn[get_type_args()](value))
-converter(FunctionType, UnstableFn, lambda value: UnstableFn[get_type_args()](value))
-converter(MethodType, UnstableFn, lambda value: UnstableFn[get_type_args()](value))
-converter(partial, UnstableFn, lambda value: UnstableFn[get_type_args()](value.func, *value.args))
-for _definition in _catalog.definitions.values():
-    _declaration: (
-        pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive | pb.Primitive | pb.PrimitiveSort
-    ) = _definition.read()
-    _kind = _declaration
-    if not isinstance(_kind, pb.PrimitiveSort):
-        continue
-    _binding = presentation(_definition).type_view
-    _path = tuple(_binding.path) if _binding is not None else (*__name__.split("."), _kind.name)
-    if _path[:-1] != tuple(__name__.split(".")):
-        continue
-    _name = _path[-1]
-    if not _name.isidentifier() or _name in globals():
-        raise ValueError(f"Cannot generate Python builtin type {_path!r}")
-    _class = RuntimeClass(_definition)
-    globals()[_name] = _class
-    __all__ += [_name]  # noqa: PLE0604 -- names come from the generated catalog
-    _protocol = SCALAR_PROTOCOLS.get(_kind.name)
-    if _kind.name == "Pair" and isinstance(_kind, pb.PrimitiveSort):
-        _class.__egg_hooks__["value"] = property(_pair_value)
-        converter(tuple, _class, _tuple_to_pair)
-    if _kind.name == "Maybe" and isinstance(_kind, pb.PrimitiveSort):
-        _class.__egg_hooks__["value"] = property(_maybe_value)
-        converter(
-            type(None),
-            _class,
-            lambda _value, cls=_class: _container_member(
-                cls[get_type_args()[0]], "egglog.experimental.maybe.none", CallKind.CLASS_METHOD
-            )(),
-        )
-    if _kind.name == "Vec" and isinstance(_kind, pb.PrimitiveSort):
-        _class.__egg_hooks__.update(
-            value=property(_container_items),
-            __iter__=lambda expr: iter(expr.value),
-            __len__=lambda expr: len(expr.value),
-            __contains__=lambda expr, item: item in expr.value,
-            eval=_eval,
-        )
-        converter(list, _class, lambda value: _collection_to_expr(value, "Vec"))
-        converter(tuple, _class, lambda value: _collection_to_expr(value, "Vec"))
-        _host_element = TypeVar("_host_element")
-        globals()[f"{_name}Like"] = (
-            GenericAlias(_class, _class.__egg_arguments__)
-            | GenericAlias(tuple, (_host_element, ...))
-            | GenericAlias(list, _host_element)
-        )
-        __all__ += [f"{_name}Like"]  # noqa: PLE0604
-    if _kind.name == "Set" and isinstance(_kind, pb.PrimitiveSort):
-        _class.__egg_hooks__.update(
-            value=property(lambda expr: set(_container_items(expr))),
-            __iter__=lambda expr: iter(dict.fromkeys(_container_items(expr))),
-            __len__=lambda expr: len(expr.value),
-            __contains__=lambda expr, item: item in expr.value,
-            eval=_eval,
-        )
-        converter(set, _class, lambda value: _collection_to_expr(value, "Set"))
-        _host_set_element = TypeVar("_host_set_element")
-        globals()[f"{_name}Like"] = GenericAlias(_class, _class.__egg_arguments__) | GenericAlias(
-            set, _host_set_element
-        )
-        __all__ += [f"{_name}Like"]  # noqa: PLE0604
-    if _kind.name == "MultiSet" and isinstance(_kind, pb.PrimitiveSort):
-        _class.__egg_hooks__.update(
-            value=property(lambda expr: list(_container_items(expr))),
-            __iter__=lambda expr: iter(expr.value),
-            __len__=lambda expr: len(expr.value),
-            __contains__=lambda expr, item: item in expr.value,
-            eval=_eval,
-        )
-        converter(tuple, _class, lambda value: _collection_to_expr(value, "MultiSet"))
-        _host_multiset_element = TypeVar("_host_multiset_element")
-        globals()[f"{_name}Like"] = GenericAlias(_class, _class.__egg_arguments__) | GenericAlias(
-            tuple, (_host_multiset_element, ...)
-        )
-        __all__ += [f"{_name}Like"]  # noqa: PLE0604
-    if _kind.name == "Map" and isinstance(_kind, pb.PrimitiveSort):
-        _class.__egg_hooks__.update(
-            value=property(lambda expr: {RuntimeExpr(key): RuntimeExpr(value) for key, value in _map_entries(expr)}),
-            __iter__=lambda expr: iter(expr.value),
-            __len__=lambda expr: len(expr.value),
-            __contains__=lambda expr, key: key in expr.value,
-            eval=_eval,
-        )
-        converter(dict, _class, _dict_to_map)
-        _host_key, _host_value = TypeVar("_host_key"), TypeVar("_host_value")
-        globals()[f"{_name}Like"] = GenericAlias(_class, _class.__egg_arguments__) | GenericAlias(
-            dict, (_host_key, _host_value)
-        )
-        __all__ += [f"{_name}Like"]  # noqa: PLE0604
-    if _protocol is not None and _protocol.literal_types:
-        _value_protocol = _scalar_value
-        if _protocol.literal_arm == "custom":
-            from .deconstruct import _pyobject_value
-
-            _value_protocol = _pyobject_value
-        _class.__egg_hooks__.update(value=property(_value_protocol), eval=_eval)
-        _literal_types = _protocol.literal_types
-        _like: Any = _class
-        for _literal_type in _literal_types:
-            _like = _like | _literal_type
-            if _protocol.value_type is float:
-                converter(_literal_type, _class, lambda value, target=_class: target(float(value)))
-            else:
-                converter(_literal_type, _class, _class)
-        globals()[f"{_name}Like"] = _like
-        __all__ += [f"{_name}Like"]  # noqa: PLE0604
-        for _hook, _result in _protocol.hooks:
-            _class.__egg_hooks__[_hook] = {int: _integer, float: _float, bool: lambda expr: bool(expr.value)}[_result]
-    elif _kind.name == "Unit":
-        from .egraph import expr_fact
-
-        _class.__egg_hooks__["__bool__"] = lambda expr: bool(expr_fact(expr))
-
-# Symbolic i64 conversions remain native calls; host literals encode directly.
-for _family, _protocol in SCALAR_PROTOCOLS.items():
-    if _protocol.conversion_sort is None or ("primitive_sort", _family) not in _catalog.definitions:
-        continue
-    from .runtime import _BASE_CLASSES
-
-    _class = _BASE_CLASSES[_family]
-    _source = _BASE_CLASSES[_protocol.conversion_sort]
-    if _protocol.value_type is int:
-        converter(_source, _class, _class)
-    else:
-        converter(_source, _class, lambda value, target=_class: target(value, 1))
-    _like = _class | _source
-    for _literal_type in (*_protocol.literal_types, *SCALAR_PROTOCOLS[_protocol.conversion_sort].literal_types):
-        _like = _like | _literal_type
-    globals()[f"{_class.__name__}Like"] = _like
-
-for _path, (_definition, _view) in _catalog.functions.items():
-    if _path[:-1] == tuple(__name__.split(".")):
-        if _path[-1] in globals():
-            raise ValueError(f"Python builtin binding collision: {_path!r}")
-        globals()[_path[-1]] = RuntimeFunction(_definition, _view)
-        __all__ += [_path[-1]]  # noqa: PLE0604
+@overload
+def _map_value(expr: RuntimeExpr) -> dict[RuntimeExpr, RuntimeExpr]: ...
 
 
-if ("primitive_sort", "PyObject") in _catalog.definitions:
+def _map_value(expr: object) -> object:
+    """Return typed symbolic pairs after the shared Map child-sort validation."""
+    assert isinstance(expr, RuntimeExpr)
+    return {RuntimeExpr(key): RuntimeExpr(value) for key, value in _map_entries(expr)}
 
-    class PyObjectFunction(Protocol):
-        def __call__(self, *__args: PyObject) -> PyObject: ...  # noqa: F821 -- native-catalog class
 
-    @deprecated("use PyObject(fn) directly")
-    def py_eval_fn(fn: Callable) -> PyObjectFunction:
-        """Compatibility adapter for stored Python callables; prefer PyObject(fn)."""
-        return globals()["PyObject"](fn)
+def _provided_default(native_key: str, view_index: int, parameter_name: str) -> RuntimeExpr:
+    """Borrow a validated authored default without evaluating its host payload."""
+    from ._catalog import builtin_catalog  # noqa: PLC0415 -- import only when an authored default is borrowed
 
-    __all__ += ["py_eval_fn"]  # The Protocol remains module-only, as in the original API.
+    reference = builtin_catalog().definitions["callable", native_key]
+    view = presentation(reference).views[view_index]
+    validate_view(reference, view)
+    parameter = next(parameter for parameter in view.params if parameter.name == parameter_name)
+    if parameter.default is None:
+        raise ValueError(f"Missing authored default for {native_key}.{parameter_name}")
+    validate_default(parameter.default)
+    return RuntimeExpr(parameter.default)
+
+
+def _function_to_expr(value: object) -> RuntimeExpr:
+    """Specialize a callable codec at its actual structural target sort."""
+    from .runtime import _BASE_CLASSES  # noqa: PLC0415
+
+    assert isinstance(value, RuntimeFunction | FunctionType | MethodType | partial)
+    target = _BASE_CLASSES["UnstableFn"][get_type_args()]
+    assert isinstance(target, RuntimeClass), "A function codec requires concrete argument and result sorts"
+    result = target(value.func, *value.args) if isinstance(value, partial) else target(value)
+    assert isinstance(result, RuntimeExpr)
+    return result
+
+
+def _none_to_maybe(value: None) -> RuntimeExpr:
+    """Resolve an absent optional value at the actual concrete element sort."""
+    from .runtime import _BASE_CLASSES  # noqa: PLC0415
+
+    (element,) = get_type_args()
+    target = _BASE_CLASSES["Maybe"][element]
+    assert isinstance(target, RuntimeClass), "A Maybe codec requires a concrete element sort"
+    result = _container_member(target, "egglog.experimental.maybe.none", CallKind.CLASS_METHOD)()
+    assert isinstance(result, RuntimeExpr)
+    return result

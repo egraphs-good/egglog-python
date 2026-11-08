@@ -22,13 +22,17 @@ the compiled transport directly, without importing the high-level package.
 The Python generator joins that semantic catalog to its local presentation map;
 the map does not repeat native signatures.
 
-The packaged `_builtin_catalog.pb` and `builtins.pyi` are generated outputs.
+The packaged `_builtin_catalog.pb` and `builtins.py` are generated outputs. The Python source uses the same `BuiltinExpr`,
+`@method` and `@function` declarations as user code, with native callable keys;
+it does not enumerate a second dynamic API. Value inspection and host conversion
+validation live in the handwritten `_builtin_values.py`.
 The PEP 517 backend builds a native bootstrap wheel, generates both resources
 through `GetBuiltins`, then packages them in the final wheel or source
 distribution. Cargo reuses the native compilation. `make builtin-bootstrap`
 uses the same path for development; use `uv build` for package builds rather
 than invoking maturin directly. This also works before either generated file
-exists. The SDK build dependency is read from the project's normal dependency
+exists. Wheels and source distributions contain the generated files; consumers need no
+protobuf generator at runtime. The SDK build dependency is read from the project's normal dependency
 declaration, so build and runtime use the same revision.
 
 Programs, snapshots and history contain user definitions and refer to configured
