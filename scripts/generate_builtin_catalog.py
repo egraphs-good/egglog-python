@@ -440,7 +440,6 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                 msg = "Python initializer output differs from owner"
                 raise ValueError(msg)
             rendered_parameters = []
-            canonical_parameters = []
             bound_name = "" if free else "cls" if view.kind == CallKind.CLASS_METHOD else "self"
             parameter_names = {bound_name} if bound_name else set()
             has_default = False
@@ -455,7 +454,6 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                     msg = "A uniform tail must be the final parameter without a default"
                     raise ValueError(msg)
                 expected_sort = signature.varargs[0] if tail else effective_inputs[parameter.core_input]
-                canonical = sort_type(expected_sort, parameters=parameters, used_parameters=used_parameters)
                 annotation = sort_type(
                     expected_sort, input_type=True, parameters=parameters, used_parameters=used_parameters
                 )
@@ -486,15 +484,6 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                     msg = "Required parameter follows a default"
                     raise ValueError(msg)
                 rendered_parameters.append(f"{'*' if tail else ''}{parameter_name}: {annotation}{default}")
-                canonical_parameters.append(f"{'*' if tail else ''}{parameter_name}: {canonical}{default}")
-            # Inspection infers stored symbolic children from the first overload;
-            # ordinary calls retain the existing conversion-friendly signature.
-            parameter_variants = (
-                [canonical_parameters, rendered_parameters]
-                if canonical_parameters != rendered_parameters
-                else [rendered_parameters]
-            )
-            overloaded = len(parameter_variants) > 1
             prefix = "    @property\n" if view.kind == CallKind.PROPERTY else ""
             if view.kind == CallKind.CLASS_METHOD:
                 prefix = "    @classmethod\n"
@@ -510,15 +499,13 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                 functions[name] = (
                     "".join(f'{variable} = TypeVar("{variable}", bound=BaseExpr)\n' for variable in parameters)
                     + ("\n" if parameters else "")
-                    + "\n".join(
-                        ("@overload\n" if overloaded else "")
-                        + f"def {name}({', '.join(arguments)}) -> {result_type}: ..."
-                        for arguments in parameter_variants
-                    )
-                    + "\n"
+                    + f"def {name}({', '.join(rendered_parameters)}) -> {result_type}: ...\n"
                 )
                 continue
-            generated = {name: prefix}
+            generated = {
+                name: prefix
+                + f"    def {name}({bound_name}{', ' if rendered_parameters else ''}{', '.join(rendered_parameters)}) -> {result_type}: ..."
+            }
             if name in _REFLECTED and family_name in _SCALARS:
                 if (
                     (signature.varargs and not specialized)
@@ -536,16 +523,12 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                     and all(sort_type(argument) == owner for argument in effective_inputs)
                 ):
                     reverse = "__r" + name[2:]
-                    generated[reverse] = ""
-            for method_name, decorators in generated.items():
+                    annotation = sort_type(effective_inputs[view.params[0].core_input], input_type=True)
+                    generated[reverse] = f"    def {reverse}(self, other: {annotation}) -> {output}: ..."
+            for method_name, text in generated.items():
                 if method_name in methods[family_name]:
                     raise ValueError(f"Python member collision: {owner}.{method_name}")
-                methods[family_name][method_name] = "\n".join(
-                    decorators
-                    + ("    @overload\n" if overloaded else "")
-                    + f"    def {method_name}({bound_name}{', ' if arguments else ''}{', '.join(arguments)}) -> {result_type}: ..."
-                    for arguments in parameter_variants
-                )
+                methods[family_name][method_name] = text
 
     for family_name, family_method_variables in method_variables.items():
         for variable in family_method_variables:
@@ -733,12 +716,10 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                     lines.append("    def __init__(self, _unavailable: Never, /) -> None: ...")
                     reserved.add("__init__")
                 elif protocol.value_type.__name__ == "Fraction":
-                    if not methods[family_name]["__init__"].startswith("    @overload\n"):
-                        methods[family_name]["__init__"] = "    @overload\n" + methods[family_name]["__init__"]
                     methods[family_name]["__init__"] = (
-                        methods[family_name]["__init__"]
-                        + "\n    @overload\n"
-                        + "    def __init__(self, value: int | Fraction, /) -> None: ..."
+                        "    @overload\n"
+                        "    def __init__(self, value: int | Fraction, /) -> None: ...\n"
+                        "    @overload\n" + methods[family_name]["__init__"]
                     )
                 lines.extend([
                     '    __match_args__ = ("value",)',

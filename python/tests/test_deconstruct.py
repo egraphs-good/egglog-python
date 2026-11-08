@@ -139,7 +139,7 @@ def test_deconstruction_types() -> None:
     assert_type(get_callable_args(X(), X), tuple[()] | None)
     assert_type(get_callable_args(X().m(X()), X.m), tuple[X, X] | None)
     assert_type(get_callable_args(y(X(), i64(1)), y), tuple[X, i64] | None)
-    assert_type(get_callable_args(i64(1) + 2, i64.__add__), tuple[i64, i64] | None)
+    assert_type(get_callable_args(i64(1) + 2, i64.__add__), tuple[i64, i64Like] | None)
     assert_type(get_callable_fn(f(X())), Callable[..., X | None] | None)
     assert_type(get_literal_value(String("x")), str | None)
     assert_type(get_literal_value(Bool(True)), bool | None)

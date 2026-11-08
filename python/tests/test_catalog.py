@@ -146,15 +146,6 @@ def test_pyobject_generated_surface_uses_real_defaults_and_host_policy():
         "def py_eval_fn(fn: Callable) -> PyObjectFunction:",
     ):
         assert signature in stub
-    for canonical, convertible in (
-        ("def __call__(self, *args: PyObject)", "def __call__(self, *args: PyObjectLike)"),
-        ("def dict(cls, *keys_and_values: PyObject)", "def dict(cls, *keys_and_values: PyObjectLike)"),
-        (
-            "def py_eval(code: String, globals_: PyObject = ..., locals_: PyObject = ...)",
-            "def py_eval(code: StringLike, globals_: PyObjectLike = ..., locals_: PyObjectLike = ...)",
-        ),
-    ):
-        assert stub.index(canonical) < stub.index(convertible)
     assert '"py_eval_fn"' in stub.split("__all__ = ", 1)[1].splitlines()[0]
     assert '"PyObjectFunction"' not in stub.split("__all__ = ", 1)[1].splitlines()[0]
     for name in ("eval", "exec"):
@@ -282,19 +273,13 @@ def test_exact_generated_surface_includes_host_and_symbolic_constructors(rationa
         "BigRatLike: TypeAlias = BigRat | Fraction | i64Like",
     ):
         assert signature in stub
-    for family, value, hook, canonical, convertible in (
-        ("Rational", "Fraction", "__float__", "num: i64, den: i64", "num: i64Like, den: i64Like"),
-        ("BigRat", "Fraction", "__float__", "num: BigInt, den: BigInt", "num: BigIntLike, den: BigIntLike"),
-        ("BigInt", "int", "__index__", "value: i64", "value: i64Like"),
+    for family, value, hook in (
+        ("Rational", "Fraction", "__float__"),
+        ("BigRat", "Fraction", "__float__"),
+        ("BigInt", "int", "__index__"),
     ):
         body = stub.split(f"class {family}(", 1)[1].split("\nclass ", 1)[0]
-        initializers = [line.strip() for line in body.splitlines() if line.lstrip().startswith("def __init__(")]
-        assert initializers[:2] == [
-            f"def __init__(self, {canonical}, /) -> None: ...",
-            f"def __init__(self, {convertible}, /) -> None: ...",
-        ]
-        assert len(initializers) == (2 if family == "BigInt" else 3)
-        assert "@overload\n    @overload" not in body
+        assert body.count("def __init__(") == (1 if family == "BigInt" else 2)
         assert f"def value(self) -> {value}:" in body
         assert f"def eval(self) -> {value}:" in body
         assert f"def {hook}(self) ->" in body
@@ -454,10 +439,6 @@ def test_vec_uniform_tail_and_classmethod_stub_from_native_signatures(vec_catalo
     assert "def __init__(self, *args: _Vec_T_0) -> None:" in stub
     assert "@classmethod\n    def empty(cls) -> Vec[_Vec_T_0]:" in stub
     assert "def __getitem__(self, index: i64Like) -> _Vec_T_0:" in stub
-    assert stub.index("def __getitem__(self, index: i64)") < stub.index("def __getitem__(self, index: i64Like)")
-    assert stub.index("def append(self, *others: Vec[_Vec_T_0])") < stub.index(
-        "def append(self, *others: VecLike[_Vec_T_0, _Vec_T_0])"
-    )
     assert "def value(self) -> tuple[_Vec_T_0, ...]:" in stub
     assert "def __iter__(self) -> Iterator[_Vec_T_0]:" in stub
     assert "def __len__(self) -> int:" in stub
@@ -500,10 +481,6 @@ def test_vec_map_view_and_static_signature_come_from_actual_catalog():
     render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
     stub = render(program, mapping=mapping)
     assert "def map(self, f: Callable[[_Vec_T_0], _Vec_map_T1]) -> Vec[_Vec_map_T1]:" in stub
-    assert (
-        "@overload\n    def map(self, f: UnstableFn[_Vec_map_T1, _Vec_T_0]) -> Vec[_Vec_map_T1]: ...\n"
-        "    @overload\n    def map(self, f: Callable[[_Vec_T_0], _Vec_map_T1]) -> Vec[_Vec_map_T1]: ..."
-    ) in stub
     assert '_Vec_map_T1 = TypeVar("_Vec_map_T1", bound=BaseExpr)' in stub
     relocated = _relocate_builtins(program)
     assert sorted(render(relocated, mapping=mapping).splitlines()) == sorted(stub.splitlines())
@@ -1473,10 +1450,6 @@ def test_multiset_generated_surface_from_actual_catalog():
     ]
     stub = render(program, mapping=mapping)
     body = stub.split("class MultiSet(", 1)[1].split("\nclass ", 1)[0]
-    assert (
-        "@classmethod\n    @overload\n    def single(cls, x: _MultiSet_T_0, i: i64) -> MultiSet[_MultiSet_T_0]: ...\n"
-        "    @classmethod\n    @overload\n    def single(cls, x: _MultiSet_T_0, i: i64Like) -> MultiSet[_MultiSet_T_0]: ..."
-    ) in body
     for signature in (
         "def __init__(self, *args: _MultiSet_T_0) -> None:",
         "def single(cls, x: _MultiSet_T_0, i: i64Like) -> MultiSet[_MultiSet_T_0]:",
