@@ -652,11 +652,7 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
         if native and runtime_cls.__egg_definition__ is _Intrinsic.APPLY and name in {"__init__", "__call__"}:
             continue
         if native and name == "__init__" and compiler.egg_fn is None:
-            assert isinstance(runtime_cls.__egg_definition__, Ref)
-            family: pb.PrimitiveSort = runtime_cls.__egg_definition__.read()
-            selected = builtin_catalog().members.get((("primitive_sort", family.name), "__init__"))
-            if selected is None:
-                continue
+            continue
         if name in IGNORED_ATTRIBUTES:
             msg_0 = f"Symbolic reflected member {runtime_cls}.{name} is not migrated"
             raise NotImplementedError(msg_0)
@@ -803,32 +799,13 @@ class _FunctionConstructor:
         if self.unextractable:
             msg = "Unextractable can only be set for constructors"
             raise ValueError(msg)
-        catalog = builtin_catalog()
-        selected = None
-        family = None
-        if owner is not None:
-            assert isinstance(owner.__egg_definition__, Ref)
-            family = owner.__egg_definition__.read()
-            assert isinstance(family, pb.PrimitiveSort)
-            selected = catalog.members.get((("primitive_sort", family.name), member_name or fn.__name__))
-            if selected is not None and self.egg_fn is not None and selected[0].read().name != self.egg_fn:
-                selected = None
-        literal_header = family is not None and family.name in LIT_IDENTS and member_name == "__init__"
-        if literal_header and selected is None:
-            msg = "Scalar constructors require their native initializer view"
+        if self.egg_fn is None:
+            msg = "Builtin declarations require an explicit native egg_fn"
             raise ValueError(msg)
-        if not literal_header and _function_has_body(fn):
-            msg = "Builtin callables cannot have a body"
-            raise ValueError(msg)
-        name = self.egg_fn or (
-            selected[0].read().name
-            if selected is not None
-            else re.sub(r"[^\w\-+*/?!=<>&|^/%]", "_", f"{fn.__module__}.{fn.__name__}")
-        )
         try:
-            reference = catalog.definitions["callable", name]
+            reference = builtin_catalog().definitions["callable", self.egg_fn]
         except KeyError as error:
-            msg = f"No owned canonical definition for callable {name!r}"
+            msg = f"No owned canonical definition for callable {self.egg_fn!r}"
             raise LookupError(msg) from error
         record = reference.read()
         if not isinstance(record, pb.Primitive) or record.signature is None:
@@ -838,6 +815,15 @@ class _FunctionConstructor:
         if not native.has_field("output"):
             msg = "Builtin signature has no output"
             raise ValueError(msg)
+        family = (
+            owner.__egg_definition__.read() if owner is not None and isinstance(owner.__egg_definition__, Ref) else None
+        )
+        literal_header = (
+            isinstance(family, pb.PrimitiveSort) and family.name in LIT_IDENTS and member_name == "__init__"
+        )
+        if not literal_header and _function_has_body(fn):
+            msg = "Builtin callables cannot have a body"
+            raise ValueError(msg)
         parameters = list(signature(fn).parameters.values())
         if owner is not None and view_kind in {CallKind.CLASS_METHOD, CallKind.INITIALIZER}:
             parameters = parameters[1:]
@@ -845,51 +831,51 @@ class _FunctionConstructor:
         if receiver and not parameters:
             msg = "A builtin method requires its receiver"
             raise ValueError(msg)
-        if not literal_header:
-            _last_param_variable(parameters)
-        source_parameters = parameters[1:] if receiver else parameters
-        templates = presentation(reference).views
-        if selected is not None:
-            template_index = selected[1]
-            template = templates[template_index]
-        else:
-            template_index = next(
-                (
-                    index
-                    for index, candidate in enumerate(templates)
-                    if owner is None and candidate.kind == CallKind.FUNCTION
-                ),
-                None,
-            )
-            if template_index is not None:
-                template = templates[template_index]
+        variable = False if literal_header else _last_param_variable(parameters)
+        repetitions = None
+        if native.varargs:
+            if variable:
+                count = len(native.inputs) + 1
+                if receiver and len(native.varargs) == 1 and len(parameters) == count + 1:
+                    count += 1
             else:
-                receiver_slot = len(parameters) - 1 if reverse_args else 0
-                template = CallPresentation(
-                    kind=view_kind,
-                    owner=owner.__egg_sort__ if owner is not None else None,
-                    receiver=receiver_slot if receiver else None,
-                    params=tuple(
-                        PresentationParameter(len(parameters) - index - 1 if reverse_args else index, parameter.name)
-                        for index, parameter in enumerate(parameters)
-                        if not receiver or index
-                    ),
-                )
-        if template.kind != view_kind:
-            msg = "Builtin declaration has a different Python call form"
+                repetitions, remainder = divmod(len(parameters) - len(native.inputs), len(native.varargs))
+                if repetitions < 0 or remainder:
+                    msg = "Builtin header does not fit its native variadic signature"
+                    raise ValueError(msg)
+                count = len(parameters)
+        else:
+            count = len(native.inputs)
+            if variable:
+                msg = "A fixed native signature cannot have a variadic Python header"
+                raise ValueError(msg)
+        if len(parameters) != count:
+            msg = f"Builtin header {fn.__qualname__} has a different native input count"
             raise ValueError(msg)
-        slots = ([template.receiver] if template.receiver is not None else []) + [
-            parameter.core_input for parameter in template.params
-        ]
-        expected_slots = list(range(len(slots)))
-        if reverse_args:
-            expected_slots.reverse()
-        if slots != expected_slots:
-            msg = "Builtin reverse_args differs from its native parameter layout"
-            raise ValueError(msg)
-        if not literal_header and len(source_parameters) != len(template.params):
-            msg = "Builtin header does not match its native parameter layout"
-            raise ValueError(msg)
+        receiver_slot = count - 1 if reverse_args else 0
+        if owner is None:
+            owner_pattern = None
+        elif receiver:
+            owner_index = (
+                native.inputs[receiver_slot]
+                if receiver_slot < len(native.inputs)
+                else native.varargs[(receiver_slot - len(native.inputs)) % len(native.varargs)]
+            )
+            owner_pattern = reference.owner.ref("sorts", owner_index)
+        else:
+            owner_pattern = reference.owner.ref("sorts", native.output)
+        source_parameters = parameters[1:] if receiver else parameters
+        template = CallPresentation(
+            kind=view_kind,
+            owner=owner_pattern,
+            receiver=receiver_slot if receiver else None,
+            params=tuple(
+                PresentationParameter(count - index - 1 if reverse_args else index, parameter.name)
+                for index, parameter in enumerate(parameters)
+                if not receiver or index
+            ),
+            tail_repetitions=repetitions,
+        )
         hints = (
             {}
             if literal_header
@@ -910,6 +896,9 @@ class _FunctionConstructor:
             if isinstance(annotation, TypeVar):
                 if pattern.kind.field != "var":
                     msg = "Python type parameter does not match a native signature parameter"
+                    raise ValueError(msg)
+                if pattern.kind.value >= native.type_param_count:
+                    msg = "Python type parameter references a native sort outside its signature binder"
                     raise ValueError(msg)
                 previous = variables.setdefault(annotation, expected)
                 if StructuralView(previous) != StructuralView(expected) or pattern.kind.value in concrete:
@@ -977,10 +966,9 @@ class _FunctionConstructor:
                 raise ValueError(msg)
             return reference.owner.ref("sorts", native.varargs[(index - len(native.inputs)) % len(native.varargs)])
 
+        if owner_pattern is not None:
+            match_annotation(owner_pattern, owner)
         if not literal_header:
-            if receiver:
-                assert template.receiver is not None
-                match_annotation(input_sort(template.receiver), owner)
             for parameter, layout in zip(source_parameters, template.params, strict=True):
                 if parameter.kind == Parameter.VAR_POSITIONAL:
                     if not native.varargs or template.tail_repetitions is not None:
@@ -994,6 +982,9 @@ class _FunctionConstructor:
                 reference.owner.ref("sorts", native.output),
                 owner if view_kind == CallKind.INITIALIZER else hints["return"],
             )
+        if len(variables) + len(concrete) != native.type_param_count:
+            msg = "Builtin header does not determine every native generic parameter"
+            raise ValueError(msg)
         completed = []
         for position, layout in enumerate(template.params):
             if literal_header:
@@ -1019,15 +1010,10 @@ class _FunctionConstructor:
             "primitives",
             _copy_record(record, relocate=lambda role, index: builder.import_ref(reference.owner.ref(role, index))),
         )
-        if template_index is None:
-            views, view_index = (view,), 0
-        else:
-            views = (*templates[:template_index], view, *templates[template_index + 1 :])
-            view_index = template_index
-        builder.presentations["callable", record.name] = Presentation(views=views)
+        builder.presentations["callable", record.name] = Presentation(views=(view,))
         bound = builder.publish().ref("primitives", index)
         validate_view(bound, view)
-        return bound if owner is None else RuntimeFunction(bound, view_index, owner)
+        return bound if owner is None else RuntimeFunction(bound, 0, owner)
 
     @overload
     def prepare(

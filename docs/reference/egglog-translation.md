@@ -169,8 +169,8 @@ The static types on the decorator preserve the type of the underlying function, 
 
 Runtime free-callable presentation names may be arbitrary strings, including an
 empty name, when used through the returned callable object. Namespace, type and
-member names retain their spelling checks, as do identifiers emitted in generated
-Python declarations. Presentation metadata is separate from the canonical callable
+member names retain their spelling checks, as do identifiers in Python source.
+Presentation metadata is separate from the canonical callable
 target retained by each encoded call.
 
 ### Functions vs Constructors

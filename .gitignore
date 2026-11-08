@@ -1,8 +1,7 @@
 /target
 
-# Derived from the compiled provider and authored presentation policy.
+# Exported from the compiled native provider.
 /python/egglog/_builtin_catalog.pb
-/python/egglog/builtins.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

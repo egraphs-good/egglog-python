@@ -465,36 +465,11 @@ def pretty_ref(  # noqa: C901, PLR0912
                         pieces = [(sort, False, False), "(", ", ".join(arguments), ")"]
                         frames.extend(reversed(pieces))
                         continue
-                    elif primitive.field == "maybe":
-                        from ._builtin_values import _container_member, _maybe_value  # noqa: PLC0415
-                        from .runtime import RuntimeExpr, _class_for_sort  # noqa: PLC0415
-
-                        child = _maybe_value(RuntimeExpr(reference))
-                        constructor = _container_member(
-                            _class_for_sort(sort),
-                            "egglog.experimental.maybe.none" if child is None else "egglog.experimental.maybe.some",
-                            CallKind.CLASS_METHOD,
-                        )
-                        pieces = [str(constructor), "("]
-                        if child is not None:
-                            pieces.append((child.__egg_ref__, False, False))
-                        pieces.append(")")
-                        frames.extend(reversed(pieces))
-                        continue
-                    elif primitive.field == "pair":
-                        from ._builtin_values import _pair_value  # noqa: PLC0415
+                    elif primitive.field in {"pair", "maybe", "vec", "set", "multiset", "map"}:
+                        from ._builtin_values import _value_to_call  # noqa: PLC0415
                         from .runtime import RuntimeExpr  # noqa: PLC0415
 
-                        left, right = _pair_value(RuntimeExpr(reference))
-                        pieces = [
-                            (sort, False, False),
-                            "(",
-                            (left.__egg_ref__, False, False),
-                            ", ",
-                            (right.__egg_ref__, False, False),
-                            ")",
-                        ]
-                        frames.extend(reversed(pieces))
+                        frames.append((_value_to_call(RuntimeExpr(reference)), bare, parentheses))
                         continue
                     elif primitive.field == "lambda":
                         closure = primitive.value
@@ -545,51 +520,6 @@ def pretty_ref(  # noqa: C901, PLR0912
                             pieces.append(")")
                         else:
                             pieces = [str(value)]
-                        frames.extend(reversed(pieces))
-                        continue
-                    elif primitive.field in {"vec", "set", "multiset"}:
-                        from ._builtin_values import _container_items, _container_member  # noqa: PLC0415
-                        from .runtime import RuntimeExpr, _class_for_sort  # noqa: PLC0415
-
-                        children = _container_items(RuntimeExpr(reference))
-                        if not children and primitive.field == "vec":
-                            frames.append(
-                                str(
-                                    _container_member(
-                                        _class_for_sort(sort), "egglog.core.vec.empty", CallKind.CLASS_METHOD
-                                    )
-                                )
-                                + "()"
-                            )
-                            continue
-                        pieces = [(sort, False, False), "("]
-                        for index, child in enumerate(children):
-                            if index:
-                                pieces.append(", ")
-                            pieces.append((child.__egg_ref__, False, False))
-                        pieces.append(")")
-                        frames.extend(reversed(pieces))
-                        continue
-                    elif primitive.field == "map":
-                        from ._builtin_values import _container_member, _map_entries  # noqa: PLC0415
-                        from .runtime import RuntimeExpr, _class_for_sort  # noqa: PLC0415
-
-                        entries = _map_entries(RuntimeExpr(reference))
-                        target = _class_for_sort(sort)
-                        empty = _container_member(target, "egglog.core.map.empty", CallKind.CLASS_METHOD)
-                        pieces = [str(empty), "()"]
-                        if entries:
-                            insert = _container_member(target, "egglog.core.map.insert", CallKind.METHOD)
-                            assert insert.__egg_view__ is not None
-                            insert_view = presentation(insert.__egg_ref__).views[insert.__egg_view__]
-                            for key, value_ref in entries:
-                                arguments = {1: key, 2: value_ref}
-                                pieces.extend([".", insert_view.path[-1], "("])
-                                for index, parameter in enumerate(insert_view.params):
-                                    if index:
-                                        pieces.append(", ")
-                                    pieces.append((arguments[parameter.core_input], False, False))
-                                pieces.append(")")
                         frames.extend(reversed(pieces))
                         continue
                     else:

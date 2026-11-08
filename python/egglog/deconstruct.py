@@ -368,7 +368,7 @@ def _deconstruct_call(x: RuntimeExpr) -> tuple[RuntimeClass | RuntimeFunction, t
 
 
 def get_callable_fn(x: T) -> Callable[..., T | None] | None:
-    """Get the generated callable responsible for a call expression."""
+    """Get the Python callable responsible for a call expression."""
     if not isinstance(x, RuntimeExpr):
         raise TypeError(f"Expected Expression, got {type(x).__name__}")
     result = _deconstruct_call(x)

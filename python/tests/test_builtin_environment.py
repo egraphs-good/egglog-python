@@ -9,7 +9,7 @@ from protobuf import Oneof
 
 from egglog import bindings
 from egglog._catalog import Catalog, builtin_catalog
-from egglog._presentation import builtin_owner
+from egglog._presentation import CallKind, CallPresentation, Parameter, Presentation, TypePresentation
 from egglog._program import Builder, pack
 from egglog.runtime import RuntimeExpr, RuntimeFunction, _definition_at
 
@@ -34,16 +34,20 @@ def _provider_catalog(*, inputs: int = 1) -> pb.BuiltinCatalog:
 
 def test_custom_environment_resolves_without_package_fallback_and_packs_no_descriptors() -> None:
     catalog = _provider_catalog()
-    mapping = {
-        "types": {"Number": {"path": ["example", "Number"]}},
-        "callables": {
-            "provider.identity": [
-                {"form": "FUNCTION", "path": ["example", "identity"], "params": [{"coreInput": 0, "name": "value"}]}
-            ]
-        },
-        "fragment": {},
-    }
-    native = builtin_owner(catalog, mapping=mapping)
+
+    def views(owner):
+        return {
+            ("primitive_sort", "Number"): Presentation(type_view=TypePresentation(("example", "Number"))),
+            ("callable", "provider.identity"): Presentation(
+                views=(
+                    CallPresentation(
+                        kind=CallKind.FUNCTION, path=("example", "identity"), params=(Parameter(0, "value"),)
+                    ),
+                )
+            ),
+        }
+
+    native = Builder.from_builtins(catalog).publish(presentation_factory=views)
     indexed = Catalog(native)
     reference, view = indexed.functions["example", "identity"]
     builder = Builder(environment=(native,))

@@ -3385,20 +3385,20 @@ class TestCallableValidation:
     def test_primitive_body_cannot_use_builtin(self):
         body_calls = 0
 
-        @function(builtin=True)
-        def f() -> i64:
+        @function(egg_fn="egglog.core.i64.add", builtin=True)
+        def f(left: i64Like, right: i64Like) -> i64:
             nonlocal body_calls
             body_calls += 1
             return i64(1)
 
         with pytest.raises(ValueError, match="Builtin callables cannot have a body"):
-            f()
+            f(1, 2)
         assert body_calls == 0
 
     def test_generic_primitive_body_cannot_use_builtin(self):
         body_calls = 0
 
-        @function(builtin=True)
+        @function(egg_fn="egglog.core.vec.length", builtin=True)
         def f(value: Vec[_BuiltinExprT]) -> i64:
             nonlocal body_calls
             body_calls += 1
@@ -4509,25 +4509,32 @@ def test_bodyless_builtin_rejects_unknown_or_mutating_headers_before_conversion(
         return i64(3)
 
     converter(Host, i64, convert_host)
+    error_type: type[Exception]
     if frontier == "mutation":
 
-        @function(builtin=True, mutates_first_arg=True)
+        @function(egg_fn="egglog.core.i64.add", builtin=True, mutates_first_arg=True)
         def mutation(value: i64Like) -> None: ...
 
         candidate = cast("Callable[[object], object]", mutation)
+        error_type = NotImplementedError
+        message = "Builtin mutation is not migrated"
     elif frontier == "variadic":
 
-        @function(builtin=True)
+        @function(egg_fn="egglog.core.i64.add", builtin=True)
         def variadic(*values: i64Like) -> i64: ...
 
         candidate = cast("Callable[[object], object]", variadic)
+        error_type = ValueError
+        message = "A fixed native signature cannot have a variadic Python header"
     elif frontier == "generic":
 
-        @function(builtin=True)
+        @function(egg_fn="test.unknown.generic", builtin=True)
         def generic(value: Vec[_BuiltinExprT]) -> i64: ...
 
         candidate = cast("Callable[[object], object]", generic)
-    with pytest.raises(NotImplementedError if frontier == "mutation" else LookupError):
+        error_type = LookupError
+        message = r"No owned canonical definition for callable 'test\.unknown\.generic'"
+    with pytest.raises(error_type, match=message):
         candidate(Host())
     assert calls == []
     engine.assert_not_called()

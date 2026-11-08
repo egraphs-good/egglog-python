@@ -9,8 +9,8 @@ from importlib.resources import files
 
 from egglog_proto.egglog.v1 import egglog_pb as pb
 
-from ._presentation import CallKind, builtin_owner, presentation, validate_view
-from ._program import Builder, Owner, Ref, _definition_key
+from ._presentation import CallKind, Presentation, presentation, validate_view
+from ._program import Builder, Owner, Ref, _copy_record, _definition_key, _structural_equal
 
 
 @cache
@@ -22,7 +22,7 @@ def builtin_catalog() -> Catalog:
     except FileNotFoundError as exc:
         msg = "The native-generated builtin catalog is missing; regenerate the package resource"
         raise RuntimeError(msg) from exc
-    return Catalog(builtin_owner(pb.BuiltinCatalog.from_binary(encoded)))
+    return Catalog(Builder.from_builtins(pb.BuiltinCatalog.from_binary(encoded)).publish())
 
 
 def _python_path(path: Sequence[str]) -> tuple[str, ...]:
@@ -35,9 +35,7 @@ class Catalog:
     """
     Own one catalog snapshot and rebuildable indexes, never copied signatures.
 
-    These indexes contain explicit supplied bindings. Absent Python bindings
-    require conservative wrapper derivation at generation, without installing
-    synthetic bindings; explicit/derived collisions are generation errors.
+    These indexes contain only the Python bindings supplied by declarations.
     Engine installation and compatibility remain the shared adapter's job.
     """
 
@@ -61,12 +59,34 @@ class Catalog:
 
     @classmethod
     def from_refs(cls, declarations: Iterable[Ref]) -> Catalog:
-        """Index already-published definitions without copying their owners/identity."""
+        """Index published definitions, merging compatible native aliases and their source views."""
         result = object.__new__(cls)
-        result.roots = tuple(dict.fromkeys(ref.owner.ref(ref.role, ref.index) for ref in declarations))
-        if any(_definition_key(reference.read()) is None for reference in result.roots):
-            msg = "Catalog roots must be canonical named setup references"
-            raise TypeError(msg)
+        definitions: dict[tuple[str, str], Ref] = {}
+        for ref in dict.fromkeys(ref.owner.ref(ref.role, ref.index) for ref in declarations):
+            key = _definition_key(ref.read())
+            if key is None:
+                msg = "Catalog roots must be canonical named setup references"
+                raise TypeError(msg)
+            previous = definitions.get(key)
+            if previous is None:
+                definitions[key] = ref
+                continue
+            if ref.role != "primitives" or not _structural_equal(previous, ref, exact_literals=True):
+                raise ValueError(f"Duplicate catalog definition: {key}")
+            views = tuple(dict.fromkeys((*presentation(previous).views, *presentation(ref).views)))
+            views = tuple(sorted(views, key=lambda view: view.kind != CallKind.FUNCTION))
+            builder = Builder()
+
+            def relocate(role: str, index: int, origin: Ref = ref, target: Builder = builder) -> int:
+                return target.import_ref(origin.owner.ref(role, index))
+
+            index = builder.add(
+                ref.role,
+                _copy_record(ref.read(), relocate=relocate),
+            )
+            builder.presentations[key] = Presentation(views=views)
+            definitions[key] = builder.publish().ref(ref.role, index)
+        result.roots = tuple(definitions.values())
         result.reindex()
         return result
 

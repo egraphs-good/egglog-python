@@ -1,15 +1,10 @@
-name: Generate builtin package resources
-description: Generate catalog and Python declarations with a native host wheel before cross-target release builds
+name: Export builtin catalog
+description: Export the catalog with a native host wheel before cross-target release builds
 runs:
   using: composite
   steps:
     - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
     - uses: dtolnay/rust-toolchain@ebb3d1676050bfd0971c36c1e215b5751473994d # 1.96.0
-    - uses: bufbuild/buf-action@37ac33d8960807670a6e9719080e885197b09cc6 # v1
-      with:
-        version: 1.75.0
-        setup_only: true
-        pr_comment: false
     - shell: bash
       # Select the host interpreter for this command without changing PATH.
       # The release job can keep its own target/interpreter matrix afterwards.

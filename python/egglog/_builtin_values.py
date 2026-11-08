@@ -1,4 +1,4 @@
-"""Validated builtin value inspection and host conversions, independent of API generation."""
+"""Validated builtin value inspection and host conversions."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Literal, TypeVar, overload
 from egglog_proto.egglog.v1 import egglog_pb as pb
 from protobuf import Oneof
 
-from ._presentation import CallKind, presentation, validate_default, validate_view
 from ._program import Builder, Ref, StructuralView
 from .conversion import get_type_args, resolve_literal
 from .egraph import BaseExpr
@@ -191,20 +190,6 @@ def _container_items(expr: object) -> tuple[object, ...]:
     return tuple(RuntimeExpr(child) for child in children)
 
 
-def _container_member(target: RuntimeClass | RuntimeExpr, name: str, kind: CallKind) -> RuntimeFunction:
-    """Select and bind a supplied codec member without authoring a Call."""
-    from .runtime import _definition_at  # noqa: PLC0415
-
-    origin = target.__egg_definition__ if isinstance(target, RuntimeClass) else target.__egg_ref__
-    assert isinstance(origin, Ref), "A container member requires a native family definition"
-    reference = _definition_at(origin, "callable", name)
-    views = presentation(reference).views
-    view = next((index for index, candidate in enumerate(views) if candidate.kind == kind), None)
-    if view is None:
-        raise NotImplementedError(f"{name} has no supplied Python {kind.name} view")
-    return RuntimeFunction(reference, view, target)
-
-
 def _collection_to_expr(value: list[object] | tuple[object, ...] | set[object], family: str) -> RuntimeExpr:
     from .runtime import _BASE_CLASSES  # noqa: PLC0415
 
@@ -303,20 +288,6 @@ def _map_value(expr: object) -> object:
     return {RuntimeExpr(key): RuntimeExpr(value) for key, value in _map_entries(expr)}
 
 
-def _provided_default(native_key: str, view_index: int, parameter_name: str) -> RuntimeExpr:
-    """Borrow a validated authored default without evaluating its host payload."""
-    from ._catalog import builtin_catalog  # noqa: PLC0415 -- import only when an authored default is borrowed
-
-    reference = builtin_catalog().definitions["callable", native_key]
-    view = presentation(reference).views[view_index]
-    validate_view(reference, view)
-    parameter = next(parameter for parameter in view.params if parameter.name == parameter_name)
-    if parameter.default is None:
-        raise ValueError(f"Missing authored default for {native_key}.{parameter_name}")
-    validate_default(parameter.default)
-    return RuntimeExpr(parameter.default)
-
-
 def _function_to_expr(value: object) -> RuntimeExpr:
     """Specialize a callable codec at its actual structural target sort."""
     from .runtime import _BASE_CLASSES  # noqa: PLC0415
@@ -336,6 +307,62 @@ def _none_to_maybe(value: None) -> RuntimeExpr:
     (element,) = get_type_args()
     target = _BASE_CLASSES["Maybe"][element]
     assert isinstance(target, RuntimeClass), "A Maybe codec requires a concrete element sort"
-    result = _container_member(target, "egglog.experimental.maybe.none", CallKind.CLASS_METHOD)()
-    assert isinstance(result, RuntimeExpr)
-    return result
+    assert target.__egg_sort__ is not None
+    builder = Builder()
+    root = builder.add(
+        "nodes",
+        pb.Node(
+            sort_id=builder.import_ref(target.__egg_sort__),
+            kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                "primitive_value",
+                pb.PrimitiveValue(value=Oneof[Literal["maybe"], pb.MaybeValue]("maybe", pb.MaybeValue())),
+            ),
+        ),
+    )
+    return RuntimeExpr(builder.publish().ref("nodes", root))
+
+
+def _value_to_call(expression: RuntimeExpr) -> Ref:
+    """Project formed data into inert constructor syntax for the ordinary printer."""
+    from .runtime import _definition_at  # noqa: PLC0415
+
+    reference = expression.__egg_ref__
+    node: pb.Node = reference.read()
+    assert node.kind is not None
+    assert node.kind.field == "primitive_value"
+    payload = node.kind.value.value
+    assert payload is not None
+    sort = reference.owner.ref("sorts", node.sort_id)
+    builder = Builder()
+    result_sort = builder.import_ref(sort)
+
+    def call(name: str, arguments: list[int]) -> int:
+        declaration = _definition_at(sort, "callable", name)
+        builder.import_ref(declaration)
+        return builder.add(
+            "nodes",
+            pb.Node(
+                sort_id=result_sort, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func=name, args=arguments))
+            ),
+        )
+
+    if payload.field == "map":
+        entries = _map_entries(expression)
+        root = call("egglog.core.map.empty", [])
+        for key, value in entries:
+            root = call("egglog.core.map.insert", [root, builder.import_ref(key), builder.import_ref(value)])
+    else:
+        if payload.field == "pair":
+            children = _pair_value(expression)
+            name = "egglog.core.pair.make"
+        elif payload.field == "maybe":
+            child = _maybe_value(expression)
+            children = () if child is None else (child,)
+            name = "egglog.experimental.maybe.none" if child is None else "egglog.experimental.maybe.some"
+        elif payload.field in {"vec", "set", "multiset"}:
+            children = _container_items(expression)
+            name = f"egglog.core.{payload.field}.{'empty' if not children and payload.field == 'vec' else 'of'}"
+        else:
+            raise TypeError(f"No constructor presentation for {payload.field!r}")
+        root = call(name, [builder.import_ref(child.__egg_ref__) for child in children])
+    return builder.publish().ref("nodes", root)

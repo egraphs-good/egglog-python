@@ -43,7 +43,7 @@ import pytest
         ),
     ],
 )
-def test_generated_builtin_installed_types(family, kind, source_egraph, tmp_path):
+def test_builtin_installed_types(family, kind, source_egraph, tmp_path):
     """Check actual installed public imports, independent of source MYPYPATH."""
     root = pathlib.Path(__file__).resolve().parents[2]
     if family == "high_level":
@@ -57,7 +57,7 @@ def test_generated_builtin_installed_types(family, kind, source_egraph, tmp_path
         fixture = tmp_path / f"{kind}.py"
         fixture.write_text(cases[kind])
     else:
-        prefix = family if family in {"concrete_members", "extract_multiple"} else f"generated_{family}"
+        prefix = family if family in {"concrete_members", "extract_multiple"} else f"builtin_{family}"
         fixture = root / "test-data" / "typing" / f"{prefix}_{kind}.py"
     environment = os.environ.copy()
     environment.pop("MYPYPATH", None)
@@ -83,9 +83,9 @@ def test_generated_builtin_installed_types(family, kind, source_egraph, tmp_path
     )
     package, source, has_marker, has_stub = json.loads(provenance.stdout)
     assert "site-packages" in pathlib.Path(package).parts
-    assert source is not None, "Install the wheel containing generated builtins.py before this gate"
+    assert source is not None, "Install the wheel containing handwritten builtins.py before this gate"
     assert has_marker
-    assert not has_stub, "The generated Python declarations must be the installed typing source"
+    assert not has_stub, "The handwritten Python declarations must be the installed typing source"
     assert source == (root / "python/egglog/builtins.py").read_text()
     result = subprocess.run(
         [

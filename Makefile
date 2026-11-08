@@ -2,7 +2,7 @@
 
 all: python/egglog/visualizer.js
 
-# Use the PEP 517 backend: compile, generate catalog/declarations, then package.
+# Use the PEP 517 backend: compile, export the catalog, then package.
 builtin-bootstrap:
 	uv build --wheel --out-dir target/bootstrap-wheels
 

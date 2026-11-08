@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from contextlib import suppress
 from enum import Enum
 from functools import partial
@@ -576,6 +576,29 @@ class _ClassContext:
             type.__setattr__(self.runtime_class, name, member)
 
 
+def _source_presentation(reference: Ref, namespace: str, name: str) -> Ref:
+    if reference.role not in {"primitives", "primitive_sorts"}:
+        return reference
+    from ._catalog import builtin_catalog  # noqa: PLC0415
+
+    canonical = builtin_catalog().definitions.get((namespace, name))
+    if (namespace, name) in reference.owner._presentations and (
+        namespace != "primitive_sort" or reference != canonical
+    ):
+        return reference
+    base = _BASE_CLASSES.get(name) if namespace == "primitive_sort" else None
+    source = base.__egg_definition__ if base is not None else None
+    if not isinstance(source, Ref) or StructuralView(source) != StructuralView(reference):
+        source = canonical
+    if (
+        source is not None
+        and (namespace, name) in source.owner._presentations
+        and StructuralView(source) == StructuralView(reference)
+    ):
+        return source
+    return reference
+
+
 def _definition_at(origin: Ref, namespace: str, name: str) -> Ref:
     """Resolve owned definitions before consulting the ambient native catalog."""
     matches = {
@@ -594,9 +617,13 @@ def _definition_at(origin: Ref, namespace: str, name: str) -> Ref:
         ):
             raise ValueError(f"Ambiguous local definition: {namespace} {name!r}")
     if matches:
-        return next(
-            (reference for reference in matches if (namespace, name) in reference.owner._presentations),
-            next(iter(matches)),
+        return _source_presentation(
+            next(
+                (reference for reference in matches if (namespace, name) in reference.owner._presentations),
+                next(iter(matches)),
+            ),
+            namespace,
+            name,
         )
     role = "primitives" if namespace == "callable" else "primitive_sorts"
     candidates = (origin.owner.ref(role, index) for index in range(len(origin.owner._slots[role])))
@@ -609,24 +636,41 @@ def _definition_at(origin: Ref, namespace: str, name: str) -> Ref:
         == (namespace, name)
     )
     matches.update(selected)
+    candidates = list(selected)
     for environment in (*origin.owner._environment, origin.owner):
         if (slot := environment._builtin_indices.get((namespace, name))) is not None:
-            matches.add(environment.ref(*slot))
+            reference = environment.ref(*slot)
+            matches.add(reference)
+            candidates.append(reference)
     if matches:
-        first = selected[0] if selected else next(iter(matches))
+        first = next(
+            (reference for reference in candidates if (namespace, name) in reference.owner._presentations),
+            candidates[0],
+        )
         rest = matches - {first}
         if any(StructuralView(first) != StructuralView(other) for other in rest):
             raise ValueError(f"Conflicting builtin environments: {namespace} {name!r}")
-        return first
+        return _source_presentation(first, namespace, name)
     raise LookupError(f"No owned canonical definition for {namespace} {name!r}")
 
 
-def _class_for_sort(sort: Ref) -> RuntimeClass:
+def _class_for_sort(sort: Ref) -> RuntimeClass:  # noqa: C901 -- cache ownership follows registered source metadata
     """Recover a Python wrapper from its canonical concrete sort record."""
     sort = sort.owner.ref("sorts", sort.index)
     cache = _CLASS_CACHE.setdefault(sort.owner, WeakValueDictionary())
     if (existing := cache.get(sort.index)) is not None:
-        return existing
+        definition = existing.__egg_definition__
+        if isinstance(definition, Ref) and definition.role == "primitive_sorts":
+            family: pb.PrimitiveSort = definition.read()
+            base = _BASE_CLASSES.get(family.name)
+            if (
+                base is not None
+                and definition != base.__egg_definition__
+                and definition != _definition_at(sort, "primitive_sort", family.name)
+            ):
+                existing = None
+        if existing is not None:
+            return existing
     record: pb.Sort = sort.read()
     if record.kind is None:
         msg = "Expression sort is missing its kind"
@@ -658,7 +702,7 @@ def _class_for_sort(sort: Ref) -> RuntimeClass:
 
 
 class RuntimeClassDescriptor:
-    """Expose generated special methods on a runtime class, not its metaclass."""
+    """Expose declared special methods on a runtime class, not its metaclass."""
 
     def __init__(self, name: str) -> None:
         self.name = name
@@ -823,7 +867,11 @@ class RuntimeClass(type):
             return False
         node: pb.Node = instance.__egg_ref__.read()
         actual = _class_for_sort(instance.__egg_ref__.owner.ref("sorts", node.sort_id))
-        return cls == actual if cls.__egg_sort__ is not None else cls.__egg_definition__ == actual.__egg_definition__
+        if cls.__egg_sort__ is not None:
+            return cls == actual
+        if isinstance(cls.__egg_definition__, Ref) and isinstance(actual.__egg_definition__, Ref):
+            return StructuralView(cls.__egg_definition__) == StructuralView(actual.__egg_definition__)
+        return cls.__egg_definition__ == actual.__egg_definition__
 
     def __call__(cls, *args: object, **kwargs: object) -> RuntimeExpr | None:  # noqa: C901, PLR0912
         if cls.__egg_definition__ is _Intrinsic.APPLY:
@@ -1345,6 +1393,36 @@ class RuntimeFunction(metaclass=RuntimeFunctionMeta):
         )
 
 
+def _prepare_declarations(values: Iterable[object]) -> Catalog:
+    """Prepare ordinary source declarations and reconcile compatible native aliases."""
+    references: list[Ref] = []
+    functions: list[RuntimeFunction] = []
+    for value in values:
+        if isinstance(value, RuntimeClass):
+            context = value.__egg_context__
+            if context is not None:
+                context.resolve()
+                assert context.catalog is not None
+                references.extend(context.catalog.roots)
+                functions.extend(
+                    member for member in value.__egg_attr_cache__.values() if isinstance(member, RuntimeFunction)
+                )
+        elif isinstance(value, RuntimeFunction):
+            references.append(value.__egg_ref__)
+            functions.append(value)
+    catalog = Catalog.from_refs(references)
+    for function in functions:
+        reference = function.__egg_ref__
+        key = _definition_key(reference.read())
+        assert key is not None
+        canonical = catalog.definitions[key]
+        view_index = function.__egg_view__
+        if view_index is not None:
+            function.__egg_view__ = presentation(canonical).views.index(presentation(reference).views[view_index])
+        function.__egg_declaration__ = canonical
+    return catalog
+
+
 def _function_value(
     function: RuntimeFunction,
     captures: tuple[object, ...],
@@ -1813,7 +1891,7 @@ def _numeric_binary_call(name: str, left: object, right: object) -> object:  # n
 
 
 def define_expr_method(name: str, *, reverse: bool = False) -> None:
-    """Install a Python special-method entrypoint using the generated member view."""
+    """Install a Python special-method entrypoint using the declared member view."""
 
     def invoke(self: RuntimeExpr, *args: object, **kwargs: object) -> object:
         if name in NUMERIC_BINARY_METHODS and len(args) == 1 and not kwargs:

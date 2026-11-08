@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import TYPE_CHECKING, cast
@@ -11,7 +9,7 @@ from typing import TYPE_CHECKING, cast
 from egglog_proto.egglog.v1 import egglog_pb as pb
 
 if TYPE_CHECKING:
-    from ._program import Owner, Ref
+    from ._program import Ref
 
 
 class CallKind(Enum):
@@ -291,84 +289,3 @@ def validate_view(reference: Ref, view: CallPresentation) -> None:  # noqa: C901
     ):
         msg = "Invalid mutated input"
         raise ValueError(msg)
-
-
-def mapping_views(
-    catalog: pb.BuiltinCatalog, templates: Owner, data: Mapping[str, object]
-) -> dict[tuple[str, str], Presentation]:
-    """Resolve stable mapping keys and independently owned owner/default roots."""
-    type_rows = data["types"]
-    callable_rows = data["callables"]
-    assert isinstance(type_rows, dict)
-    assert isinstance(callable_rows, dict)
-    result: dict[tuple[str, str], Presentation] = {}
-    admitted = set()
-    declarations: list[pb.PrimitiveSort | pb.Primitive] = [*catalog.primitive_sorts, *catalog.primitives]
-    for declaration in declarations:
-        key = declaration.name
-        nominal = isinstance(declaration, pb.PrimitiveSort)
-        identity = ("primitive_sort" if nominal else "callable", key)
-        rows = type_rows if nominal else callable_rows
-        if key not in rows:
-            continue
-        admitted.add((nominal, key))
-        if nominal:
-            row = rows[key]
-            result[identity] = Presentation(
-                type_view=TypePresentation(tuple(row["path"]), tuple(row.get("typeParams", ())))
-            )
-            continue
-        for row in rows[key]:
-            for parameter in row.get("params", ()):
-                if "default" in parameter and (
-                    type(parameter["default"]) is not int
-                    or not 0 <= parameter["default"] < len(templates._slots["nodes"])
-                ):
-                    msg = "Default root has an invalid index"
-                    raise ValueError(msg)
-        views = []
-        for row in rows[key]:
-            kind = CallKind[row["form"]]
-            receiver = row.get("receiver", 0 if kind in {CallKind.METHOD, CallKind.PROPERTY} else None)
-            path = (
-                (key.rsplit(".", 1)[-1],) if kind in {CallKind.METHOD, CallKind.CLASS_METHOD, CallKind.PROPERTY} else ()
-            )
-            views.append(
-                CallPresentation(
-                    kind=kind,
-                    path=tuple(row.get("path", path)),
-                    owner=templates.ref("sorts", row["owner"]) if "owner" in row else None,
-                    receiver=receiver,
-                    params=tuple(
-                        Parameter(
-                            core_input=parameter.get(
-                                "coreInput", position + (receiver is not None and position >= receiver)
-                            ),
-                            name=parameter["name"],
-                            default=templates.ref("nodes", parameter["default"]) if "default" in parameter else None,
-                        )
-                        for position, parameter in enumerate(row.get("params", ()))
-                    ),
-                    mutates=row.get("mutates"),
-                    tail_repetitions=row.get("tailRepetitions"),
-                )
-            )
-        result[identity] = Presentation(views=tuple(views))
-    missing = {(True, key) for key in type_rows} | {(False, key) for key in callable_rows}
-    if missing - admitted:
-        raise ValueError(f"Python mapping names absent native definitions: {sorted(missing - admitted)}")
-    return result
-
-
-def builtin_owner(catalog: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | None = None) -> Owner:
-    """Join local surface choices to actual native definitions and owned templates."""
-    from ._builtin_presentation import DATA  # noqa: PLC0415
-    from ._program import Builder  # noqa: PLC0415
-
-    mapping = DATA if mapping is None else mapping
-
-    def local_views(owner: Owner) -> dict[tuple[str, str], Presentation]:
-        fragment = Builder.from_program(pb.Program.from_json(json.dumps(mapping["fragment"])), environment=(owner,))
-        return mapping_views(catalog, fragment.publish(), mapping)
-
-    return Builder.from_builtins(catalog).publish(presentation_factory=local_views)

@@ -280,9 +280,9 @@ module-name = "egglog.bindings"
 features = ["pyo3/extension-module"]
 include = [
     "egglog/_builtin_catalog.pb",
-    "egglog/builtins.py",
+    { path = "python/egglog/_builtin_catalog.pb", format = "sdist" },
     { path = "_build_backend.py", format = "sdist" },
-    { path = "scripts/generate_builtin_catalog.py", format = "sdist" },
+    { path = "scripts/export_builtin_catalog.py", format = "sdist" },
 ]
 
 [tool.pytest.ini_options]

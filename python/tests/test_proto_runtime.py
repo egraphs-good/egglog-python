@@ -69,6 +69,7 @@ from egglog import (
     var,
     vars_,
 )
+from egglog import builtins as egg_builtins
 from egglog._builtin_values import _container_items, _map_entries, _pair_value
 from egglog._catalog import builtin_catalog
 from egglog._presentation import (
@@ -76,7 +77,7 @@ from egglog._presentation import (
     CallPresentation,
     Parameter,
     Presentation,
-    builtin_owner,
+    TypePresentation,
     presentation,
 )
 from egglog._program import Builder, Packed, Ref, StructuralView, _copy_record, _definition_key, pack, rule_equal
@@ -163,7 +164,7 @@ def test_builtin_class_rejects_header_layout_mismatch_before_conversion(monkeypa
         @method(egg_fn="egglog.core.vec.map")
         def map(self, fn: Callable[[_NativeValueT], _NativeResultT]) -> "WrongLayout[_NativeResultT]": ...
 
-    with pytest.raises(ValueError, match="reverse_args differs"):
+    with pytest.raises(ValueError, match="Unresolved builtin annotation does not match its native sort"):
         resolve_callable(WrongLayout.map)
 
 
@@ -1595,8 +1596,8 @@ def test_direct_rule_relocates_inline_actions_without_an_engine(monkeypatch):
     assert _pack_rule(_inline_rule(owner.ref("rulesets", 0))).program.to_binary() == decoded.to_binary()
 
 
-def test_set_local_protocols_preserve_symbolic_order_and_empty_distinction(set_runtime):
-    Set, integer = (set_runtime[name] for name in ("Set", "i64"))
+def test_set_local_protocols_preserve_symbolic_order_and_empty_distinction(class_authoring_without_engine):
+    Set, integer = (getattr(egg_builtins, name) for name in ("Set", "i64"))
     first, second = integer(2), integer(1)
     expression = Set(first, second, first)
     assert isinstance(expression, Set[integer])
@@ -1623,8 +1624,8 @@ def test_set_local_protocols_preserve_symbolic_order_and_empty_distinction(set_r
             assert children == {first, second}
         case _:
             pytest.fail("Set value matching failed")
-    assert str(expression) == "Set[i64](i64(2), i64(1), i64(2))"
-    assert str(expression | expression) == "Set[i64](i64(2), i64(1), i64(2)) | Set[i64](i64(2), i64(1), i64(2))"
+    assert str(expression) == "Set[i64](2, 1, 2)"
+    assert str(expression | expression) == "Set[i64](2, 1, 2) | Set[i64](2, 1, 2)"
     for operation, key in (
         (expression.insert(first), "insert"),
         (expression.remove(first), "remove"),
@@ -1646,8 +1647,8 @@ def test_set_local_protocols_preserve_symbolic_order_and_empty_distinction(set_r
         Set()
 
 
-def test_set_conversion_and_typed_alias(set_runtime):
-    Set, SetLike, integer = (set_runtime[name] for name in ("Set", "SetLike", "i64"))
+def test_set_conversion_and_typed_alias(class_authoring_without_engine):
+    Set, SetLike, integer = (getattr(egg_builtins, name) for name in ("Set", "SetLike", "i64"))
     converted = convert({1, 2}, Set[integer])
     assert converted.value == {integer(1), integer(2)}
     empty = convert(set(), Set[integer])
@@ -1664,14 +1665,14 @@ def test_set_conversion_and_typed_alias(set_runtime):
 
     assert _required_callable_args(size({1, 2}))[0].value == converted.value
     assert _required_callable_args(size(set()))[0].value == set()
-    pair, string = (set_runtime[name] for name in ("Pair", "String"))
+    pair, string = (getattr(egg_builtins, name) for name in ("Pair", "String"))
     nested = convert({(1, "a")}, Set[pair[integer, string]])
     assert next(iter(nested)).value == (integer(1), string("a"))
 
 
 @pytest.mark.parametrize("empty", [False, True])
-def test_set_formed_value_preserves_refs_and_pretty_roundtrip(set_runtime, empty, monkeypatch):
-    Set, integer = (set_runtime[name] for name in ("Set", "i64"))
+def test_set_formed_value_preserves_refs_and_pretty_roundtrip(empty, monkeypatch, class_authoring_without_engine):
+    Set, integer = (getattr(egg_builtins, name) for name in ("Set", "i64"))
     builder = Builder()
     first = builder.import_ref(integer(2).__egg_ref__)
     second = builder.import_ref(integer(1).__egg_ref__)
@@ -1696,7 +1697,7 @@ def test_set_formed_value_preserves_refs_and_pretty_roundtrip(set_runtime, empty
         [] if empty else [owner.ref("nodes", first), owner.ref("nodes", second)]
     )
     assert expression.value == (set() if empty else {integer(2), integer(1)})
-    expected = "Set[i64]()" if empty else "Set[i64](i64(2), i64(1), i64(2))"
+    expected = "Set[i64]()" if empty else "Set[i64](2, 1, 2)"
 
     def forbidden(*args, **kwargs):
         pytest.fail("Set inspection or pretty authored a Call")
@@ -1706,7 +1707,7 @@ def test_set_formed_value_preserves_refs_and_pretty_roundtrip(set_runtime, empty
         assert expression.value == (set() if empty else {integer(2), integer(1)})
         assert str(expression) == expected
     # Trusted display of our constructed values, not evaluation by an engine.
-    authored = eval(expected, set_runtime)
+    authored = eval(expected, vars(egg_builtins))
     assert authored.__egg_ref__.read().kind.field == "primitive_value"
     assert list(authored) == list(expression)  # type: ignore[call-overload]
     assert get_callable_args(expression) is None
@@ -1732,8 +1733,8 @@ def test_set_formed_value_preserves_refs_and_pretty_roundtrip(set_runtime, empty
 
 
 @pytest.mark.parametrize("same", [False, True])
-def test_set_local_children_preserve_union_identity(set_runtime, same):
-    Set, integer = (set_runtime[name] for name in ("Set", "i64"))
+def test_set_local_children_preserve_union_identity(same, class_authoring_without_engine):
+    Set, integer = (getattr(egg_builtins, name) for name in ("Set", "i64"))
     first = RuntimeExpr(eq(integer(1)).to(integer(2)).__egg_ref__)
     second = first if same else RuntimeExpr(eq(integer(1)).to(integer(2)).__egg_ref__)
     expression = Set(first, second)
@@ -1744,8 +1745,8 @@ def test_set_local_children_preserve_union_identity(set_runtime, same):
 
 
 @pytest.mark.parametrize("malformed", ["wrong_sort", "invalid_ref", "cycle", "arity", "wrong_arm", "user_call"])
-def test_set_formed_value_rejects_malformed_children(set_runtime, malformed):
-    Set, integer, floating = (set_runtime[name] for name in ("Set", "i64", "f64"))
+def test_set_formed_value_rejects_malformed_children(malformed, class_authoring_without_engine):
+    Set, integer, floating = (getattr(egg_builtins, name) for name in ("Set", "i64", "f64"))
     builder = Builder()
     child = builder.import_ref((floating(1.0) if malformed == "wrong_sort" else integer(1)).__egg_ref__)
     sort_ref = Set[integer].__egg_sort__
@@ -1776,19 +1777,59 @@ def test_set_formed_value_rejects_malformed_children(set_runtime, malformed):
         _ = expression.value
 
 
-def test_set_empty_converter_and_formed_pretty_use_retained_presentation(
-    set_catalog_program, python_presentation_mapping, request
-):
-    python_presentation_mapping["types"]["Set"]["path"][-1] = "FiniteSet"
-    python_presentation_mapping["callables"]["egglog.core.set.empty"][0]["path"] = ["vacant"]
-    generated = request.getfixturevalue("set_runtime")
-    Set, integer = generated["FiniteSet"], generated["i64"]
-    assert str(convert(set(), Set[integer])) == "FiniteSet[i64]()"
+def _owned_builtin_family(base, program, views, monkeypatch):
+    """Keep source hooks/converters while testing independently owned metadata."""
+    from egglog import conversion  # noqa: PLC0415
+
+    assert isinstance(base, RuntimeClass)
+    context = base.__egg_context__
+    assert context is not None
+    context.resolve()
+    monkeypatch.setattr(runtime, "_BASE_CLASSES", dict(runtime._BASE_CLASSES))
+    definition = base.__egg_definition__
+    assert isinstance(definition, Ref)
+    name = definition.read().name
+    assert context.catalog is not None
+    declared = {key: presentation(reference) for key, reference in context.catalog.definitions.items()}
+
+    def owned_views(owner):
+        return declared | views(owner)
+
+    owner = Builder.from_builtins(program).publish(presentation_factory=owned_views)
+    family_index = next(index for index, item in enumerate(program.primitive_sorts) if item.name == name)
+    family = RuntimeClass(owner.ref("primitive_sorts", family_index))
+    family.__egg_hooks__ = base.__egg_hooks__
+    # The same actual codec runs at the new owned family reference; no frontend
+    # declaration is generated or inferred from a separate test inventory.
+    for (source, target), (cost, fn) in tuple(conversion.CONVERSIONS.items()):
+        if target.__egg_sort__ is None and target.__egg_definition__ == definition:
+            converter(source, family, fn, cost=cost)
+    return family
+
+
+def test_set_empty_converter_and_formed_pretty_use_retained_presentation(native_catalog_program, monkeypatch):
+    Set = egg_builtins.Set
+    empty = next(item for item in native_catalog_program.primitives if item.name == "egglog.core.set.empty")
+
+    def views(owner):
+        return {
+            ("primitive_sort", "Set"): Presentation(type_view=TypePresentation(("example", "FiniteSet"), ("T",))),
+            ("callable", empty.name): Presentation(
+                views=(
+                    CallPresentation(
+                        kind=CallKind.CLASS_METHOD, path=("vacant",), owner=owner.ref("sorts", empty.signature.output)
+                    ),
+                )
+            ),
+        }
+
+    target = _owned_builtin_family(Set, native_catalog_program, views, monkeypatch)[i64]
+    assert str(convert(set(), target)) == "FiniteSet[i64]()"
     builder = Builder()
     root = builder.add(
         "nodes",
         pb.Node(
-            sort_id=builder.import_ref(Set[integer].__egg_sort__),
+            sort_id=builder.import_ref(target.__egg_sort__),
             kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
                 "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["set"], pb.ValueList]("set", pb.ValueList()))
             ),
@@ -1797,24 +1838,37 @@ def test_set_empty_converter_and_formed_pretty_use_retained_presentation(
     assert str(RuntimeExpr(builder.publish().ref("nodes", root))) == "FiniteSet[i64]()"
 
 
-def test_map_from_pairs_stays_symbolic_with_forged_input_metadata(set_catalog_program, request):
-    declaration = next(d for d in set_catalog_program.primitives if d.name == "egglog.core.map.of")
-    input_sort = set_catalog_program.sorts[declaration.signature.inputs[0]]
+def test_map_source_header_rejects_forged_input_metadata(
+    native_catalog_program, monkeypatch, class_authoring_without_engine
+):
+    from egglog import _catalog, egraph  # noqa: PLC0415
+    from egglog._catalog import Catalog  # noqa: PLC0415
+
+    declaration = next(item for item in native_catalog_program.primitives if item.name == "egglog.core.map.of")
+    input_sort = native_catalog_program.sorts[declaration.signature.inputs[0]]
     assert input_sort.kind.field == "primitive"
     assert input_sort.kind.value.name == "Vec"
     input_sort.kind.value.name = "Set"
-    generated = request.getfixturevalue("set_runtime")
-    Map, Set, Pair, integer, string = (generated[name] for name in ("Map", "Set", "Pair", "i64", "String"))
-    expression = Map.from_pairs(Set(Pair(integer(1), string("a"))))
-    assert expression.__egg_ref__.read().kind.field == "call"
-    with pytest.raises(generated["ExprValueError"], match="Map value payload"):
-        _ = expression.value
+    native = Catalog(Builder.from_builtins(native_catalog_program).publish())
+    monkeypatch.setattr(_catalog, "builtin_catalog", lambda: native)
+    monkeypatch.setattr(egraph, "builtin_catalog", lambda: native)
+    monkeypatch.setattr(runtime, "_BASE_CLASSES", dict(runtime._BASE_CLASSES))
+
+    class CheckedMap(BuiltinExpr, Generic[_NativeValueT, _NativeResultT], egg_sort="Map"):
+        @method(egg_fn="egglog.core.map.of")
+        @classmethod
+        def from_pairs(
+            cls, pairs: Vec[Pair[_NativeValueT, _NativeResultT]]
+        ) -> "CheckedMap[_NativeValueT, _NativeResultT]": ...
+
+    with pytest.raises(ValueError, match=r"Conflicting builtin environments:.*egglog\.core\.map\.of"):
+        CheckedMap[i64, f64].from_pairs(Vec(Pair(i64(1), f64(2.0))))
 
 
-def test_exact_host_values_and_symbolic_conversions_have_one_boundary(rational_runtime):
+def test_exact_host_values_and_symbolic_conversions_have_one_boundary(class_authoring_without_engine):
     from egglog.deconstruct import get_literal_value  # noqa: PLC0415
 
-    r, z, q, integer = (rational_runtime[name] for name in ("Rational", "BigInt", "BigRat", "i64"))
+    r, z, q, integer = (getattr(egg_builtins, name) for name in ("Rational", "BigInt", "BigRat", "i64"))
     huge = 10**100 + 1
     for expression, expected in (
         (r(1, 2), Fraction(1, 2)),
@@ -1841,7 +1895,7 @@ def test_exact_host_values_and_symbolic_conversions_have_one_boundary(rational_r
         assert expression.__egg_ref__.read().kind.field == "call"
         assert expression.__egg_ref__.read().kind.value.func == key
         assert get_literal_value(expression) is None
-        with pytest.raises(rational_runtime["ExprValueError"]):
+        with pytest.raises(ExprValueError):
             _ = expression.value
     for target in (r, z, q):
         converted = convert(symbolic, target)
@@ -1849,7 +1903,7 @@ def test_exact_host_values_and_symbolic_conversions_have_one_boundary(rational_r
         if target == q:
             child = _required_callable_args(child)[0]
         assert child.__egg_ref__ == symbolic.__egg_ref__
-        with pytest.raises(rational_runtime["ExprValueError"]):
+        with pytest.raises(ExprValueError):
             _ = converted.value
         assert convert(1, target).value == 1
         with pytest.raises(ConvertError):
@@ -1869,8 +1923,8 @@ def test_exact_host_values_and_symbolic_conversions_have_one_boundary(rational_r
     assert str(r(symbolic, 2)) == "Rational(i64(1) + 2, 2)"
 
 
-def test_bignum_generated_family_authors_exact_calls_without_engine(rational_runtime):
-    z, q, integer = (rational_runtime[name] for name in ("BigInt", "BigRat", "i64"))
+def test_bignum_source_family_authors_exact_calls_without_engine(class_authoring_without_engine):
+    z, q, integer = (getattr(egg_builtins, name) for name in ("BigInt", "BigRat", "i64"))
     a, b = z.from_string("123456789012345678901"), z.from_string("-17")
     x, y = q(123456789012345678901, 2), q(1, 3)
     expressions = [
@@ -1938,7 +1992,7 @@ def test_bignum_generated_family_authors_exact_calls_without_engine(rational_run
         assert [child.__egg_ref__ for child in arguments] == [child.__egg_ref__ for child in children]
     assert x.value == Fraction(123456789012345678901, 2)
     for expression in (x.numer, x.denom, a >> 3, x + y):
-        with pytest.raises(rational_runtime["ExprValueError"]):
+        with pytest.raises(ExprValueError):
             _ = expression.value
     assert str(x.numer).endswith(".numer")
     assert StructuralView((5 + a).__egg_ref__) == StructuralView((z(5) + a).__egg_ref__)
@@ -1946,9 +2000,9 @@ def test_bignum_generated_family_authors_exact_calls_without_engine(rational_run
         _ = a << b
 
 
-def test_closed_scalar_family_authors_exact_calls_without_engine(rational_runtime):
-    integer, floating, ratio = (rational_runtime[name] for name in ("i64", "f64", "Rational"))
-    count_matches = rational_runtime["count_matches"]
+def test_closed_scalar_family_authors_exact_calls_without_engine(class_authoring_without_engine):
+    integer, floating, ratio = (getattr(egg_builtins, name) for name in ("i64", "f64", "Rational"))
+    count_matches = vars(egg_builtins)["count_matches"]
     a, b = integer(13), integer(2)
     x, y = floating(4.0), floating(2.0)
     r, s = ratio(3, 2), ratio(1, 2)
@@ -2025,7 +2079,7 @@ def test_closed_scalar_family_authors_exact_calls_without_engine(rational_runtim
         assert StructuralView(restored) == StructuralView(root)
         assert str(RuntimeExpr(restored)) == str(expression)
         if family != "Unit":
-            with pytest.raises(rational_runtime["ExprValueError"]):
+            with pytest.raises(ExprValueError):
                 _ = expression.value
     for expression, children in (
         (a << b, (a, b)),
@@ -2070,8 +2124,8 @@ def test_closed_scalar_family_authors_exact_calls_without_engine(rational_runtim
         floating.from_i64(1, 2)
 
 
-def test_exact_value_protocols_only_decode_payloads(rational_runtime):
-    r, z, q, integer = (rational_runtime[name] for name in ("Rational", "BigInt", "BigRat", "i64"))
+def test_exact_value_protocols_only_decode_payloads(class_authoring_without_engine):
+    r, z, q, integer = (getattr(egg_builtins, name) for name in ("Rational", "BigInt", "BigRat", "i64"))
     half = r(1, 2)
     assert half.value == Fraction(1, 2)
     assert float(half) == 0.5
@@ -2096,53 +2150,39 @@ def test_exact_value_protocols_only_decode_payloads(rational_runtime):
         case _:
             pytest.fail("Exact value match protocol missing")
     for symbolic in (z(integer(10)), q(z(1), z(2)), z.from_string("123"), half + Fraction(1, 3)):
-        with pytest.raises(rational_runtime["ExprValueError"]):
+        with pytest.raises(ExprValueError):
             _ = symbolic.value
 
 
-def test_exact_pretty_uses_owned_type_presentation(
-    rational_runtime, rational_catalog_program, python_presentation_mapping
-):
+def test_exact_pretty_uses_owned_type_presentation(native_catalog_program):
     from egglog.pretty import pretty_ref  # noqa: PLC0415
 
-    python_presentation_mapping["callables"]["egglog.core.bigint.from_string"][0]["path"] = ["decimal"]
-    python_presentation_mapping["types"]["BigInt"]["path"][-1] = "Integer"
-    for name in ("egglog.core.bigrat.make", "egglog.experimental.rational.make"):
-        params = python_presentation_mapping["callables"][name][0]["params"]
-        for position, parameter in enumerate(params):
-            parameter["coreInput"] = position
-        params.reverse()
-    catalog_owner = builtin_owner(rational_catalog_program, mapping=python_presentation_mapping)
+    def views(owner):
+        return {("primitive_sort", "BigInt"): Presentation(type_view=TypePresentation(("example", "Integer")))}
+
+    catalog_owner = Builder.from_builtins(native_catalog_program).publish(presentation_factory=views)
     for name, arm, payload, expected in (
         ("BigInt", "big_int", "123", "Integer(123)"),
-        (
-            "BigRat",
-            "big_rat",
-            pb.BigRat(numerator="1", denominator="2"),
-            "BigRat(1, 2)",
-        ),
+        ("BigRat", "big_rat", pb.BigRat(numerator="1", denominator="2"), "BigRat(1, 2)"),
         ("Rational", "rational", pb.Rational(numerator=1, denominator=2), "Rational(1, 2)"),
     ):
-        sort = next(
+        index = next(
             i
-            for i, s in enumerate(rational_catalog_program.sorts)
-            if s.kind.field == "primitive" and s.kind.value.name == name
+            for i, item in enumerate(native_catalog_program.sorts)
+            if item.kind.field == "primitive" and item.kind.value.name == name
         )
         builder = Builder(environment=(catalog_owner,))
-        sort = builder.import_ref(catalog_owner.ref("sorts", sort))
-        index = builder.add(
+        root = builder.add(
             "nodes",
             pb.Node(
-                sort_id=sort,
+                sort_id=builder.import_ref(catalog_owner.ref("sorts", index)),
                 kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
                     "primitive_value",
                     pb.PrimitiveValue(value=Oneof(arm, payload)),  # type: ignore[arg-type]
                 ),
             ),
         )
-        # The ambient generated classes still have the original BigInt name and
-        # from_string method. Only this owned frontend mapping contains the changed view.
-        assert pretty_ref(builder.publish().ref("nodes", index)) == expected
+        assert pretty_ref(builder.publish().ref("nodes", root)) == expected
 
 
 @pytest.mark.parametrize(
@@ -2159,10 +2199,12 @@ def test_exact_pretty_uses_owned_type_presentation(
         ("Rational", "rational", pb.Rational(numerator=0, denominator=1), Fraction(0)),
     ],
 )
-def test_exact_inert_values_are_owned_inspectable_and_printable(rational_runtime, family, arm, payload, expected):
+def test_exact_inert_values_are_owned_inspectable_and_printable(
+    family, arm, payload, expected, class_authoring_without_engine
+):
     from egglog.deconstruct import get_literal_value  # noqa: PLC0415
 
-    cls = rational_runtime[family]
+    cls = getattr(egg_builtins, family)
     builder = Builder()
     primitive = pb.PrimitiveValue(value=Oneof(arm, payload))
     index = builder.add(
@@ -2179,7 +2221,7 @@ def test_exact_inert_values_are_owned_inspectable_and_printable(rational_runtime
     assert get_callable_args(expression) is None
     assert copy(expression).__egg_ref__ == expression.__egg_ref__
     # Display reauthors the same host value through its owned type view.
-    displayed = eval(str(expression), rational_runtime)
+    displayed = eval(str(expression), vars(egg_builtins))
     assert displayed.value == expected
     assert displayed.__egg_ref__.read().kind.field == "primitive_value"
     packed = pack([expression.__egg_ref__])
@@ -2191,7 +2233,7 @@ def test_exact_inert_values_are_owned_inspectable_and_printable(rational_runtime
 
 @pytest.mark.parametrize("access", ["literal", "value", "display", "binary", "display_value"])
 @pytest.mark.parametrize("form", ["integer", "numerator", "denominator", "both"])
-def test_exact_inert_decimal_magnitude_ignores_process_digit_limit(rational_runtime, access, form):
+def test_exact_inert_decimal_magnitude_ignores_process_digit_limit(access, form, class_authoring_without_engine):
     from egglog.deconstruct import get_literal_value  # noqa: PLC0415
 
     limit = sys.get_int_max_str_digits()
@@ -2214,7 +2256,7 @@ def test_exact_inert_decimal_magnitude_ignores_process_digit_limit(rational_runt
     index = builder.add(
         "nodes",
         pb.Node(
-            sort_id=builder.import_ref(rational_runtime[family].__egg_sort__),
+            sort_id=builder.import_ref(getattr(egg_builtins, family).__egg_sort__),
             kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
                 "primitive_value",
                 pb.PrimitiveValue(value=Oneof(arm, payload)),  # type: ignore[arg-type]
@@ -2241,20 +2283,20 @@ def test_exact_inert_decimal_magnitude_ignores_process_digit_limit(rational_runt
             assert RuntimeExpr(detached.ref("nodes", packed.indices[0])).value == expected
         else:
             # Reauthoring uses canonical host construction, including huge ints.
-            reauthored = eval(display, rational_runtime)
+            reauthored = eval(display, vars(egg_builtins))
             assert reauthored.__egg_ref__.read().kind.field == "primitive_value"
             assert reauthored.value == expected
     finally:
         assert sys.get_int_max_str_digits() == limit
 
 
-def test_exact_from_string_stays_symbolic_without_local_parsing(rational_runtime):
-    cls = rational_runtime["BigInt"]
+def test_exact_from_string_stays_symbolic_without_local_parsing(class_authoring_without_engine):
+    cls = vars(egg_builtins)["BigInt"]
     for text in ("1", "  +001_234 ", "-0", "+1", "01", "1e3", "1.5", "NaN", "Infinity"):
         expression = cls.from_string(text)
         assert expression.__egg_ref__.read().kind.field == "call"
         assert _required_callable_args(expression)[0].value == text
-        with pytest.raises(rational_runtime["ExprValueError"]):
+        with pytest.raises(ExprValueError):
             _ = expression.value
 
 
@@ -2325,14 +2367,14 @@ def test_exact_from_string_stays_symbolic_without_local_parsing(rational_runtime
         ("Rational", "rational", pb.Rational(numerator=1, denominator=2**63), OverflowError, "out of range for int64"),
     ],
 )
-def test_exact_inert_values_reject_malformed_data(rational_runtime, family, arm, payload, error, message):
+def test_exact_inert_values_reject_malformed_data(family, arm, payload, error, message, class_authoring_without_engine):
     from egglog.deconstruct import get_literal_value  # noqa: PLC0415
 
     builder = Builder()
     index = builder.add(
         "nodes",
         pb.Node(
-            sort_id=builder.import_ref(rational_runtime[family].__egg_sort__),
+            sort_id=builder.import_ref(getattr(egg_builtins, family).__egg_sort__),
             kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
                 "primitive_value", pb.PrimitiveValue(value=Oneof(arm, payload))
             ),
@@ -2725,7 +2767,7 @@ def test_map_value_payload_order_ref_zero_and_pretty(empty):
         assert isinstance(selected, RuntimeExpr)
         assert first_key.__egg_ref__ == owner.ref("nodes", key)
         assert selected.__egg_ref__ == owner.ref("nodes", later)
-        assert str(expression) == "Map[i64, f64].empty().insert(i64(2), f64(1.0)).insert(i64(2), f64(3.0))"
+        assert str(expression) == "Map[i64, f64].empty().insert(2, 1.0).insert(2, 3.0)"
 
 
 def test_map_dict_conversion_context_and_exact_target_precedence():
@@ -3016,23 +3058,44 @@ def test_map_from_pairs_defers_malformed_nested_data_to_program_validation(inval
 @pytest.mark.parametrize("source", ["dict", "value"])
 @pytest.mark.parametrize("same_sort", [False, True])
 def test_map_insert_view_parameter_permutation_preserves_core_order(
-    vec_catalog_program, python_presentation_mapping, request, source, same_sort
+    native_catalog_program, monkeypatch, source, same_sort
 ):
-    view = python_presentation_mapping["callables"]["egglog.core.map.insert"][0]
-    view["path"] = ["put"]
-    for position, parameter in enumerate(view["params"], start=1):
-        parameter["coreInput"] = position
-    view["params"].reverse()
-    view["params"][0]["name"], view["params"][1]["name"] = "item", "at"
-    request.getfixturevalue("vec_runtime")
+    declarations = {item.name: item for item in native_catalog_program.primitives}
+    empty, insert = [declarations[f"egglog.core.map.{name}"] for name in ("empty", "insert")]
+
+    def views(owner):
+        return {
+            ("primitive_sort", "Map"): Presentation(
+                type_view=TypePresentation(("egglog", "builtins", "Map"), ("K", "V"))
+            ),
+            ("callable", empty.name): Presentation(
+                views=(
+                    CallPresentation(
+                        kind=CallKind.CLASS_METHOD, path=("empty",), owner=owner.ref("sorts", empty.signature.output)
+                    ),
+                )
+            ),
+            ("callable", insert.name): Presentation(
+                views=(
+                    CallPresentation(
+                        kind=CallKind.METHOD,
+                        path=("put",),
+                        owner=owner.ref("sorts", insert.signature.inputs[0]),
+                        receiver=0,
+                        params=(Parameter(2, "item"), Parameter(1, "at")),
+                    ),
+                )
+            ),
+        }
+
+    family = _owned_builtin_family(Map, native_catalog_program, views, monkeypatch)
     value_type = i64 if same_sort else f64
     value = i64(2) if same_sort else f64(2.0)
-    target = runtime._BASE_CLASSES["Map"][i64, value_type]
+    target = family[i64, value_type]
     assert target.__egg_sort__ is not None
     if source == "dict":
-        expression: RuntimeExpr = convert({1: 2 if same_sort else 2.0}, target)  # type: ignore[arg-type]
+        expression: RuntimeExpr = convert({1: 2 if same_sort else 2.0}, target)
         assert expression.value == {i64(1): value}
-        assert str(expression) == f"Map[i64, {value_type}].empty().put({value}, i64(1))"
         assert get_callable_args(expression) is None
         entry = expression.__egg_ref__.read().kind.value.value.value.entries[0]
         assert RuntimeExpr(expression.__egg_ref__.owner.ref("nodes", entry.key)).value == 1
@@ -3056,31 +3119,62 @@ def test_map_insert_view_parameter_permutation_preserves_core_order(
             ),
         )
         expression = RuntimeExpr(builder.publish().ref("nodes", root))
-        assert str(expression) == f"Map[i64, {value_type}].empty().put({value}, i64(1))"
         assert expression.value == {i64(1): value}
+    # Ordinary typed-call printing elides literal wrappers while respecting the
+    # imported view's reverse parameter projection.
+    rendered = "2" if same_sort else "2.0"
+    assert str(expression) == f"Map[i64, {value_type}].empty().put({rendered}, 1)"
 
 
-def test_map_converter_and_value_pretty_follow_renamed_views(vec_catalog_program, python_presentation_mapping, request):
-    python_presentation_mapping["types"]["Map"]["path"][-1] = "Mapping"
-    for core, public in (("empty", "vacant"), ("insert", "put"), ("of", "from_entries"), ("get", "lookup")):
-        python_presentation_mapping["callables"][f"egglog.core.map.{core}"][0]["path"] = [public]
-    request.getfixturevalue("vec_runtime")
-    # This scoped catalog is not the module-global actual catalog.
-    target = runtime._BASE_CLASSES["Map"][i64, f64]
-    assert target.__egg_sort__ is not None
-    expression: RuntimeExpr = convert({1: 2.0}, target)  # type: ignore[arg-type]
-    assert str(expression) == "Mapping[i64, f64].vacant().put(i64(1), f64(2.0))"
+def test_map_converter_and_value_pretty_follow_renamed_views(native_catalog_program, monkeypatch):
+    declarations = {item.name: item for item in native_catalog_program.primitives}
+
+    def views(owner):
+        result = {
+            ("primitive_sort", "Map"): Presentation(type_view=TypePresentation(("example", "Mapping"), ("K", "V")))
+        }
+        for core, public in (("empty", "vacant"), ("insert", "put"), ("of", "from_entries"), ("get", "lookup")):
+            declaration = declarations[f"egglog.core.map.{core}"]
+            member = core in {"insert", "get"}
+            result["callable", declaration.name] = Presentation(
+                views=(
+                    CallPresentation(
+                        kind=CallKind.METHOD if member else CallKind.CLASS_METHOD,
+                        path=(public,),
+                        owner=owner.ref(
+                            "sorts", declaration.signature.inputs[0] if member else declaration.signature.output
+                        ),
+                        receiver=0 if member else None,
+                        params=tuple(
+                            Parameter(index, name)
+                            for index, name in (
+                                [(1, "key"), (2, "value")]
+                                if core == "insert"
+                                else [(1, "key")]
+                                if core == "get"
+                                else [(0, "pairs")]
+                                if core == "of"
+                                else []
+                            )
+                        ),
+                    ),
+                )
+            )
+        return result
+
+    target = _owned_builtin_family(Map, native_catalog_program, views, monkeypatch)[i64, f64]
+    expression: RuntimeExpr = convert({1: 2.0}, target)
+    assert str(expression) == "Mapping[i64, f64].vacant().put(1, 2.0)"
     mapping = expression.value
     assert isinstance(mapping, dict)
-    value = mapping[i64(1)]
-    assert isinstance(value, RuntimeExpr)
-    assert value.value == 2.0
+    assert mapping[i64(1)].value == 2.0
     from_entries = _required_runtime_function(target.from_entries)(Vec(Pair(i64(1), f64(2.0))))
     assert from_entries is not None
     with pytest.raises(ExprValueError):
         _ = from_entries.value
-    assert ".from_entries(" in str(_required_runtime_function(from_entries.lookup)(i64(1)))
-    assert str(_required_runtime_function(from_entries.lookup)(i64(1))).endswith(".lookup(1)")
+    displayed = str(_required_runtime_function(from_entries.lookup)(i64(1)))
+    assert ".from_entries(" in displayed
+    assert displayed.endswith(".lookup(1)")
     with pytest.raises(AttributeError):
         _ = target.from_pairs
     key, value = next(iter(_map_entries(expression)))
@@ -3102,7 +3196,7 @@ def test_map_converter_and_value_pretty_follow_renamed_views(vec_catalog_program
             ),
         ),
     )
-    assert str(RuntimeExpr(builder.publish().ref("nodes", root))) == "Mapping[i64, f64].vacant().put(i64(1), f64(2.0))"
+    assert str(RuntimeExpr(builder.publish().ref("nodes", root))) == "Mapping[i64, f64].vacant().put(1, 2.0)"
 
 
 @pytest.mark.parametrize("equality_output", [False, True])
@@ -3214,15 +3308,15 @@ def test_vec_map_executes_captured_callback_and_replays_source(equality_output):
         replay._state.destroy()
 
 
-def test_vec_generic_authoring_local_protocols_and_pretty(vec_runtime, monkeypatch):
+def test_vec_generic_authoring_local_protocols_and_pretty(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Vec authoring/inspection accessed an engine")
 
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
-    vector = vec_runtime
+    target, _ = _required_authored_class(Vec[i64])
     symbolic, literal = i64(1) + 2, i64(3)
-    expression = vector(symbolic, literal)
-    assert isinstance(expression, vector[i64])
+    expression = Vec(symbolic, literal)
+    assert isinstance(expression, Vec[i64])  # type: ignore[misc]
     assert expression.__egg_ref__.read().kind.value.value.field == "vec"
     assert get_callable_args(expression) is None
     assert [item.__egg_ref__ for item in expression.value] == [symbolic.__egg_ref__, literal.__egg_ref__]
@@ -3232,24 +3326,24 @@ def test_vec_generic_authoring_local_protocols_and_pretty(vec_runtime, monkeypat
     assert i64(4) not in expression
     with pytest.warns(DeprecationWarning, match="use .value"):
         assert expression.eval() == expression.value
-    assert str(vector[i64].empty()) == "Vec[i64].empty()"
-    assert vector[i64]().value == vector[i64].empty().value == ()
-    assert str(vector(i64(1), i64(3))) == "Vec[i64](i64(1), i64(3))"
-    selected = vector(i64(1), i64(3))[0]
+    assert str(Vec[i64].empty()) == "Vec[i64].empty()"
+    assert Vec[i64]().value == Vec[i64].empty().value == ()
+    assert str(Vec(i64(1), i64(3))) == "Vec[i64](1, 3)"
+    selected = Vec(i64(1), i64(3))[0]
     assert isinstance(selected, i64)
     assert selected.__egg_ref__.read().kind.value.func == "egglog.core.vec.get"
-    assert str(selected) == "Vec[i64](i64(1), i64(3))[0]"
+    assert str(selected) == "Vec[i64](1, 3)[0]"
     with pytest.raises(ExprValueError):
         selected.value
     with pytest.raises(TypeError):
-        vector[i64](args=(i64(1),))
+        target(args=(i64(1),))
     with pytest.raises(ConvertError):
-        vector[i64](f64(1.0))
+        target(f64(1.0))
     with pytest.raises(TypeConstraintError):
-        vector()
+        Vec()
 
     ranged = i64(5).range()
-    assert isinstance(ranged, vector[i64])
+    assert isinstance(ranged, Vec[i64])  # type: ignore[misc]
     assert str(ranged) == "i64(5).range()"
     with pytest.raises(ExprValueError):
         ranged.value
@@ -3264,7 +3358,9 @@ def test_vec_generic_authoring_local_protocols_and_pretty(vec_runtime, monkeypat
     assert len(node.kind.value.args) == 1
     argument = reference.owner.ref("nodes", node.kind.value.args[0])
     assert StructuralView(argument) == StructuralView(to_runtime_expr(i64(5)).__egg_ref__)
-    assert StructuralView(reference.owner.ref("sorts", node.sort_id)) == StructuralView(vector[i64].__egg_sort__)
+    vector_sort = resolve_type_annotation(Vec[i64])
+    assert isinstance(vector_sort, Ref)
+    assert StructuralView(reference.owner.ref("sorts", node.sort_id)) == StructuralView(vector_sort)
     packed = pack([reference])
     assert not (
         *packed.program.constructors,
@@ -3286,8 +3382,7 @@ def test_vec_generic_authoring_local_protocols_and_pretty(vec_runtime, monkeypat
 
 
 @pytest.mark.parametrize("source", [[1, 2], (1, 2), [], ()])
-def test_vec_contextual_sequence_conversion_and_matching(vec_runtime, source):
-    Vec = vec_runtime
+def test_vec_contextual_sequence_conversion_and_matching(source):
     expression = convert(source, Vec[i64])
     assert tuple(item.value for item in expression.value) == tuple(source)
     assert get_type_args() == ()
@@ -3300,8 +3395,8 @@ def test_vec_contextual_sequence_conversion_and_matching(vec_runtime, source):
     assert nested.value[0].value[0].value[1].value == 2.0
 
 
-def test_vec_sequence_exact_target_precedence_and_context(vec_runtime):
-    target = vec_runtime[i64]
+def test_vec_sequence_exact_target_precedence_and_context():
+    target = Vec[i64]
     sentinel = target(i64(9))
     converter(object, target, lambda source: sentinel, cost=0)
     assert convert([1], target) is sentinel
@@ -3310,19 +3405,19 @@ def test_vec_sequence_exact_target_precedence_and_context(vec_runtime):
         convert([1], Pair[i64, i64])
 
 
-def test_vec_like_annotation_context_and_element_conversion(vec_runtime):
+def test_vec_like_annotation_context_and_element_conversion():
     @function
     def size(value: VecLike[i64, int]) -> i64: ...
 
     expression = size([1, 2])
     argument = _required_callable_args(expression)[0]
-    assert isinstance(argument, vec_runtime[i64])
+    assert isinstance(argument, Vec[i64])  # type: ignore[misc]
     assert tuple(child.value for child in argument.value) == (1, 2)
     assert _required_callable_args(size(()))[0].value == ()
     assert get_type_args() == ()
 
 
-def test_vec_annotation_protocol_preserves_lookup_and_pending_classes(vec_runtime):
+def test_vec_annotation_protocol_preserves_lookup_and_pending_classes():
     class Token(Expr):
         def __init__(self, value: i64) -> None: ...
 
@@ -3331,40 +3426,56 @@ def test_vec_annotation_protocol_preserves_lookup_and_pending_classes(vec_runtim
     assert _runtime_token.__args__ == ()
     assert token_context.prepare is pending
     assert i64.__args__ == ()  # type: ignore[attr-defined]
-    assert vec_runtime[i64].__args__ == (i64,)
+    concrete_vector, _ = _required_authored_class(Vec[i64])
+    vector, _ = _required_authored_class(Vec)
+    assert concrete_vector.__args__ == (i64,)
     assert Pair[i64, f64].__args__ == (i64, f64)  # type: ignore[attr-defined]
-    assert len(vec_runtime.__args__) == 1
+    arguments = vector.__args__
+    assert isinstance(arguments, tuple)
+    assert len(arguments) == 1
 
     def annotated(value: Pair[i64, f64]) -> VecLike[i64, int]: ...
 
     hints = get_type_hints(annotated)
     assert hints["value"] == Pair[i64, f64]
-    _: object
     with pytest.raises(TypeError):
-        _ = VecLike[i64, int, float]  # type: ignore[misc, type-arg]
+        _unused_type_args = VecLike[i64, int, float]  # type: ignore[type-arg]
 
     def wrong(value: VecLike[int, int]) -> i64: ...  # type: ignore[type-var]
 
     with pytest.raises(TypeError, match="Type arguments must resolve"):
         get_type_hints(wrong)
     with pytest.raises(AttributeError, match="no declared Python member"):
-        _ = vec_runtime[i64].missing
+        _unused_missing = concrete_vector.missing
     with pytest.raises(AttributeError):
-        _ = Token.missing  # type: ignore[attr-defined]
+        _unused_nominal_missing = Token.missing  # type: ignore[attr-defined]
     assert token_context.prepare is None  # Ordinary lookup still prepares.
 
 
-def test_vec_empty_conversion_uses_supplied_presentation(vec_catalog_program, python_presentation_mapping, request):
-    python_presentation_mapping["callables"]["egglog.core.vec.empty"][0]["path"] = ["vacant"]
-    Vec = request.getfixturevalue("vec_runtime")
-    expression = convert([], Vec[i64])
+def test_vec_empty_conversion_uses_supplied_presentation(native_catalog_program, monkeypatch):
+    empty = next(item for item in native_catalog_program.primitives if item.name == "egglog.core.vec.empty")
+
+    def views(owner):
+        return {
+            ("primitive_sort", "Vec"): Presentation(type_view=TypePresentation(("egglog", "builtins", "Vec"), ("T",))),
+            ("callable", empty.name): Presentation(
+                views=(
+                    CallPresentation(
+                        kind=CallKind.CLASS_METHOD, path=("vacant",), owner=owner.ref("sorts", empty.signature.output)
+                    ),
+                )
+            ),
+        }
+
+    target = _owned_builtin_family(Vec, native_catalog_program, views, monkeypatch)[i64]
+    expression = convert([], target)
     assert expression.value == ()
     assert str(expression) == "Vec[i64].vacant()"
     builder = Builder()
     root = builder.add(
         "nodes",
         pb.Node(
-            sort_id=builder.import_ref(Vec[i64].__egg_sort__),
+            sort_id=builder.import_ref(target.__egg_sort__),
             kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
                 "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["vec"], pb.ValueList]("vec", pb.ValueList()))
             ),
@@ -3374,18 +3485,18 @@ def test_vec_empty_conversion_uses_supplied_presentation(vec_catalog_program, py
 
 
 @pytest.mark.parametrize("same", [False, True])
-def test_vec_children_preserve_union_identity(vec_runtime, same):
+def test_vec_children_preserve_union_identity(same):
     union = eq(i64(1)).to(i64(2))
     left = RuntimeExpr(union.__egg_ref__)
     right = left if same else RuntimeExpr(eq(i64(1)).to(i64(2)).__egg_ref__)
-    children = vec_runtime(left, right).value
+    children = Vec(left, right).value
     assert children[0].__egg_ref__ == left.__egg_ref__
     assert children[1].__egg_ref__ == right.__egg_ref__
     assert (expr_parts(children[0]) == expr_parts(children[1])) is same
 
 
 @pytest.mark.parametrize("malformed", ["wrong_sort", "invalid_ref", "cycle", "nominal", "user_call"])
-def test_vec_value_rejects_invalid_payload_and_provenance(vec_runtime, malformed):
+def test_vec_value_rejects_invalid_payload_and_provenance(malformed):
     if malformed == "nominal":
 
         class NominalVec(Expr, egg_sort="Vec"):
@@ -3394,9 +3505,11 @@ def test_vec_value_rejects_invalid_payload_and_provenance(vec_runtime, malformed
         with pytest.raises(AttributeError):
             _container_items(to_runtime_expr(NominalVec()))
         return
+    vector_sort = resolve_type_annotation(Vec[i64])
+    assert isinstance(vector_sort, Ref)
     builder = Builder()
     child = builder.import_ref((f64(1.0) if malformed == "wrong_sort" else i64(1)).__egg_ref__)
-    sort = builder.import_ref(vec_runtime[i64].__egg_sort__)
+    sort = builder.import_ref(vector_sort)
     if malformed == "invalid_ref":
         child = 100
     elif malformed == "cycle":
@@ -3416,12 +3529,12 @@ def test_vec_value_rejects_invalid_payload_and_provenance(vec_runtime, malformed
         RuntimeExpr(builder.publish().ref("nodes", root)).value
 
 
-def test_vec_computed_value_is_not_locally_evaluated(vec_runtime):
+def test_vec_computed_value_is_not_locally_evaluated():
     @function
     def computed() -> Vec[i64]: ...
 
     expression = computed()
-    assert isinstance(expression, vec_runtime[i64])
+    assert isinstance(expression, Vec[i64])  # type: ignore[misc]
     with pytest.raises(ExprValueError):
         expression.value
     selected = expression[0]
@@ -3450,7 +3563,9 @@ def test_vec_computed_value_is_not_locally_evaluated(vec_runtime):
 
 
 @pytest.mark.parametrize("empty", [False, True])
-def test_vec_value_payload_direct_children_and_pretty(vec_runtime, empty):
+def test_vec_value_payload_direct_children_and_pretty(empty):
+    vector_sort = resolve_type_annotation(Vec[i64])
+    assert isinstance(vector_sort, Ref)
     builder = Builder()
     first = builder.import_ref(i64(1).__egg_ref__)
     assert first == 0
@@ -3458,7 +3573,7 @@ def test_vec_value_payload_direct_children_and_pretty(vec_runtime, empty):
     root = builder.add(
         "nodes",
         pb.Node(
-            sort_id=builder.import_ref(vec_runtime[i64].__egg_sort__),
+            sort_id=builder.import_ref(vector_sort),
             kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
                 "primitive_value",
                 pb.PrimitiveValue(
@@ -3478,22 +3593,23 @@ def test_vec_value_payload_direct_children_and_pretty(vec_runtime, empty):
         assert isinstance(child, RuntimeExpr)
         references.append(child.__egg_ref__)
     assert references == ([] if empty else [owner.ref("nodes", i) for i in [first, second, first]])
-    assert str(value) == ("Vec[i64].empty()" if empty else "Vec[i64](i64(1), i64(2), i64(1))")
+    assert str(value) == ("Vec[i64].empty()" if empty else "Vec[i64](1, 2, 1)")
     assert get_callable_args(value) is None
 
 
-def test_vec_getitem_pretty_uses_public_syntax(vec_runtime):
-    assert str(vec_runtime[i64](i64(1))[0]) == "Vec[i64](i64(1))[0]"
+def test_vec_getitem_pretty_uses_public_syntax():
+    assert str(Vec[i64](i64(1))[0]) == "Vec[i64](1)[0]"
 
 
-def test_pair_proposed_authoring_and_symbolic_inspection(pair_runtime, monkeypatch):
+def test_pair_proposed_authoring_and_symbolic_inspection(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Pair authoring accessed the engine")
 
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
-    pair = pair_runtime
+    pair, _ = _required_authored_class(Pair)
+    target, _ = _required_authored_class(Pair[i64, f64])
     left, right = i64(1) + 2, f64(3.0)
-    expression = pair[i64, f64](right=right, left=left)
+    expression = Pair[i64, f64](right=right, left=left)
     assert expression.__egg_ref__.read().kind.value.value.field == "pair"
     assert get_callable_args(expression) is None
     children = expression.value
@@ -3506,13 +3622,13 @@ def test_pair_proposed_authoring_and_symbolic_inspection(pair_runtime, monkeypat
     with pytest.raises(ExprValueError):
         expression.left.value
     with pytest.raises(TypeError):
-        pair[i64, f64](i64(1))
+        target(i64(1))
     with pytest.raises(TypeError):
-        pair[i64, f64](i64(1), f64(2), f64(3))
+        target(i64(1), f64(2), f64(3))
     with pytest.raises(TypeError):
-        pair[i64, f64](left=i64(1), right=f64(2), unknown=3)
+        target(left=i64(1), right=f64(2), unknown=3)
     with pytest.raises(ConvertError):
-        pair[i64, f64](f64(1), f64(2))
+        target(f64(1), f64(2))
 
 
 @pytest.mark.parametrize("family", ["Pair", "Vec", "Set", "MultiSet", "Maybe", "Map"])
@@ -3557,21 +3673,21 @@ def test_container_data_inspection_rejects_raw_constructor_calls(monkeypatch, fa
         _ = raw.value
 
 
-def test_pair_tuple_conversion_context_exact_override_and_wrong_families(pair_runtime):
-    pair = pair_runtime
-    converted = convert((1, 2.5), pair[i64, f64])
+def test_pair_tuple_conversion_context_exact_override_and_wrong_families():
+    target = Pair[i64, f64]
+    converted = convert((1, 2.5), target)
     assert [child.value for child in converted.value] == [1, 2.5]
     assert [str(child) for child in converted.value] == ["i64(1)", "f64(2.5)"]
     assert get_type_args() == ()
-    marker = pair[i64, f64](i64(9), f64(8))
+    marker = target(i64(9), f64(8))
     contexts = []
 
     def exact(value):
         contexts.append(get_type_args())
         return marker
 
-    converter(tuple, pair[i64, f64], exact, cost=0)
-    assert convert((1, 2), pair[i64, f64]) is marker
+    converter(tuple, target, exact, cost=0)
+    assert convert((1, 2), target) is marker
     assert contexts == [(i64, f64)]  # type: ignore[comparison-overlap]
     assert get_type_args() == ()
     # Unrelated families and nominal same-spelled sorts must not reuse Pair's
@@ -3586,11 +3702,11 @@ def test_pair_tuple_conversion_context_exact_override_and_wrong_families(pair_ru
 
 
 @pytest.mark.parametrize("subclass", [False, True])
-def test_pair_exact_target_precedes_generic_fallback_across_source_mro(pair_runtime, subclass):
+def test_pair_exact_target_precedes_generic_fallback_across_source_mro(subclass):
     class TupleSubclass(tuple):
         __slots__ = ()
 
-    target = pair_runtime[i64, f64]
+    target = Pair[i64, f64]
     sentinel = target(i64(9), f64(8.0))
     calls = []
 
@@ -3606,14 +3722,13 @@ def test_pair_exact_target_precedes_generic_fallback_across_source_mro(pair_runt
 
 
 @pytest.mark.parametrize("value", [(), (1,), (1, 2, 3)])
-def test_pair_tuple_width_is_checked_before_conversion(pair_runtime, value):
+def test_pair_tuple_width_is_checked_before_conversion(value):
     with pytest.raises(ValueError, match="Expected a tuple of length 2"):
-        convert(value, pair_runtime[i64, f64])
+        convert(value, Pair[i64, f64])
     assert get_type_args() == ()
 
 
-def test_pair_nested_matching_and_retained_children(pair_runtime):
-    Pair = pair_runtime
+def test_pair_nested_matching_and_retained_children():
     expression = convert(((1, 2.0), 3), Pair[Pair[i64, f64], i64])
     match expression:
         case Pair((Pair((left, right)), last)):
@@ -3636,7 +3751,9 @@ def test_pair_nested_matching_and_retained_children(pair_runtime):
 
 
 @pytest.mark.parametrize("same", [False, True])
-def test_pair_value_payload_preserves_child_refs_and_union_identity(pair_runtime, same):
+def test_pair_value_payload_preserves_child_refs_and_union_identity(same):
+    pair_sort = resolve_type_annotation(Pair[i64, i64])
+    assert isinstance(pair_sort, Ref)
     builder = Builder()
     scalar = builder.import_ref(i64.__egg_sort__)  # type: ignore[attr-defined]
     literal = builder.import_ref(i64(1).__egg_ref__)
@@ -3654,7 +3771,7 @@ def test_pair_value_payload_preserves_child_refs_and_union_identity(pair_runtime
     root = builder.add(
         "nodes",
         pb.Node(
-            sort_id=builder.import_ref(pair_runtime[i64, i64].__egg_sort__),
+            sort_id=builder.import_ref(pair_sort),
             kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
                 "primitive_value",
                 pb.PrimitiveValue(
@@ -3674,7 +3791,7 @@ def test_pair_value_payload_preserves_child_refs_and_union_identity(pair_runtime
     assert right.__egg_ref__ == owner.ref("nodes", second)
     assert (left.__egg_ref__ == right.__egg_ref__) == same
     assert (StructuralView(left.__egg_ref__) == StructuralView(right.__egg_ref__)) == same
-    authored = pair_runtime(left, right)
+    authored = Pair(left, right)
     assert authored.value[0].__egg_ref__ == left.__egg_ref__
     assert authored.value[1].__egg_ref__ == right.__egg_ref__
     encoded = pack([expression.__egg_ref__]).program
@@ -3693,7 +3810,9 @@ def test_pair_value_payload_preserves_child_refs_and_union_identity(pair_runtime
     )
 
 
-def test_pair_value_ref_zero_and_pretty_uses_direct_payload(pair_runtime):
+def test_pair_value_ref_zero_and_pretty_uses_direct_payload():
+    pair_sort = resolve_type_annotation(Pair[i64, f64])
+    assert isinstance(pair_sort, Ref)
     builder = Builder()
     first = builder.import_ref(i64(0).__egg_ref__)
     assert first == 0
@@ -3701,7 +3820,7 @@ def test_pair_value_ref_zero_and_pretty_uses_direct_payload(pair_runtime):
     root = builder.add(
         "nodes",
         pb.Node(
-            sort_id=builder.import_ref(pair_runtime[i64, f64].__egg_sort__),
+            sort_id=builder.import_ref(pair_sort),
             kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
                 "primitive_value",
                 pb.PrimitiveValue(
@@ -3718,13 +3837,15 @@ def test_pair_value_ref_zero_and_pretty_uses_direct_payload(pair_runtime):
         assert isinstance(child, RuntimeExpr)
         values.append(child.value)
     assert values == [0, 2.0]
-    assert str(expression) == "Pair[i64, f64](i64(0), f64(2.0))"
+    assert str(expression) == "Pair[i64, f64](0, 2.0)"
     assert expression.__egg_ref__.read().kind.value.value.field == "pair"
     assert get_callable_args(expression) is None  # No fabricated make Call.
 
 
 @pytest.mark.parametrize("malformed", ["missing_first", "missing_second", "wrong_sort", "invalid_ref", "cycle"])
-def test_pair_value_rejects_invalid_local_payloads(pair_runtime, malformed):
+def test_pair_value_rejects_invalid_local_payloads(malformed):
+    pair_sort = resolve_type_annotation(Pair[i64, f64])
+    assert isinstance(pair_sort, Ref)
     builder = Builder()
     first = builder.import_ref(i64(1).__egg_ref__)
     second = builder.import_ref(f64(2.0).__egg_ref__)
@@ -3740,7 +3861,7 @@ def test_pair_value_rejects_invalid_local_payloads(pair_runtime, malformed):
     root = builder.add(
         "nodes",
         pb.Node(
-            sort_id=builder.import_ref(pair_runtime[i64, f64].__egg_sort__),
+            sort_id=builder.import_ref(pair_sort),
             kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
                 "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["pair"], pb.PairValue]("pair", value))
             ),
@@ -3750,15 +3871,17 @@ def test_pair_value_rejects_invalid_local_payloads(pair_runtime, malformed):
         RuntimeExpr(builder.publish().ref("nodes", root)).value
 
 
-def test_pair_value_rejects_nominal_and_user_call_provenance(pair_runtime):
+def test_pair_value_rejects_nominal_and_user_call_provenance():
     class NominalPair(Expr, egg_sort="Pair"):
         @method(egg_fn="pair")
         def __init__(self, left: i64, right: f64) -> None: ...
 
     with pytest.raises(ExprValueError):
         _pair_value(to_runtime_expr(NominalPair(i64(1), f64(2.0))))
+    pair_sort = resolve_type_annotation(Pair[i64, f64])
+    assert isinstance(pair_sort, Ref)
     builder = Builder()
-    output = builder.import_ref(pair_runtime[i64, f64].__egg_sort__)
+    output = builder.import_ref(pair_sort)
     builder.add(
         "constructors",
         pb.Constructor(name="egglog.core.pair.make", output=output),
@@ -8557,7 +8680,7 @@ def test_multiset_formed_values_keep_refs_and_inert_pretty(empty, monkeypatch):
         references.append(child.__egg_ref__)
     assert references == children
     assert list(expression) == expression.value  # type: ignore[call-overload]
-    assert str(expression) == ("MultiSet[i64]()" if empty else "MultiSet[i64](i64(2), i64(1), i64(2))")
+    assert str(expression) == ("MultiSet[i64]()" if empty else "MultiSet[i64](2, 1, 2)")
     assert get_callable_args(expression) is None
     assert get_literal_value(expression) is None
     assert hash(copy(expression)) == hash(expression)

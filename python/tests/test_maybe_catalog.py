@@ -3,9 +3,7 @@
 """Ordinary Maybe authoring/inspection and real-byte execution."""
 
 import copy
-import runpy
 from collections.abc import Callable
-from pathlib import Path
 from typing import Literal
 
 import pytest
@@ -30,11 +28,11 @@ from egglog import (
     union,
 )
 from egglog._catalog import builtin_catalog
-from egglog._presentation import builtin_owner
-from egglog._program import Builder, StructuralView, _copy_record, pack
+from egglog._presentation import CallKind, CallPresentation, Parameter, Presentation, TypePresentation, presentation
+from egglog._program import Builder, StructuralView, pack
 from egglog.deconstruct import get_callable_args, get_callable_fn
 from egglog.egraph_state import EggSmolError
-from egglog.runtime import RuntimeExpr, RuntimeFunction
+from egglog.runtime import RuntimeExpr, RuntimeFunction, resolve_callable
 from egglog.type_constraint_solver import TypeConstraintError
 
 
@@ -86,7 +84,7 @@ def test_maybe_ordinary_surface_executes_as_bytes():
         graph.extract(Maybe[i64].none().unwrap())
     with pytest.raises(EggSmolError, match=r"evaluation|Evaluation|failed"):
         graph.extract(Maybe[i64].some(i64(7)).unwrap_or(i64(1) / i64(0)))
-    assert str(some) == "Maybe[f64].some(f64(1.0))"
+    assert str(some) == "Maybe[f64].some(1.0)"
     roundtripped_child = EGraph().extract(some).value
     assert roundtripped_child is not None
     assert roundtripped_child.value == 1.0
@@ -155,12 +153,14 @@ def test_maybe_none_conversion_and_constructor_deconstruction(native_catalog_pro
             .ref("nodes", packet.indices[0])
         )
         assert StructuralView(imported.__egg_ref__) == StructuralView(value.__egg_ref__)
-    declaration = builtin_catalog().definitions["callable", "egglog.experimental.maybe.none"]
-    builder = Builder.from_builtins(native_catalog_program)
-    builder.presentations.update(builtin_catalog().owner._presentations)
-    # Drop only this local view; the actual backend signature stays unchanged.
+    declaration = resolve_callable(Maybe.none)
     record = declaration.read()
     assert isinstance(record, pb.Primitive)
+    builder = Builder.from_builtins(native_catalog_program)
+    declared_view = presentation(declaration)
+    assert declared_view.views
+    builder.presentations["callable", record.name] = declared_view
+    # Drop only this source-authored view; the native signature stays unchanged.
     builder.presentations.pop(("callable", record.name))
     native = builder.publish()
     none = Maybe[i64].none().__egg_ref__
@@ -270,64 +270,34 @@ def test_maybe_nested_equality_rebuilds():
     EGraph().extract(formed)
 
 
-def test_maybe_source_joins_actual_signatures_and_local_presentation(python_presentation_mapping):
-    render = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
-        "render_builtins"
-    ]
-    program = pb.BuiltinCatalog.from_binary(
-        (Path(__file__).resolve().parents[1] / "egglog/_builtin_catalog.pb").read_bytes()
-    )
-    before = program.to_binary()
-    generated = render(program)
-    assert program.to_binary() == before
-    assert "def value(self) -> _Maybe_T_0 | None:" in generated
-    assert "def none(cls) -> Maybe[_Maybe_T_0]:" in generated
-    assert "def some(cls, value: _Maybe_T_0) -> Maybe[_Maybe_T_0]:" in generated
-    assert "def unwrap(self) -> _Maybe_T_0:" in generated
-    assert "def unwrap_or(self, default: _Maybe_T_0) -> _Maybe_T_0:" in generated
-    assert next(sort for sort in program.primitive_sorts if sort.name == "Maybe").arity == 1
-    python_presentation_mapping["types"]["Maybe"]["path"][-1] = "OptionalValue"
-    python_presentation_mapping["types"]["Maybe"]["typeParams"] = ["Element"]
-    python_presentation_mapping["callables"]["egglog.experimental.maybe.some"][0]["path"] = ["present"]
-    python_presentation_mapping["callables"]["egglog.experimental.maybe.some"][0]["params"][0]["name"] = "child"
-    renamed = render(program, mapping=python_presentation_mapping)
-    assert program.to_binary() == before
-    assert "def value(self) -> _OptionalValue_Element_0 | None:" in renamed
-    assert "def present(cls, child: _OptionalValue_Element_0) -> OptionalValue[_OptionalValue_Element_0]:" in renamed
-    remap = {index: len(program.sorts) - index - 1 for index in range(len(program.sorts))}
-    relocated = pb.BuiltinCatalog(
-        sorts=[
-            _copy_record(sort, relocate=lambda role, index: remap[index] if role == "sorts" else index)
-            for sort in reversed(program.sorts)
-        ],
-        primitive_sorts=list(reversed(program.primitive_sorts)),
-        primitives=[
-            _copy_record(primitive, relocate=lambda role, index: remap[index] if role == "sorts" else index)
-            for primitive in reversed(program.primitives)
-        ],
-    )
-    reordered = render(relocated, mapping=python_presentation_mapping)
-    for line in renamed.splitlines():
-        if "_OptionalValue_" in line or "class OptionalValue(" in line:
-            assert line in reordered
-
-
-def test_maybe_formed_pretty_uses_owned_renamed_constructor_metadata(
-    native_catalog_program, python_presentation_mapping
-):
+def test_maybe_formed_pretty_uses_owned_renamed_constructor_metadata(native_catalog_program):
     formed = EGraph().extract(Maybe[i64].some(i64(0)))
     packet = pack([formed.__egg_ref__])
-    program = packet.program
-    python_presentation_mapping["types"]["Maybe"]["path"][-1] = "OptionalValue"
-    python_presentation_mapping["callables"]["egglog.experimental.maybe.some"][0]["path"] = ["present"]
-    native = builtin_owner(native_catalog_program, mapping=python_presentation_mapping)
-    builder = Builder.from_program(program, environment=(native,))
+    some = next(item for item in native_catalog_program.primitives if item.name == "egglog.experimental.maybe.some")
+
+    def views(owner):
+        return {
+            ("primitive_sort", "Maybe"): Presentation(type_view=TypePresentation(("example", "OptionalValue"), ("T",))),
+            ("callable", some.name): Presentation(
+                views=(
+                    CallPresentation(
+                        kind=CallKind.CLASS_METHOD,
+                        path=("present",),
+                        owner=owner.ref("sorts", some.signature.output),
+                        params=(Parameter(0, "value"),),
+                    ),
+                )
+            ),
+        }
+
+    native = Builder.from_builtins(native_catalog_program).publish(presentation_factory=views)
+    builder = Builder.from_program(packet.program, environment=(native,))
     value = RuntimeExpr(builder.publish().ref("nodes", packet.indices[0]))
     child_value = value.value
     assert child_value is not None
     assert isinstance(child_value, RuntimeExpr)
     assert child_value.value == 0
-    assert "OptionalValue[i64].present(" in str(value)
+    assert str(value) == "OptionalValue[i64].present(0)"
 
 
 def test_maybe_formed_and_call_defaults_execute_without_changing_representation():

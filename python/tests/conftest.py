@@ -1,6 +1,4 @@
 import copy
-import os
-import runpy
 import sys
 from pathlib import Path
 
@@ -44,133 +42,11 @@ def snapshot_py(snapshot):
 
 
 @pytest.fixture
-def python_presentation_mapping():
-    """Give each authoring test its own frontend map, never native signatures."""
-    from egglog._builtin_presentation import DATA  # noqa: PLC0415
-
-    return copy.deepcopy(DATA)
-
-
-@pytest.fixture
-def pair_catalog_program():
-    """Signatures stay in the actual native snapshot; Python views are separate."""
-    return pb.BuiltinCatalog.from_binary((Path(__file__).parents[1] / "egglog/_builtin_catalog.pb").read_bytes())
-
-
-@pytest.fixture
-def pair_runtime(pair_catalog_program, python_presentation_mapping, monkeypatch, request, tmp_path):
-    """Run real wrapper generation over one coherent fixture-owned catalog."""
-    from egglog import _catalog, conversion, egraph, runtime  # noqa: PLC0415
-    from egglog._catalog import Catalog  # noqa: PLC0415
-    from egglog._presentation import builtin_owner  # noqa: PLC0415
-
-    catalog = Catalog(builtin_owner(pair_catalog_program, mapping=python_presentation_mapping))
-    monkeypatch.setattr(_catalog, "builtin_catalog", lambda: catalog)
-    monkeypatch.setattr(egraph, "builtin_catalog", lambda: catalog)
-    monkeypatch.setattr(runtime, "_BASE_CLASSES", dict(runtime._BASE_CLASSES))
-    monkeypatch.setattr(conversion, "CONVERSIONS", {})
-    root = Path(__file__).resolve().parents[2]
-    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
-    source = tmp_path / "builtins.py"
-    source.write_text(render(pair_catalog_program, mapping=python_presentation_mapping))
-    generated = runpy.run_path(str(source), run_name="egglog.builtins")
-    for name in ("i64", "f64", "Pair", "Vec", "ExprValueError", "_pair_value"):
-        if hasattr(request.module, name):
-            monkeypatch.setattr(request.module, name, generated[name])
-    return generated["Pair"]
-
-
-@pytest.fixture
-def vec_catalog_program(pair_catalog_program):
-    """Real Vec signatures; fixture-local names live in python_presentation_mapping."""
-    return pair_catalog_program
-
-
-@pytest.fixture
-def vec_runtime(vec_catalog_program, python_presentation_mapping, monkeypatch, request, tmp_path):
-    """Run ordinary wrapper generation with the proposed fixture-only Vec views."""
-    from egglog import _catalog, conversion, egraph, runtime  # noqa: PLC0415
-    from egglog._catalog import Catalog  # noqa: PLC0415
-    from egglog._presentation import builtin_owner  # noqa: PLC0415
-
-    catalog = Catalog(builtin_owner(vec_catalog_program, mapping=python_presentation_mapping))
-    monkeypatch.setattr(_catalog, "builtin_catalog", lambda: catalog)
-    monkeypatch.setattr(egraph, "builtin_catalog", lambda: catalog)
-    monkeypatch.setattr(runtime, "_BASE_CLASSES", dict(runtime._BASE_CLASSES))
-    monkeypatch.setattr(conversion, "CONVERSIONS", {})
-    root = Path(__file__).resolve().parents[2]
-    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
-    source = tmp_path / "builtins.py"
-    source.write_text(render(vec_catalog_program, mapping=python_presentation_mapping))
-    generated = runpy.run_path(str(source), run_name="egglog.builtins")
-    for name in ("i64", "f64", "Pair", "Vec", "VecLike", "ExprValueError"):
-        if hasattr(request.module, name):
-            monkeypatch.setattr(request.module, name, generated[name])
-    return generated["Vec"]
-
-
-@pytest.fixture
-def rational_catalog_program():
-    """Actual native export, optionally supplied before package regeneration."""
-    path = Path(os.environ.get("EGGLOG_TEST_BUILTIN_CATALOG", Path(__file__).parents[1] / "egglog/_builtin_catalog.pb"))
-    program = pb.BuiltinCatalog.from_binary(path.read_bytes())
-    if not any(primitive.name == "egglog.experimental.rational.make" for primitive in program.primitives):
-        pytest.skip("Rational native export not packaged or supplied via EGGLOG_TEST_BUILTIN_CATALOG")
-    return program
-
-
-@pytest.fixture
-def set_catalog_program():
-    """Actual native export; no synthetic Set signatures or views."""
-    path = Path(os.environ.get("EGGLOG_TEST_BUILTIN_CATALOG", Path(__file__).parents[1] / "egglog/_builtin_catalog.pb"))
-    program = pb.BuiltinCatalog.from_binary(path.read_bytes())
-    assert any(primitive.name == "egglog.core.set.of" for primitive in program.primitives)
-    return program
-
-
-@pytest.fixture
-def set_runtime(set_catalog_program, python_presentation_mapping, monkeypatch, tmp_path):
-    """Exercise catalog-derived Set authoring while forbidding native execution."""
-    from egglog import _catalog, bindings, conversion, egraph, runtime  # noqa: PLC0415
-    from egglog._catalog import Catalog  # noqa: PLC0415
-    from egglog._presentation import builtin_owner  # noqa: PLC0415
+def class_authoring_without_engine(monkeypatch):
+    """Ordinary source authoring and local inspection cannot create an engine."""
+    from egglog import bindings  # noqa: PLC0415
 
     def forbidden(*args, **kwargs):
-        pytest.fail("Set source authoring accessed a native engine")
+        pytest.fail("Class authoring or local inspection accessed a native engine")
 
-    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
-    catalog = Catalog(builtin_owner(set_catalog_program, mapping=python_presentation_mapping))
-    monkeypatch.setattr(_catalog, "builtin_catalog", lambda: catalog)
-    monkeypatch.setattr(egraph, "builtin_catalog", lambda: catalog)
-    monkeypatch.setattr(runtime, "_BASE_CLASSES", {})
-    monkeypatch.setattr(runtime, "_CLASS_CACHE", runtime.WeakKeyDictionary())
-    monkeypatch.setattr(conversion, "CONVERSIONS", {})
-    root = Path(__file__).resolve().parents[2]
-    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
-    source = tmp_path / "builtins.py"
-    source.write_text(render(set_catalog_program, mapping=python_presentation_mapping))
-    return runpy.run_path(str(source), run_name="egglog.builtins")
-
-
-@pytest.fixture
-def rational_runtime(rational_catalog_program, python_presentation_mapping, monkeypatch, tmp_path):
-    """Use real catalog records without replacing package data or a native engine."""
-    from egglog import _catalog, bindings, conversion, egraph, runtime  # noqa: PLC0415
-    from egglog._catalog import Catalog  # noqa: PLC0415
-    from egglog._presentation import builtin_owner  # noqa: PLC0415
-
-    def forbidden(*args, **kwargs):
-        pytest.fail("Rational source authoring accessed a native engine")
-
-    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
-    catalog = Catalog(builtin_owner(rational_catalog_program, mapping=python_presentation_mapping))
-    monkeypatch.setattr(_catalog, "builtin_catalog", lambda: catalog)
-    monkeypatch.setattr(egraph, "builtin_catalog", lambda: catalog)
-    monkeypatch.setattr(runtime, "_BASE_CLASSES", {})
-    monkeypatch.setattr(runtime, "_CLASS_CACHE", runtime.WeakKeyDictionary())
-    monkeypatch.setattr(conversion, "CONVERSIONS", {})
-    root = Path(__file__).resolve().parents[2]
-    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
-    source = tmp_path / "builtins.py"
-    source.write_text(render(rational_catalog_program, mapping=python_presentation_mapping))
-    return runpy.run_path(str(source), run_name="egglog.builtins")
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)

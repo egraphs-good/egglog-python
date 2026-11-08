@@ -17,23 +17,19 @@ from `egglog`, marks an expected host primitive non-match.
 The native Python-object provider installs its real custom sort and primitives
 inside each transport. The ordinary `GetBuiltins` request exports their configured
 `BuiltinCatalog` and rejects incomplete descriptions; builtin signatures come from
-their native owners. `scripts/generate_builtin_catalog.py --extension PATH` loads
+their native owners. `scripts/export_builtin_catalog.py --extension PATH` loads
 the compiled transport directly, without importing the high-level package.
-The Python generator joins that semantic catalog to its local presentation map;
-the map does not repeat native signatures.
+Handwritten `builtins.py` declarations use `BuiltinExpr`, `@method` and
+`@function` with native callable keys. The shared metaclass validates their
+headers against the catalog and retains the native signatures.
 
-The packaged `_builtin_catalog.pb` and `builtins.py` are generated outputs. The Python source uses the same `BuiltinExpr`,
-`@method` and `@function` declarations as user code, with native callable keys;
-it does not enumerate a second dynamic API. Value inspection and host conversion
-validation live in the handwritten `_builtin_values.py`.
-The PEP 517 backend builds a native bootstrap wheel, generates both resources
-through `GetBuiltins`, then packages them in the final wheel or source
-distribution. Cargo reuses the native compilation. `make builtin-bootstrap`
-uses the same path for development; use `uv build` for package builds rather
-than invoking maturin directly. This also works before either generated file
-exists. Wheels and source distributions contain the generated files; consumers need no
-protobuf generator at runtime. The SDK build dependency is read from the project's normal dependency
-declaration, so build and runtime use the same revision.
+The PEP 517 backend builds a native bootstrap wheel and exports
+`_builtin_catalog.pb` through `GetBuiltins` before packaging it. Cargo reuses
+the native compilation. Handwritten Python modules are packaged as ordinary
+source. `make builtin-bootstrap` uses the same path for development; use
+`uv build` rather than invoking maturin directly. This also works before the
+catalog file exists; importing `egglog` reads the packaged catalog without
+querying an engine or generating Python source.
 
 Programs, snapshots and history contain user definitions and refer to configured
 builtins by canonical keys. They do not contain builtin descriptor snapshots.

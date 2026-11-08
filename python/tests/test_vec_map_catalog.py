@@ -1,8 +1,6 @@
 """Ordinary container methods over the complete native-generated catalog."""
 
-import runpy
 from dataclasses import replace
-from pathlib import Path
 from typing import Literal
 
 import pytest
@@ -94,19 +92,6 @@ def test_vec_union_checks_native_equality_applicability_before_mutation():
 
     rejected(Vec[i64](i64(1)))
     rejected(Vec[Vec[Atom]](left))
-
-
-def test_generator_rejects_mismatched_signature_binder_counts(native_catalog_program):
-    render = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
-        "render_builtins"
-    ]
-    primitive = next(p for p in native_catalog_program.primitives if p.name == "egglog.core.i64.add")
-    signature = primitive.signature
-    assert signature is not None
-    for count in (1, 2**32 - 1):
-        signature.type_param_count = count
-        with pytest.raises(ValueError, match="Static signature requires all generic parameters in its sort closure"):
-            render(native_catalog_program)
 
 
 def test_ordinary_vec_map_methods_execute_and_reconstruct():

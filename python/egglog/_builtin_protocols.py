@@ -1,8 +1,7 @@
 """
 Python host codecs/protocols, not native callable signatures or sort records.
 
-Kept import-independent so the offline declaration generator can load this file without
-executing egglog's package initializer, runtime, or native extension.
+The Python declarations own their methods and host conversion hooks.
 """
 
 from fractions import Fraction
@@ -13,20 +12,19 @@ class ScalarProtocol(NamedTuple):
     literal_arm: str
     value_type: type[object]
     literal_types: tuple[type[object], ...]
-    hooks: tuple[tuple[str, type[object]], ...] = ()
     conversion_sort: str | None = None
 
 
 SCALAR_PROTOCOLS = {
-    "i64": ScalarProtocol("i64", int, (int,), (("__index__", int), ("__int__", int))),
-    "f64": ScalarProtocol("f64_bits", float, (float, int), (("__float__", float), ("__int__", int))),
+    "i64": ScalarProtocol("i64", int, (int,)),
+    "f64": ScalarProtocol("f64_bits", float, (float, int)),
     "String": ScalarProtocol("string", str, (str,)),
-    "bool": ScalarProtocol("bool", bool, (bool,), (("__bool__", bool),)),
-    "Unit": ScalarProtocol("unit", type(None), (), (("__bool__", bool),)),
+    "bool": ScalarProtocol("bool", bool, (bool,)),
+    "Unit": ScalarProtocol("unit", type(None), ()),
     "PyObject": ScalarProtocol("custom", object, (object,)),
-    "Rational": ScalarProtocol("rational", Fraction, (int, Fraction), (("__int__", int), ("__float__", float)), "i64"),
-    "BigInt": ScalarProtocol("big_int", int, (int,), (("__int__", int), ("__index__", int)), "i64"),
-    "BigRat": ScalarProtocol("big_rat", Fraction, (int, Fraction), (("__int__", int), ("__float__", float)), "i64"),
+    "Rational": ScalarProtocol("rational", Fraction, (int, Fraction), "i64"),
+    "BigInt": ScalarProtocol("big_int", int, (int,), "i64"),
+    "BigRat": ScalarProtocol("big_rat", Fraction, (int, Fraction), "i64"),
 }
 
 # Runtime forwarding policy, not evidence that a particular native method exists.
