@@ -24,7 +24,7 @@ def _one_observation(encoded: list[bytes]) -> pb.RunProgramOutput:
 
 def test_native_surface_contains_only_encoded_transport_and_host_provider():
     assert {name for name in vars(bindings) if not name.startswith("_")} == {"PrimitiveFailure"}
-    assert callable(bindings._export_pyobject_catalog)
+    assert callable(bindings._ProtoEngine.get_builtins)
     assert callable(bindings._ProtoEngine)
     assert callable(bindings._encode_scalar)
     assert callable(bindings._decode_scalar)
@@ -192,10 +192,7 @@ def _proof_program() -> pb.Program:
             pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Num")),
         ],
         constructors=[
-            *(
-                pb.Constructor(name=name, inputs=[0], output=1)
-                for name in ("N", "Goal", "Absent")
-            ),
+            *(pb.Constructor(name=name, inputs=[0], output=1) for name in ("N", "Goal", "Absent")),
         ],
         nodes=nodes,
         rulesets=[

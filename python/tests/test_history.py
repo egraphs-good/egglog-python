@@ -49,7 +49,7 @@ def test_history_choice_rejects_nonbooleans_before_creation(monkeypatch: pytest.
 
 def test_history_getter_uses_current_handle_and_preserves_owned_result(monkeypatch: pytest.MonkeyPatch) -> None:
     requests: list[pb.GetHistoryRequest] = []
-    expected = pb.Program(sorts=[pb.Sort(kind=Oneof("eq", "Owned"), doc="retained documentation")])
+    expected = pb.Program(sorts=[pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Owned"), doc="retained documentation")])
 
     class Transport:
         def create(self, encoded: bytes) -> bytes:

@@ -1,6 +1,10 @@
-.PHONY: all clean from-local mypy stubtest docs
+.PHONY: all clean from-local mypy stubtest docs builtin-bootstrap
 
 all: python/egglog/visualizer.js
+
+# Use the PEP 517 backend: compile, generate catalog/stubs, then package.
+builtin-bootstrap:
+	uv build --wheel --out-dir target/bootstrap-wheels
 
 
 

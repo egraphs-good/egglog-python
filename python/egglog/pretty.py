@@ -26,7 +26,6 @@ __all__ = [
     "pretty_ref",
 ]
 BLACK_MODE = black.Mode(line_length=180)
-_REF_BLACK_MODE = black.Mode(line_length=BLACK_MODE.line_length, string_normalization=False)
 
 # Special methods which we might want to use as functions
 # Mapping to the operator they represent for pretty printing them
@@ -116,6 +115,50 @@ def _format_pyobject(reference: Ref, bare: bool) -> str:
         return black.format_str(value, mode=BLACK_MODE).strip()
     except black.parsing.InvalidInput:
         return value
+
+
+def _run_parts(  # noqa: C901, PLR0912
+    reference: Ref, selected: pb.Run, until: list[int] | None = None
+) -> list[_RefFrame]:
+    """Render a run's selections, positional stop facts and scheduler in API order."""
+    owner = reference.owner
+    pieces: list[_RefFrame] = ["run("]
+    if len(selected.rulesets) > 1:
+        pieces.append("unstable_combine_rulesets(")
+    for index, selection in enumerate(selected.rulesets):
+        if selection.kind is None:
+            msg = "Cannot print a ruleset selection without a kind"
+            raise ValueError(msg)
+        if index:
+            pieces.append(", ")
+        if selection.kind.field == "name":
+            binding = next(
+                (
+                    owner.ref("rulesets", index)
+                    for index in range(len(owner._slots["rulesets"]))
+                    if owner.ref("rulesets", index).read().name == selection.kind.value
+                ),
+                None,
+            )
+            if binding is not None:
+                pieces.append((binding, False, False))
+            elif len(selected.rulesets) != 1 or selection.kind.value:
+                pieces.append(repr(selection.kind.value))
+        else:
+            pieces.append((reference, selection.kind.value))
+    if len(selected.rulesets) > 1:
+        pieces.append(")")
+    if until:
+        if len(pieces) == 1:
+            pieces.append("None")
+        for fact in until:
+            pieces.extend([", ", (owner.ref("nodes", fact), False, False)])
+    if selected.scheduler:
+        if len(pieces) > 1:
+            pieces.append(", ")
+        pieces.append(f"scheduler={selected.scheduler!r}")
+    pieces.append(")")
+    return pieces
 
 
 def pretty_ref(  # noqa: C901, PLR0912
@@ -261,7 +304,7 @@ def pretty_ref(  # noqa: C901, PLR0912
                 if index:
                     pieces.append(", ")
                 pieces.append((rule_owner.ref("rules", rule_index), False, False))
-            if isinstance(record, pb.RulesetBinding) and record.name:
+            if isinstance(record, pb.RulesetBinding):
                 pieces.append((", " if value.rules else "") + f"name={record.name!r}")
             pieces.append(")")
         elif isinstance(record, pb.Command):
@@ -285,38 +328,7 @@ def pretty_ref(  # noqa: C901, PLR0912
                     ")",
                 ]
             elif record.kind.field == "run":
-                selected = record.kind.value
-                pieces = ["run("]
-                if len(selected.rulesets) > 1:
-                    pieces.append("unstable_combine_rulesets(")
-                for index, selection in enumerate(selected.rulesets):
-                    if selection.kind is None:
-                        msg_0 = "Cannot print a ruleset selection without a kind"
-                        raise ValueError(msg_0)
-                    if index:
-                        pieces.append(", ")
-                    if selection.kind.field == "name":
-                        binding = next(
-                            (
-                                owner.ref("rulesets", index)
-                                for index in range(len(owner._slots["rulesets"]))
-                                if owner.ref("rulesets", index).read().name == selection.kind.value
-                            ),
-                            None,
-                        )
-                        if binding is not None:
-                            pieces.append((binding, False, False))
-                        elif len(selected.rulesets) != 1 or selection.kind.value:
-                            pieces.append(repr(selection.kind.value))
-                    else:
-                        pieces.append((reference, selection.kind.value))
-                if len(selected.rulesets) > 1:
-                    pieces.append(")")
-                if selected.scheduler:
-                    if len(pieces) > 1:
-                        pieces.append(", ")
-                    pieces.append(f"scheduler={selected.scheduler!r}")
-                pieces.append(")")
+                pieces = _run_parts(reference, record.kind.value)
             elif record.kind.field == "bind_scheduler":
                 binding = record.kind.value
                 scheduler_options = binding.back_off
@@ -331,7 +343,16 @@ def pretty_ref(  # noqa: C901, PLR0912
                 pieces = [f"bind_scheduler({binding.name!r}, back_off({', '.join(settings)}))"]
             elif record.kind.field == "loop":
                 control = record.kind.value
-                if control.until:
+                child = control.body[0].kind if len(control.body) == 1 else None
+                if (
+                    control.until
+                    and control.has_field("max_iterations")
+                    and control.max_iterations == 1
+                    and child is not None
+                    and child.field == "run"
+                ):
+                    pieces = _run_parts(reference, child.value, control.until)
+                elif control.until:
                     limit = f"max_iterations={control.max_iterations}, " if control.has_field("max_iterations") else ""
                     pieces = [f"loop({limit}body=seq("]
                     for index, child in enumerate(control.body):
@@ -974,10 +995,11 @@ def pretty_ref(  # noqa: C901, PLR0912
         frames.extend(reversed(pieces))
     program = "\n".join([*statements, "".join(output)])
     # Formatting is recursive; deep records retain the iterative raw display.
-    if format_output and len(program) > BLACK_MODE.line_length:
+    if format_output:
         try:
-            return black.format_str(program, mode=_REF_BLACK_MODE).strip()
-        except (black.parsing.InvalidInput, RecursionError):
+            program = ast.unparse(ast.parse(program))
+            return black.format_str(program, mode=BLACK_MODE).strip()
+        except (SyntaxError, black.parsing.InvalidInput, RecursionError):
             pass
     return program
 

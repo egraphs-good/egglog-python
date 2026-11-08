@@ -181,7 +181,7 @@ def test_runtime_error_keeps_observation_prefix_when_terminal_callback_returns_f
     assert terminal.result.value.site is not None
     assert len(terminal.result.value.context.commands) == 1
     assert terminal.result.value.context.commands[0].kind == Oneof(
-        "action", pb.Action(kind=Oneof("panic", "streamed runtime marker"))
+        "action", pb.Action(kind=Oneof[Literal["panic"], str]("panic", "streamed runtime marker"))
     )
     assert terminal.result.value.location == pb.CommandLocation(path=[1])
     assert caught.value.__dict__["_egglog_proto_error"] == terminal.result.value

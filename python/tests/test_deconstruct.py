@@ -1,13 +1,14 @@
 # mypy: disable-error-code="empty-body"
 from __future__ import annotations
 
+from collections.abc import Callable
+from fractions import Fraction
 from functools import partial
-from typing import ClassVar
+from typing import ClassVar, assert_type
 
 import pytest
 
 from egglog import *
-from egglog.egraph import to_runtime_expr
 
 
 class X(Expr):
@@ -123,11 +124,30 @@ def test_callable(expr, fn, args):
 def test_callable_generic_applied():
     entries = Vec(Pair(i64(1), X()))
     expression = Map.from_pairs(entries)
-    assert get_callable_args(expression, Map[i64, X].from_pairs) == (to_runtime_expr(entries),)
+    assert get_callable_args(expression, Map[i64, X].from_pairs) == (entries,)
     assert get_callable_args(Vec(i64(1)), Vec[i64]) is None
 
 
 def test_callable_generic_applied_method():
     vector = Vec[i64].empty()
-    assert get_callable_args(vector.push(i64(1)), Vec[i64].push) == (to_runtime_expr(vector), to_runtime_expr(i64(1)))
+    assert get_callable_args(vector.push(i64(1)), Vec[i64].push) == (vector, i64(1))
     assert get_callable_args(vector, Vec[i64].empty) is None
+
+
+def test_deconstruction_types() -> None:
+    assert_type(get_callable_args(X()), tuple[BaseExpr, ...] | None)
+    assert_type(get_callable_args(X(), X), tuple[()] | None)
+    assert_type(get_callable_args(X().m(X()), X.m), tuple[X, X] | None)
+    assert_type(get_callable_args(y(X(), i64(1)), y), tuple[X, i64] | None)
+    assert_type(get_callable_args(i64(1) + 2, i64.__add__), tuple[i64, i64] | None)
+    assert_type(get_callable_fn(f(X())), Callable[..., X | None] | None)
+    assert_type(get_literal_value(String("x")), str | None)
+    assert_type(get_literal_value(Bool(True)), bool | None)
+    assert_type(get_literal_value(i64(1)), int | None)
+    assert_type(get_literal_value(BigInt(1)), int | None)
+    assert_type(get_literal_value(f64(1.0)), float | None)
+    assert_type(get_literal_value(BigRat(1, 2)), Fraction | None)
+    assert_type(get_literal_value(Rational(1, 2)), Fraction | None)
+    assert_type(get_literal_value(PyObject("x")), object)
+    assert_type(get_literal_value(UnstableFn(f)), Callable[[X], X] | None)
+    assert_type(get_literal_value(X()), None)

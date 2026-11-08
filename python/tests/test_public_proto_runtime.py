@@ -170,11 +170,9 @@ def test_named_function_values_author_without_engine(monkeypatch: pytest.MonkeyP
         _ = symbolic.value
     apply = cast("RuntimeExpr", prefix).__getattr__("__call__")
     assert isinstance(apply, RuntimeFunction)
-    assert get_callable_fn(apply(i64(2))) == UnstableFn[i64, i64].__call__
-    assert get_callable_args(apply(i64(2)), UnstableFn[i64, i64].__call__) == (
-        to_runtime_expr(prefix),
-        to_runtime_expr(i64(2)),
-    )
+    applied = apply(i64(2))
+    assert applied is not None
+    assert get_callable_args(applied, UnstableFn[i64, i64].__call__) == (prefix, i64(2))
     with pytest.raises(TypeError, match="expects 1 arguments"):
         apply()
     with pytest.raises(TypeError, match="expects 1 arguments"):
@@ -357,8 +355,8 @@ def test_function_values_constructor_key_keeps_selected_table_bytes() -> None:
     value = Number(i64(1))
     graph = EGraph(union(wrap(value)).with_(value))
     ((key, result),) = graph.function_values(wrap).items()
-    assert get_callable_fn(key) == wrap
     assert get_callable_args(key, wrap) == get_callable_args(wrap(value), wrap)
+    assert get_callable_fn(key) == wrap
     assert get_callable_fn(result) == Number
     assert result == value
     assert result.tag() == "local Number"
@@ -636,6 +634,7 @@ def test_symbolic_getattr_public_bytes(monkeypatch: pytest.MonkeyPatch, tmp_path
     computed = receiver.__getattr__(name)
     arguments = get_callable_args(computed, A.__getattr__)
     assert arguments is not None
+    assert isinstance(arguments[1], String)
     assert arguments[1].__egg_ref__ == name.__egg_ref__
     for expression, expected in ((receiver.foo, "foo"), (computed, "ab")):
         graph.register(expression)
@@ -766,13 +765,13 @@ def test_bodyless_mutating_members_public_bytes() -> None:
         assert expr_parts(arguments[0]) == expr_parts(assigned)
         assert arguments[1].value == 4
     assert get_callable_fn(graph.extract(original)) == Mutable
-    original_arguments = get_callable_args(graph.extract(original))
+    original_arguments = get_callable_args(graph.extract(original), Mutable)
     assert original_arguments is not None
     assert original_arguments[0].value == 1
-    key_arguments = get_callable_args(graph.extract(key))
+    key_arguments = get_callable_args(graph.extract(key), Mutable)
     assert key_arguments is not None
     assert key_arguments[0].value == 2
-    value_arguments = get_callable_args(graph.extract(value))
+    value_arguments = get_callable_args(graph.extract(value), Mutable)
     assert value_arguments is not None
     assert value_arguments[0].value == 3
 
@@ -870,11 +869,13 @@ def test_scalar_call_children_are_retained_records() -> None:
     children = get_callable_args(expression)
     assert children is not None
     assert children[0].__egg_ref__ == leaf.__egg_ref__
-    assert tuple(child.value for child in children) == (1, 2)
+    assert tuple(to_runtime_expr(child).value for child in children) == (1, 2)
     assert get_callable_fn(expression) == i64.__add__
     selected_children = get_callable_args(expression, i64.__add__)
     assert selected_children is not None
-    assert tuple(child.__egg_ref__ for child in selected_children) == tuple(child.__egg_ref__ for child in children)
+    for child, original in zip(selected_children, children, strict=True):
+        assert isinstance(child, i64)
+        assert to_runtime_expr(child).__egg_ref__ == to_runtime_expr(original).__egg_ref__
     assert str(i64) == "i64"
 
 
@@ -1233,6 +1234,7 @@ def test_user_constructor_exact_names_and_retained_local_hooks() -> None:
     assert result.tag() == expression.tag() == "retained local method"
     arguments = get_callable_args(result)
     assert arguments is not None
+    assert isinstance(arguments[0], i64)
     assert arguments[0].value == 7
 
 

@@ -1,5 +1,9 @@
 /target
 
+# Derived from the compiled provider and authored presentation policy.
+/python/egglog/_builtin_catalog.pb
+/python/egglog/builtins.pyi
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 .pytest_cache/

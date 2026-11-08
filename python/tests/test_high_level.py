@@ -5018,7 +5018,7 @@ class TestCustomExtract:
             assert args is not None
             key = args[0]
             assert isinstance(key, Key)
-            value = callback_graph.lookup_function_value(cast("Key", key).size())
+            value = callback_graph.lookup_function_value(key.size())
             assert isinstance(value, i64)
             return int(value) + sum(children)
 

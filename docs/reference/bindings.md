@@ -15,10 +15,22 @@ operations return encoded messages. `PrimitiveFailure`, re-exported
 from `egglog`, marks an expected host primitive non-match.
 
 The native Python-object provider installs its real custom sort and primitives
-inside each transport. `_export_pyobject_catalog()` exports their configured
-`BuiltinCatalog` for generation; builtin signatures come from their native owners.
+inside each transport. The ordinary `GetBuiltins` request exports their configured
+`BuiltinCatalog` and rejects incomplete descriptions; builtin signatures come from
+their native owners. `scripts/generate_builtin_catalog.py --extension PATH` loads
+the compiled transport directly, without importing the high-level package.
 The Python generator joins that semantic catalog to its local presentation map;
 the map does not repeat native signatures.
+
+The packaged `_builtin_catalog.pb` and `builtins.pyi` are generated outputs.
+The PEP 517 backend builds a native bootstrap wheel, generates both resources
+through `GetBuiltins`, then packages them in the final wheel or source
+distribution. Cargo reuses the native compilation. `make builtin-bootstrap`
+uses the same path for development; use `uv build` for package builds rather
+than invoking maturin directly. This also works before either generated file
+exists. The SDK build dependency is read from the project's normal dependency
+declaration, so build and runtime use the same revision.
+
 Programs, snapshots and history contain user definitions and refer to configured
 builtins by canonical keys. They do not contain builtin descriptor snapshots.
 Callable definitions are setup records in `Program.constructors`,
@@ -86,10 +98,10 @@ Python callbacks must synchronize shared mutable state. The
 [high-level API](python-integration.md#thread-safety) also requires initialization
 before concurrent use.
 
-## Current migration limits
+## Frontend services
 
-Notebook text needs the shared source-to-protobuf producer exposed to Python.
-CSV input and replayable source recording remain unfinished. Visualization reads
-the exported snapshot without a native serializer. Python custom extraction
-callbacks need shared host-model registration; they do not use a second native
-engine or extractor API.
+CSV input submits ordinary actions. Source export derives lazily from accepted
+input history and reports unsupported programs at export; failed inputs need not
+replay exactly. Visualization reads the exported snapshot without a native
+serializer. Python custom extraction callbacks register scoped host models
+through the transport, sharing the engine's extraction path.

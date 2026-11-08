@@ -22,7 +22,9 @@ from egglog import (
     Vec,
     bindings,
     conversion,
+    convert,
     eq,
+    expr_parts,
     f64,
     i64,
 )
@@ -30,6 +32,7 @@ from egglog._catalog import builtin_catalog
 from egglog._presentation import CallKind, CallPresentation, Parameter, Presentation
 from egglog._program import Builder, Ref, StructuralView, pack
 from egglog.deconstruct import get_callable_args, get_callable_fn, get_literal_value
+from egglog.egraph import to_runtime_expr
 from egglog.egraph_state import EggSmolError
 from egglog.runtime import RuntimeExpr, RuntimeFunction, resolve_type_annotation
 from egglog.type_constraint_solver import TypeConstraintError
@@ -44,7 +47,9 @@ def test_append_consuming_receiver_and_free_call_reconstruction():
         assert args is not None
         assert fn is not None
         assert len(args) == arity
-        assert StructuralView(fn(*args).__egg_ref__) == StructuralView(call.__egg_ref__)
+        rebuilt = fn(*args)
+        assert rebuilt is not None
+        assert expr_parts(rebuilt) == expr_parts(call)
         assert ".append(" in str(call)
     declaration = builtin_catalog().definitions[("callable", "egglog.core.vec.append")]
     free = RuntimeFunction(declaration)
@@ -65,7 +70,9 @@ def test_append_consuming_receiver_and_free_call_reconstruction():
     assert get_callable_args(zero) == ()
     fn = get_callable_fn(zero)
     assert fn is not None
-    assert StructuralView(fn().__egg_ref__) == StructuralView(zero.__egg_ref__)
+    rebuilt = fn()
+    assert rebuilt is not None
+    assert expr_parts(rebuilt) == expr_parts(zero)
 
 
 def test_vec_union_checks_native_equality_applicability_before_mutation():
@@ -117,7 +124,9 @@ def test_ordinary_vec_map_methods_execute_and_reconstruct():
         fn, args = get_callable_fn(call), get_callable_args(call)
         assert fn is not None
         assert args is not None
-        assert StructuralView(fn(*args).__egg_ref__) == StructuralView(call.__egg_ref__)
+        rebuilt = fn(*args)
+        assert rebuilt is not None
+        assert expr_parts(rebuilt) == expr_parts(call)
         with pytest.raises(ExprValueError):
             _ = call.value
         assert tuple(value.value for value in graph.extract(call).value) == expected
@@ -141,7 +150,9 @@ def test_ordinary_vec_map_methods_execute_and_reconstruct():
     fn, args = get_callable_fn(removed), get_callable_args(removed)
     assert fn is not None
     assert args is not None
-    assert StructuralView(fn(*args).__egg_ref__) == StructuralView(removed.__egg_ref__)
+    rebuilt = fn(*args)
+    assert rebuilt is not None
+    assert expr_parts(rebuilt) == expr_parts(removed)
     assert {k.value: v.value for k, v in graph.extract(removed).value.items()} == {2: 9}
     graph.check(eq(mapping.remove(i64(42))).to(mapping))
     assert graph.check_bool(mapping.contains(i64(1)))
@@ -205,7 +216,9 @@ def test_zero_append_specialization_is_stable_and_structural(monkeypatch):
         assert isinstance(runtime_fn, RuntimeFunction)
         assert fn != RuntimeFunction(declaration)
         assert [index for index, _ in runtime_fn.__egg_type_bindings__] == [0]
-        assert StructuralView(fn().__egg_ref__) == StructuralView(original.__egg_ref__)
+        rebuilt = fn()
+        assert rebuilt is not None
+        assert expr_parts(rebuilt) == expr_parts(original)
         packet = pack([original.__egg_ref__])
         imported = RuntimeExpr(
             Builder
@@ -239,25 +252,26 @@ def test_zero_append_conflicts_and_named_partial_roundtrip():
     # RuntimeClass supports parameterized checks; MyPy rejects their Python syntax intrinsically.
     assert isinstance(fn(), Vec[i64])  # type: ignore[misc]
     with pytest.raises(TypeConstraintError):
-        UnstableFn[Vec[String]](fn)
-    for named in [UnstableFn(fn), UnstableFn[Vec[i64]](fn)]:
-        packet = pack([named.__egg_ref__])
-        decoded = RuntimeExpr(
-            Builder
-            .from_program(
-                pb.Program.from_binary(packet.program.to_binary()), environment=named.__egg_ref__.owner._environment
-            )
-            .publish()
-            .ref("nodes", packet.indices[0])
+        convert(fn, UnstableFn[Vec[String]])
+    named = convert(fn, UnstableFn[Vec[i64]])
+    assert expr_parts(UnstableFn(named.value)) == expr_parts(named)
+    packet = pack([named.__egg_ref__])
+    decoded = RuntimeExpr(
+        Builder
+        .from_program(
+            pb.Program.from_binary(packet.program.to_binary()), environment=named.__egg_ref__.owner._environment
         )
-        restored = get_literal_value(decoded)
-        assert isinstance(restored, RuntimeFunction)
-        assert restored == fn
-        assert hash(restored) == hash(fn)
-        restored_call, original_call = restored(), fn()
-        assert restored_call is not None
-        assert original_call is not None
-        assert StructuralView(restored_call.__egg_ref__) == StructuralView(original_call.__egg_ref__)
+        .publish()
+        .ref("nodes", packet.indices[0])
+    )
+    restored = get_literal_value(decoded)
+    assert isinstance(restored, RuntimeFunction)
+    assert restored == fn
+    assert hash(restored) == hash(fn)
+    restored_call, original_call = restored(), fn()
+    assert restored_call is not None
+    assert original_call is not None
+    assert StructuralView(restored_call.__egg_ref__) == StructuralView(original_call.__egg_ref__)
     with pytest.raises(TypeConstraintError, match="Unresolved"):
         RuntimeFunction(declaration)()
 
@@ -302,8 +316,8 @@ def test_minimal_result_binding_preserves_input_polymorphism(selected_view, nati
     with pytest.raises(TypeConstraintError):
         get_callable_fn(_stored_call(reference, [i64(1)], Pair[f64, String]))
     # A concrete named Func intentionally also fixes its remaining input type.
-    concrete = UnstableFn[Pair[i64, String], i64](first)
-    decoded = get_literal_value(concrete)
+    concrete = convert(first, UnstableFn[Pair[i64, String], i64])
+    decoded = get_literal_value(to_runtime_expr(concrete))
     assert isinstance(decoded, RuntimeFunction)
     assert [index for index, _ in decoded.__egg_type_bindings__] == [0, 1]
     assert isinstance(decoded(i64(3)), Pair[i64, String])  # type: ignore[misc]  # RuntimeClass parameterized check.
@@ -370,7 +384,9 @@ def test_method_result_binding_preserves_independent_input_polymorphism(monkeypa
     assert hash(first) == hash(second)
     args = get_callable_args(original)
     assert args is not None
-    assert StructuralView(first(*args).__egg_ref__) == StructuralView(original.__egg_ref__)
+    rebuilt = first(*args)
+    assert rebuilt is not None
+    assert expr_parts(rebuilt) == expr_parts(original)
     assert isinstance(first(receiver, f64(2.0)), Pair[f64, String])  # type: ignore[misc]  # RuntimeClass parameterized check.
     assert get_callable_fn(_stored_call(reference, [receiver, i64(1)], Pair[i64, i64])) != first
     with pytest.raises((TypeConstraintError, TypeError, ConvertError)):

@@ -115,7 +115,7 @@ def test_higher_order_map_fold_and_maybe_callbacks_execute_as_bytes(monkeypatch)
         args = get_callable_args(expression)
         assert args is not None
         # Deconstruction returns runtime presentations of the authored container classes.
-        assert args[1:] == (initial, mapping)  # type: ignore[comparison-overlap]
+        assert args[1:] == (initial, mapping)
         packed = pack([expression.__egg_ref__])
         detached = RuntimeExpr(
             Builder

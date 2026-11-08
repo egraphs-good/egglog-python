@@ -1,5 +1,6 @@
 """Builtin descriptors remain owned typing context, never input declarations."""
 
+from importlib.resources import files
 from typing import Literal
 
 import pytest
@@ -75,7 +76,7 @@ def test_conflicting_provider_signatures_cannot_be_combined() -> None:
 def test_backend_wide_get_builtins_matches_the_packaged_native_catalog() -> None:
     transport = bindings._ProtoEngine()
     actual = pb.BuiltinCatalog.from_binary(transport.get_builtins(pb.GetBuiltinsRequest().to_binary()))
-    assert actual.to_binary() == getattr(bindings, "_export_pyobject_catalog")()  # noqa: B009
+    assert actual.to_binary() == files("egglog").joinpath("_builtin_catalog.pb").read_bytes()
     assert {primitive.name for primitive in actual.primitives} == {
         reference.read().name for reference in builtin_catalog().roots if reference.role == "primitives"
     }

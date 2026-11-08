@@ -391,7 +391,7 @@ dependencies = [
 [[package]]
 name = "egglog-experimental"
 version = "3.0.0"
-source = "git+https://github.com/egraphs-good/egglog-experimental.git?rev=ef70d3a6c8c5af2fd3eaac01fa81e64a23aa32e1#ef70d3a6c8c5af2fd3eaac01fa81e64a23aa32e1"
+source = "git+https://github.com/egraphs-good/egglog-experimental.git?rev=b1b9b6149078a7400d5cdeb1f1b6994a7b4a4eeb#b1b9b6149078a7400d5cdeb1f1b6994a7b4a4eeb"
 dependencies = [
  "csv",
  "egglog",
@@ -416,7 +416,7 @@ source = "git+https://github.com/egraphs-good/egglog.git?rev=f766cabf3f0602ed690
 [[package]]
 name = "egglog-proto"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-experimental.git?rev=ef70d3a6c8c5af2fd3eaac01fa81e64a23aa32e1#ef70d3a6c8c5af2fd3eaac01fa81e64a23aa32e1"
+source = "git+https://github.com/egraphs-good/egglog-experimental.git?rev=b1b9b6149078a7400d5cdeb1f1b6994a7b4a4eeb#b1b9b6149078a7400d5cdeb1f1b6994a7b4a4eeb"
 dependencies = [
  "prost",
 ]

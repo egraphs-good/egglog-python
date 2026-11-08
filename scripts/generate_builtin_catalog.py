@@ -1,11 +1,11 @@
 """
 Package an actual native catalog export without importing the Python frontend.
 
-Export the actual configured native catalog first: Python's generation-time
-_export_pyobject_catalog includes its real host provider. This command consumes
-that binary snapshot; it never discovers signatures through an EGraph during
-import or authoring. --check is a byte-for-byte reproducibility gate, so changed
-native records cannot be silently hidden.
+Use --extension to load the compiled transport directly and request its strict
+GetBuiltins catalog, including the actual Python-object provider. An existing
+binary export is also accepted. The high-level egglog package is never imported.
+--check is a byte-for-byte reproducibility gate, so changed native records cannot
+be silently hidden.
 """
 
 from __future__ import annotations
@@ -14,6 +14,8 @@ import argparse
 import ast
 import hashlib
 import importlib
+import importlib.machinery
+import importlib.util
 import json
 import keyword
 import runpy
@@ -438,6 +440,7 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                 msg = "Python initializer output differs from owner"
                 raise ValueError(msg)
             rendered_parameters = []
+            canonical_parameters = []
             bound_name = "" if free else "cls" if view.kind == CallKind.CLASS_METHOD else "self"
             parameter_names = {bound_name} if bound_name else set()
             has_default = False
@@ -452,6 +455,7 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                     msg = "A uniform tail must be the final parameter without a default"
                     raise ValueError(msg)
                 expected_sort = signature.varargs[0] if tail else effective_inputs[parameter.core_input]
+                canonical = sort_type(expected_sort, parameters=parameters, used_parameters=used_parameters)
                 annotation = sort_type(
                     expected_sort, input_type=True, parameters=parameters, used_parameters=used_parameters
                 )
@@ -482,6 +486,15 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                     msg = "Required parameter follows a default"
                     raise ValueError(msg)
                 rendered_parameters.append(f"{'*' if tail else ''}{parameter_name}: {annotation}{default}")
+                canonical_parameters.append(f"{'*' if tail else ''}{parameter_name}: {canonical}{default}")
+            # Inspection infers stored symbolic children from the first overload;
+            # ordinary calls retain the existing conversion-friendly signature.
+            parameter_variants = (
+                [canonical_parameters, rendered_parameters]
+                if canonical_parameters != rendered_parameters
+                else [rendered_parameters]
+            )
+            overloaded = len(parameter_variants) > 1
             prefix = "    @property\n" if view.kind == CallKind.PROPERTY else ""
             if view.kind == CallKind.CLASS_METHOD:
                 prefix = "    @classmethod\n"
@@ -497,13 +510,15 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                 functions[name] = (
                     "".join(f'{variable} = TypeVar("{variable}", bound=BaseExpr)\n' for variable in parameters)
                     + ("\n" if parameters else "")
-                    + f"def {name}({', '.join(rendered_parameters)}) -> {result_type}: ...\n"
+                    + "\n".join(
+                        ("@overload\n" if overloaded else "")
+                        + f"def {name}({', '.join(arguments)}) -> {result_type}: ..."
+                        for arguments in parameter_variants
+                    )
+                    + "\n"
                 )
                 continue
-            generated = {
-                name: prefix
-                + f"    def {name}({bound_name}{', ' if rendered_parameters else ''}{', '.join(rendered_parameters)}) -> {result_type}: ..."
-            }
+            generated = {name: prefix}
             if name in _REFLECTED and family_name in _SCALARS:
                 if (
                     (signature.varargs and not specialized)
@@ -521,12 +536,16 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                     and all(sort_type(argument) == owner for argument in effective_inputs)
                 ):
                     reverse = "__r" + name[2:]
-                    annotation = sort_type(effective_inputs[view.params[0].core_input], input_type=True)
-                    generated[reverse] = f"    def {reverse}(self, other: {annotation}) -> {output}: ..."
-            for method_name, text in generated.items():
+                    generated[reverse] = ""
+            for method_name, decorators in generated.items():
                 if method_name in methods[family_name]:
                     raise ValueError(f"Python member collision: {owner}.{method_name}")
-                methods[family_name][method_name] = text
+                methods[family_name][method_name] = "\n".join(
+                    decorators
+                    + ("    @overload\n" if overloaded else "")
+                    + f"    def {method_name}({bound_name}{', ' if arguments else ''}{', '.join(arguments)}) -> {result_type}: ..."
+                    for arguments in parameter_variants
+                )
 
     for family_name, family_method_variables in method_variables.items():
         for variable in family_method_variables:
@@ -714,10 +733,12 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                     lines.append("    def __init__(self, _unavailable: Never, /) -> None: ...")
                     reserved.add("__init__")
                 elif protocol.value_type.__name__ == "Fraction":
+                    if not methods[family_name]["__init__"].startswith("    @overload\n"):
+                        methods[family_name]["__init__"] = "    @overload\n" + methods[family_name]["__init__"]
                     methods[family_name]["__init__"] = (
-                        "    @overload\n"
-                        "    def __init__(self, value: int | Fraction, /) -> None: ...\n"
-                        "    @overload\n" + methods[family_name]["__init__"]
+                        methods[family_name]["__init__"]
+                        + "\n    @overload\n"
+                        + "    def __init__(self, value: int | Fraction, /) -> None: ..."
                     )
                 lines.extend([
                     '    __match_args__ = ("value",)',
@@ -800,12 +821,23 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("export", type=Path)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("export", type=Path, nargs="?")
+    source.add_argument("--extension", type=Path, help="compiled bindings extension (no frontend import)")
     parser.add_argument("--output", type=Path, default=_PACKAGE / "_builtin_catalog.pb")
     parser.add_argument("--stubs-output", type=Path, default=_PACKAGE / "builtins.pyi")
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
-    encoded = args.export.read_bytes()
+    if args.extension is None:
+        encoded = args.export.read_bytes()
+    else:
+        loader = importlib.machinery.ExtensionFileLoader("bindings", str(args.extension.resolve()))
+        spec = importlib.util.spec_from_file_location("bindings", args.extension, loader=loader)
+        if spec is None:
+            parser.error("Cannot load the compiled bindings extension")
+        extension = importlib.util.module_from_spec(spec)
+        loader.exec_module(extension)
+        encoded = extension._ProtoEngine().get_builtins(pb.GetBuiltinsRequest().to_binary())
     program = pb.BuiltinCatalog.from_binary(encoded)
     names: set[tuple[str, str]] = set()
     declarations: list[pb.PrimitiveSort | pb.Primitive] = [*program.primitive_sorts, *program.primitives]

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, TypeVar, Unpack, cast, overload
 
 from egglog_proto.egglog.v1 import egglog_pb as pb
+from typing_extensions import TypeVarTuple
 
 from . import bindings
 from ._builtin_protocols import SCALAR_PROTOCOLS
@@ -15,6 +16,15 @@ from ._program import Ref, StructuralView
 from .declarations import Ident
 from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction, _class_for_sort, _definition_at
 from .type_constraint_solver import infer_call_bindings, infer_sort, substitute_sort
+
+if TYPE_CHECKING:
+    from fractions import Fraction
+
+    from .builtins import BigInt, BigRat, Bool, PyObject, Rational, String, UnstableFn, f64, i64
+    from .egraph import BaseExpr, Expr
+
+T = TypeVar("T", bound="BaseExpr")
+TS = TypeVarTuple("TS", default=Unpack[tuple["BaseExpr", ...]])
 
 __all__ = [
     "get_callable_args",
@@ -53,6 +63,42 @@ def _pyobject_value(expr: RuntimeExpr) -> object:
         msg = "PyObject value requires its canonical nullary family and childless Custom payload"
         raise ValueError(msg)
     return cloudpickle.loads(value.value.payload)
+
+
+@overload
+def get_literal_value(x: String) -> str | None: ...
+
+
+@overload
+def get_literal_value(x: Bool) -> bool | None: ...
+
+
+@overload
+def get_literal_value(x: i64 | BigInt) -> int | None: ...
+
+
+@overload
+def get_literal_value(x: f64) -> float | None: ...
+
+
+@overload
+def get_literal_value(x: BigRat | Rational) -> Fraction | None: ...
+
+
+@overload
+def get_literal_value(x: PyObject) -> object: ...
+
+
+@overload
+def get_literal_value(x: UnstableFn[T, *TS]) -> Callable[[Unpack[TS]], T] | None: ...
+
+
+@overload
+def get_literal_value(x: Expr) -> None: ...
+
+
+@overload
+def get_literal_value(x: object) -> object: ...
 
 
 def get_literal_value(x: object) -> object:  # noqa: C901, PLR0912 -- payload variants retain their host protocols
@@ -319,15 +365,23 @@ def _deconstruct_call(x: RuntimeExpr) -> tuple[RuntimeClass | RuntimeFunction, t
     return RuntimeFunction(declaration, view_index, owner, type_bindings=type_bindings), tuple(ordered)
 
 
-def get_callable_fn(x: object) -> Callable[..., Any] | None:
+def get_callable_fn(x: T) -> Callable[..., T | None] | None:
     """Get the generated callable responsible for a call expression."""
     if not isinstance(x, RuntimeExpr):
         raise TypeError(f"Expected Expression, got {type(x).__name__}")
     result = _deconstruct_call(x)
-    return None if result is None else result[0]
+    return None if result is None else cast("Callable[..., T | None]", result[0])
 
 
-def get_callable_args(x: object, fn: object = None) -> tuple[RuntimeExpr, ...] | None:
+@overload
+def get_callable_args(x: BaseExpr, fn: None = ...) -> tuple[BaseExpr, ...] | None: ...
+
+
+@overload
+def get_callable_args(x: BaseExpr, fn: Callable[[Unpack[TS]], BaseExpr | None]) -> tuple[*TS] | None: ...
+
+
+def get_callable_args(x: object, fn: object = None) -> tuple[object, ...] | None:
     """Return symbolic children in Python argument order, without evaluation."""
     if not isinstance(x, RuntimeExpr):
         raise TypeError(f"Expected Expression, got {type(x).__name__}")

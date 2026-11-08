@@ -129,6 +129,7 @@ long_line = (
 )
 
 r = ruleset(name="r")
+unnamed_rules = ruleset(rewrite(g()).to(h()))
 
 bo = back_off(ban_length=5)
 bo_persistent = back_off(ban_length=5).persistent()
@@ -203,7 +204,7 @@ _A_2 + _A_3""",
     pytest.param(expr_action(A()), "A()", id="action"),
     pytest.param(set_(p()).to(i64(1)), "set_(p()).to(i64(1))", id="set"),
     pytest.param(union(g()).with_(h()), "union(g()).with_(h())", id="union"),
-    pytest.param(let("x", A()), "set_(x).to(A())", id="let"),
+    pytest.param(let("x", A()), 'let("x", A())', id="let"),
     pytest.param(expr_action(A()), "A()", id="expr action"),
     pytest.param(delete(p()), "delete(p())", id="delete"),
     pytest.param(panic("oh no"), 'panic("oh no")', id="panic"),
@@ -211,7 +212,11 @@ _A_2 + _A_3""",
     pytest.param(expr_fact(A()), "A()", id="expr fact"),
     pytest.param(eq(g()).to(h()), "eq(g()).to(h())", id="eq"),
     # Ruleset
-    pytest.param(ruleset(rewrite(g()).to(h())), "ruleset(rewrite(g()).to(h()))", id="ruleset"),
+    pytest.param(
+        unnamed_rules,
+        f'ruleset(rewrite(g()).to(h()), name="{unnamed_rules.__egg_ident__}")',
+        id="ruleset",
+    ),
     # Functions
     pytest.param(f, "f", id="function"),
     pytest.param(A().method, "A().method", id="method"),
@@ -225,7 +230,7 @@ _A_2 + _A_3""",
 
 @pytest.mark.parametrize(("x", "s"), PARAMS)
 def test_str(x: RuntimeExpr, s: str) -> None:
-    assert ast.dump(ast.parse(str(x))) == ast.dump(ast.parse(s))
+    assert str(x) == s
 
 
 @pytest.mark.parametrize(
@@ -252,29 +257,32 @@ def test_rewrite_pretty_round_trip(original: RewriteOrRule) -> None:
 @pytest.mark.parametrize(
     ("schedule", "rendered"),
     [
-        pytest.param(r, 'ruleset(name="r")', id="ruleset with name"),
-        pytest.param(r.saturate(), 'ruleset(name="r").saturate()', id="saturate"),
-        pytest.param(r * 10, 'ruleset(name="r") * 10', id="repeat"),
-        pytest.param(r + r, 'seq(ruleset(name="r"), ruleset(name="r"))', id="sequence"),
-        pytest.param(seq(r, r, r), 'seq(ruleset(name="r"), ruleset(name="r"), ruleset(name="r"))', id="seq"),
-        pytest.param(run(r, h()), 'repeat(times=1, body=seq(ruleset(name="r")), until=[h()])', id="run"),
-        pytest.param(run(None, h()), "repeat(times=1, body=seq(run()), until=[h()])", id="default run with until"),
+        pytest.param(r, "ruleset(name={ruleset_name})", id="ruleset with name"),
+        pytest.param(r.saturate(), "run(ruleset(name={ruleset_name})).saturate()", id="saturate"),
+        pytest.param(r * 10, "run(ruleset(name={ruleset_name})) * 10", id="repeat"),
+        pytest.param(r + r, "seq(run(ruleset(name={ruleset_name})), run(ruleset(name={ruleset_name})))", id="sequence"),
+        pytest.param(
+            seq(r, r, r),
+            "seq(run(ruleset(name={ruleset_name})), run(ruleset(name={ruleset_name})), run(ruleset(name={ruleset_name})))",
+            id="seq",
+        ),
+        pytest.param(run(r, h()), "run(ruleset(name={ruleset_name}), h())", id="run"),
+        pytest.param(run(None, h()), "run(None, h())", id="default run with until"),
         pytest.param(
             run(None, h(), scheduler=bo),
-            "seq(bind_scheduler({scheduler_name}, back_off(ban_length=5)), "
-            "repeat(times=1, body=seq(run(scheduler={scheduler_name})), until=[h()]))",
+            "seq(bind_scheduler({scheduler_name}, back_off(ban_length=5)), run(None, h(), scheduler={scheduler_name}))",
             id="default run with scheduler",
         ),
         pytest.param(
             run(r, h(), scheduler=bo),
             "seq(bind_scheduler({scheduler_name}, back_off(ban_length=5)), "
-            'repeat(times=1, body=seq(run(ruleset(name="r"), scheduler={scheduler_name})), until=[h()]))',
+            "run(ruleset(name={ruleset_name}), h(), scheduler={scheduler_name}))",
             id="run with scheduler",
         ),
         pytest.param(
             bo.scope(run(r, scheduler=bo)),
             "seq(bind_scheduler({scheduler_name}, back_off(ban_length=5)), "
-            'run(ruleset(name="r"), scheduler={scheduler_name}))',
+            "run(ruleset(name={ruleset_name}), scheduler={scheduler_name}))",
             id="scoped scheduler",
         ),
         pytest.param(
@@ -299,20 +307,22 @@ def test_schedule_str(schedule: Schedule | BackOff, rendered: str) -> None:
         scheduler_name = name.value
         assert isinstance(scheduler_name, str)
         assert scheduler_name
-    expected = ast.parse(rendered.format(scheduler_name=repr(scheduler_name)))
+    expected = ast.parse(rendered.format(scheduler_name=repr(scheduler_name), ruleset_name=repr(f"{__name__}.r")))
     assert ast.dump(actual) == ast.dump(expected)
 
     if schedule is r:
+        anonymous = ruleset()
+        combined = unstable_combine_rulesets(r, name="")
         for selected, expected_source in [
-            (ruleset(), "ruleset()"),
+            (anonymous, f'ruleset(name="{anonymous.__egg_ident__}")'),
             (ruleset(name=""), 'ruleset(name="")'),
             (
                 unstable_combine_rulesets(r, name="joined"),
-                'unstable_combine_rulesets(ruleset(name="r"), name="joined")',
+                f'ruleset(name="{__name__}.joined")',
             ),
-            (unstable_combine_rulesets(r, name=""), 'unstable_combine_rulesets(ruleset(name="r"))'),
+            (combined, f'ruleset(name="{combined.__egg_ident__}")'),
         ]:
-            assert ast.dump(ast.parse(str(selected))) == ast.dump(ast.parse(expected_source))
+            assert str(selected) == expected_source
 
 
 @pytest.mark.parametrize(
@@ -327,7 +337,7 @@ def test_rule_eval_mode_pretty_round_trip(eval_mode: RuleEvalMode, option: str) 
     original = rule(rel(g()), name="mode rule", eval_mode=eval_mode).then(rel(h()))
     rendered = f'rule(rel(g()), name="mode rule"{option}).then(rel(h()))'
 
-    assert ast.dump(ast.parse(str(original))) == ast.dump(ast.parse(rendered))
+    assert str(original) == rendered
     assert eval(str(original), globals()) == original
 
 
@@ -335,7 +345,7 @@ def test_rule_no_decomp_pretty_round_trip() -> None:
     original = rule(rel(g()), name="no decomp rule", no_decomp=True).then(rel(h()))
     rendered = 'rule(rel(g()), name="no decomp rule", no_decomp=True).then(rel(h()))'
 
-    assert ast.dump(ast.parse(str(original))) == ast.dump(ast.parse(rendered))
+    assert str(original) == rendered
     assert eval(str(original), globals()) == original
 
 
@@ -497,6 +507,12 @@ def test_deep_pretty_stays_iterative_without_formatter(pretty_without_engine, mo
     record = packed.program.nodes[index]
     assert record.kind is not None
     assert record.kind.field == "call"
+    call_name = record.kind.value.func
+    leaf = packed.program.nodes[record.kind.value.args[0]].kind
+    assert leaf is not None
+    assert leaf.field == "call"
+    assert not leaf.value.args
+    leaf_name = leaf.value.func
     depth = 10_000
     for _ in range(depth):
         record.kind.value.args = [index]
@@ -506,4 +522,6 @@ def test_deep_pretty_stays_iterative_without_formatter(pretty_without_engine, mo
         pytest.fail("Deep record printing invoked the Python formatter")
 
     monkeypatch.setattr("egglog.pretty.black.format_str", forbidden)
-    assert pretty_ref(builder.publish().ref("nodes", index)) == "f(" * (depth + 1) + "A()" + ")" * (depth + 1)
+    assert pretty_ref(builder.publish().ref("nodes", index)) == (
+        f"{call_name}(" * (depth + 1) + f"{leaf_name}()" + ")" * (depth + 1)
+    )

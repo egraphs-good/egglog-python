@@ -12,14 +12,15 @@ from warnings import warn
 import anywidget
 import traitlets
 from egglog_proto.egglog.v1 import egglog_pb as pb
+from IPython import get_ipython
 from IPython.display import display
 
 from ._presentation import CallKind, presentation
 from ._program import Builder, Owner, _copy_record, _definition_key
-from .ipython_magic import IN_IPYTHON
 from .pretty import pretty_ref
 
 CURRENT_DIR = pathlib.Path(__file__).parent
+IN_IPYTHON = get_ipython() is not None
 
 
 class _Node(TypedDict):

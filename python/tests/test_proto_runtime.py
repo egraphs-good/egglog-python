@@ -128,9 +128,15 @@ def _required_oneof[T](kind: object, field: str, payload_type: type[T]) -> T:
 
 def _required_callable_args(x: object, fn: object = None) -> tuple[RuntimeExpr, ...]:
     """Require the existing deconstructor to match this known-call observation."""
+    assert isinstance(x, RuntimeExpr)
+    assert fn is None or isinstance(fn, RuntimeClass | RuntimeFunction)
     arguments = get_callable_args(x, fn)
     assert arguments is not None
-    return arguments
+    runtime_arguments = []
+    for argument in arguments:
+        assert isinstance(argument, RuntimeExpr)
+        runtime_arguments.append(argument)
+    return tuple(runtime_arguments)
 
 
 def _required_runtime_function(value: object) -> RuntimeFunction:
@@ -383,7 +389,9 @@ def test_pyobject_compatibility_adapter_and_consuming_calls(class_authoring_with
         arguments = get_callable_args(expression, target)
         assert arguments is not None
         assert get_callable_fn(expression) == target
-        assert StructuralView(target(*arguments).__egg_ref__) == StructuralView(expression.__egg_ref__)
+        rebuilt = target(*arguments)
+        assert rebuilt is not None
+        assert expr_parts(rebuilt) == expr_parts(expression)
     with pytest.raises(TypeError):
         fn(value=1)  # type: ignore[call-arg]
 
@@ -1166,7 +1174,7 @@ def test_numeric_mutating_member_keeps_its_receiver_and_aliases(class_authoring_
     assert alias is left
     assert left.__egg_ref__ != before.__egg_ref__
     assert right.__egg_ref__ is right_ref
-    assert get_callable_args(left, Mutable.__add__) == (to_runtime_expr(before), to_runtime_expr(right))
+    assert get_callable_args(left, Mutable.__add__) == (before, right)
 
 
 def test_detached_equality_uses_predicates_without_borrowing_members(class_authoring_without_engine):
@@ -2381,14 +2389,16 @@ def test_scalar_wave_specialized_view_permutation_and_zero_count(native_catalog_
     )
     result = target("left")
     assert [child.value for child in _required_callable_args(result)] == ["left", "right"]
-    assert str(result) == "join('left', 'right')"
+    assert str(result) == 'join("left", "right")'
     view = dataclasses.replace(views[0], tail_repetitions=0, params=())
     builder = Builder.from_builtins(native_catalog_program)
     builder.presentations.update(builtin_catalog().owner._presentations)
     builder.presentations["callable", declaration.name] = Presentation(views=(view, views[1]))
     owner = builder.publish()
     empty = RuntimeFunction(owner.ref("primitives", native_catalog_program.primitives.index(declaration)), 0)
-    assert get_callable_args(empty()) == ()
+    empty_result = empty()
+    assert empty_result is not None
+    assert get_callable_args(empty_result) == ()
     with pytest.raises(TypeError):
         empty("extra")
 
@@ -3351,16 +3361,13 @@ def test_vec_computed_value_is_not_locally_evaluated(vec_runtime):
     assert isinstance(pair, Pair[i64, f64])  # type: ignore[misc]
     assert isinstance(resolve_callable(computed_pair).read(), pb.Function)
     program = pack([pair.__egg_ref__]).program
-    assert [
-        declaration.name
-        for declaration in (
-            *program.constructors,
-            *program.functions,
-            *program.relations,
-            *program.user_defined_primitives,
-        )
-        if True
-    ] == [resolve_callable(computed_pair).read().name]
+    declarations: tuple[pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive, ...] = (
+        *program.constructors,
+        *program.functions,
+        *program.relations,
+        *program.user_defined_primitives,
+    )
+    assert [declaration.name for declaration in declarations] == [resolve_callable(computed_pair).read().name]
     assert {
         sort.kind.value.name for sort in program.sorts if sort.kind is not None and sort.kind.field == "primitive"
     } >= {"Pair", "i64", "f64"}
@@ -3776,7 +3783,7 @@ def test_owned_definition_lookup_keeps_exact_refs_without_detaching(monkeypatch,
             pb.Sort(
                 kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))
             ),
-            pb.Sort(kind=Oneof("eq", name)),
+            pb.Sort(kind=Oneof[Literal["eq"], str]("eq", name)),
         ],
         relations=[pb.Relation(name=name, doc="retained documentation")],
         nodes=[pb.Node(kind=Oneof[Literal["var"], str]("var", "origin"))],
@@ -3790,9 +3797,7 @@ def test_owned_definition_lookup_keeps_exact_refs_without_detaching(monkeypatch,
         "primitive_sort": native.ref("primitive_sorts", 0),
         "eq_sort": original.ref("sorts", 1),
     }
-    (*requested.constructors, *requested.functions, *requested.relations, *requested.user_defined_primitives)[
-        0
-    ].name = "changed caller input"
+    requested.relations[0].name = "changed caller input"
     detached = expected["callable"].read()
     detached.name = "changed detached record"
     detached.doc = "changed detached documentation"
@@ -3933,8 +3938,7 @@ def test_member_deconstruction_filter_ignores_receiver_binding():
     bound_member = RuntimeExpr.__getattr__(to_runtime_expr(value), "__add__")
     assert get_callable_fn(expression) != bound_member
     for member in (bound_member, i64.__add__):
-        children = get_callable_args(expression, member)
-        assert children is not None
+        children = _required_callable_args(expression, member)
         assert [child.value for child in children] == [1, 2]
 
 
@@ -4069,16 +4073,13 @@ def test_named_eager_binders_keep_slots_and_callee_closure():
     inner_reference = resolve_callable(inner)
     before = pack([inner_reference]).program.to_binary()
     program = pack([reference]).program
-    inner_copy = next(
-        declaration
-        for declaration in (
-            *program.constructors,
-            *program.functions,
-            *program.relations,
-            *program.user_defined_primitives,
-        )
-        if declaration.name == inner_reference.read().name
+    declarations: tuple[pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive, ...] = (
+        *program.constructors,
+        *program.functions,
+        *program.relations,
+        *program.user_defined_primitives,
     )
+    inner_copy = next(declaration for declaration in declarations if declaration.name == inner_reference.read().name)
     assert isinstance(inner_copy, pb.UserDefinedPrimitive)
     assert pack([inner_reference]).program.to_binary() == before
     inner_body = RuntimeExpr(inner_reference.owner.ref("nodes", inner_reference.read().body))
@@ -4236,7 +4237,7 @@ def test_free_ruleset_body_is_a_deferred_constructor_rewrite(subsume_body):
         assert get_current_ruleset() is ambient
     assert calls == [(destination, "unused", "value")]
     assert isinstance(resolve_callable(body).read(), pb.Constructor)
-    arguments = get_callable_args(expression)
+    arguments = get_callable_args(expression, body)
     assert arguments is not None
     assert [argument.value for argument in arguments] == [9, 4]
     body(i64(8), i64(5))
@@ -5281,7 +5282,9 @@ def test_reverse_args_members_map_heterogeneous_inputs_and_mutation(class_author
         to_runtime_expr(String("tag")),
         to_runtime_expr(i64(4)),
     )
-    assert expr_parts(ReversedSource.make(source, count=i64(4), label="tag")) == expr_parts(expression)
+    recreated = ReversedSource.make(source, count=i64(4), label="tag")
+    assert recreated is not None
+    assert expr_parts(recreated) == expr_parts(expression)
     with pytest.raises(ConvertError, match="Cannot convert"):
         source.make(i64(9))  # type: ignore[arg-type]
     with pytest.raises(ConvertError, match="Cannot convert"):
@@ -5320,10 +5323,7 @@ def test_reverse_args_members_map_heterogeneous_inputs_and_mutation(class_author
     assert source.replace("next") is None
     replacement = presentation(resolve_callable(ReversedSource.replace)).views[0]
     assert replacement.receiver == replacement.mutates == 1
-    assert get_callable_args(source, ReversedSource.replace) == (
-        to_runtime_expr(snapshot),
-        to_runtime_expr(String("next")),
-    )
+    assert get_callable_args(source, ReversedSource.replace) == (snapshot, String("next"))
 
 
 def test_reverse_args_initializer_retains_python_parameter_order(class_authoring_without_engine):
@@ -5949,18 +5949,13 @@ def test_eager_member_default_reentry_retains_completed_refs_and_prefix(class_au
     expression = Defaults().with_default()
     assert isinstance(expression, i64)
     packet = pack([to_runtime_expr(expression).__egg_ref__, first])
-    assert (
-        sum(
-            record.name == first.read().name
-            for record in (
-                *packet.program.constructors,
-                *packet.program.functions,
-                *packet.program.relations,
-                *packet.program.user_defined_primitives,
-            )
-        )
-        == 1
+    declarations: tuple[pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive, ...] = (
+        *packet.program.constructors,
+        *packet.program.functions,
+        *packet.program.relations,
+        *packet.program.user_defined_primitives,
     )
+    assert sum(record.name == first.read().name for record in declarations) == 1
     default = resolve_callable(Defaults.with_default)
     template = presentation(default).views[0].params[0].default
     assert template is not None
@@ -6033,18 +6028,13 @@ def test_member_default_transitive_forward_headers_and_snapshot(class_authoring_
     assert presentation(snapshot).views[0].params[0].default == supplied_ref
     assert _required_callable_args(Forward().snapshot())[1].value == 3
     packet = pack([to_runtime_expr(expression).__egg_ref__, first])
-    assert (
-        sum(
-            record.name == first.read().name
-            for record in (
-                *packet.program.constructors,
-                *packet.program.functions,
-                *packet.program.relations,
-                *packet.program.user_defined_primitives,
-            )
-        )
-        == 1
+    declarations: tuple[pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive, ...] = (
+        *packet.program.constructors,
+        *packet.program.functions,
+        *packet.program.relations,
+        *packet.program.user_defined_primitives,
     )
+    assert sum(record.name == first.read().name for record in declarations) == 1
     assert pb.Program.from_binary(packet.program.to_binary()) == packet.program
     assert calls == ["first", "later", "conversion"]
 
@@ -6576,8 +6566,7 @@ def test_symbolic_getattr_uses_existing_header(class_authoring_without_engine, s
     assert [(parameter.name, parameter.core_input) for parameter in view.params] == [("name", 1)]
     assert view.mutates is None
     assert get_callable_fn(result) == A.__getattr__
-    arguments = get_callable_args(result, A.__getattr__)
-    assert arguments is not None
+    arguments = _required_callable_args(result, A.__getattr__)
     assert expr_parts(arguments[0]) == expr_parts(receiver)
     assert expr_parts(arguments[1]) == expr_parts(name)
     if style == "symbolic":
@@ -6838,11 +6827,9 @@ def test_getattr_inspection_keeps_symbolic_name_inert(class_authoring_without_en
 
     monkeypatch.setattr("egglog.conversion.resolve_literal", forbidden)
     assert get_callable_fn(expression) == A.__getattr__
-    arguments = get_callable_args(expression, A.__getattr__)
-    assert arguments is not None
+    arguments = _required_callable_args(expression, A.__getattr__)
     assert arguments[0].__egg_ref__ == receiver.__egg_ref__
     assert arguments[1].__egg_ref__ == name.__egg_ref__
-    assert get_callable_fn(arguments[1]) == join
     assert [part.value for part in _required_callable_args(arguments[1], join)] == ["a", "b"]
 
 
@@ -7060,9 +7047,7 @@ def test_mutation_metadata_rejects_before_argument_callbacks(class_authoring_wit
 
     packed = pack([resolve_callable(update)])
     program = packed.program
-    declaration = (*program.constructors, *program.functions, *program.relations, *program.user_defined_primitives)[
-        packed.indices[0]
-    ]
+    declaration = program.functions[packed.indices[0]]
     view = presentation(resolve_callable(update)).views[0]
     if corruption == "index":
         view = dataclasses.replace(view, mutates=1)

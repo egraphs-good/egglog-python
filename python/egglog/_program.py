@@ -859,7 +859,7 @@ def pack(  # noqa: C901, PLR0912
                 index_owner(ref.owner)
                 return mapped[ref]
             index_owner(ref.owner)
-            key = _definition_key(ref.read())
+            key = _definition_key(cast("Message", ref.owner._slots[ref.role][ref.index]))
             if key is not None:
                 ref = reconcile(key, ref)
                 if ref in mapped:

@@ -15,7 +15,7 @@ crate-type = ["cdylib"]
 pyo3 = "0.29"
 prost = "=0.14.4"
 egglog = { git = "https://github.com/egraphs-good/egglog.git", rev = "f766cabf3f0602ed6908b343e608c88ec725593e", default-features = false }
-egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental.git", rev = "ef70d3a6c8c5af2fd3eaac01fa81e64a23aa32e1", default-features = false }
+egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental.git", rev = "b1b9b6149078a7400d5cdeb1f1b6994a7b4a4eeb", default-features = false }
 pyo3-log =  "*"
 uuid = { version = "1.18", features = ["v4"] }
 base64 = "0.23"

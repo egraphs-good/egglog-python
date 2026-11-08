@@ -11,8 +11,12 @@ _This project uses semantic versioning_
   reach Python before execution completes. Host providers and original callback exceptions
   remain native. Display and saturation history project snapshots into the
   existing widget/Graphviz format without materializing opaque host values;
-  display filtering never changes the snapshot. Custom cost callbacks, notebook
-  text, CSV input and replayable source recording remain unfinished.
+  display filtering never changes the snapshot. Export source lazily from the
+  current graph's accepted input history. Popping a scope omits that branch;
+  failed inputs retain unexecuted suffixes without an exact replay guarantee.
+  Source limitations are reported at export, and `close()` is a compatibility
+  no-op.
+- Remove the `%%egglog` notebook cell magic.
 - Publish releases with `uv`, then tag and fast-forward `main` directly without a release PR or redundant CI.
 - Fix missing macOS wheels for standard CPython 3.14 when building alongside free-threaded Python.
 
@@ -169,10 +173,9 @@ for when a body remains rewrite-backed.
     and decomposition settings, constructor/relation table inspection, generic
     value extraction, and `var()` typing for parameterized expression types.
     Correct run-report durations that were previously 1,000 times too small.
-    Export source lazily from the current graph's accepted input history.
-    Popping a scope omits that branch; failed inputs retain unexecuted suffixes
-    without an exact replay guarantee. Source limitations are reported at export,
-    and `close()` is a compatibility no-op.
+    Add removable source transcripts that preserve rule evaluation and
+    decomposition settings, use replay-safe names, report source-aware parse
+    errors, and reject use after non-replayable failures.
     Python exceptions raised by `PyObject` primitives on worker threads now
     propagate to the caller, and the low-level bindings round-trip Egglog 3
     AST/report data, parse and run source programs directly, and expose

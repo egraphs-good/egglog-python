@@ -31,6 +31,11 @@ jobs:
           python-version: ${{ matrix.py }}
       - uses: dtolnay/rust-toolchain@ebb3d1676050bfd0971c36c1e215b5751473994d # 1.96.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: bufbuild/buf-action@37ac33d8960807670a6e9719080e885197b09cc6 # v1
+        with:
+          version: 1.75.0
+          setup_only: true
+          pr_comment: false
       - run: uv sync --extra test --locked
       - run: uv run pytest --benchmark-disable -vvv --durations=10
 
@@ -45,6 +50,11 @@ jobs:
           python-version: "3.14t"
       - uses: dtolnay/rust-toolchain@ebb3d1676050bfd0971c36c1e215b5751473994d # 1.96.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: bufbuild/buf-action@37ac33d8960807670a6e9719080e885197b09cc6 # v1
+        with:
+          version: 1.75.0
+          setup_only: true
+          pr_comment: false
       - run: uv sync --extra test --locked
       - name: Verify importing egglog keeps the GIL disabled
         # PYTHON_GIL=0 would hide an extension that enables the GIL on import.
@@ -71,6 +81,11 @@ jobs:
           enable-cache: true
       - uses: dtolnay/rust-toolchain@ebb3d1676050bfd0971c36c1e215b5751473994d # 1.96.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: bufbuild/buf-action@37ac33d8960807670a6e9719080e885197b09cc6 # v1
+        with:
+          version: 1.75.0
+          setup_only: true
+          pr_comment: false
       - run: uv sync --extra test --locked
       - run: make mypy
       - run: make stubtest
@@ -95,6 +110,11 @@ jobs:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@ebb3d1676050bfd0971c36c1e215b5751473994d # 1.96.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: bufbuild/buf-action@37ac33d8960807670a6e9719080e885197b09cc6 # v1
+        with:
+          version: 1.75.0
+          setup_only: true
+          pr_comment: false
       - run: |
           export UV_PROJECT_ENVIRONMENT="${pythonLocation}"
           uv sync --extra test --locked --python 3.12
@@ -114,6 +134,11 @@ jobs:
           enable-cache: true
       - uses: dtolnay/rust-toolchain@ebb3d1676050bfd0971c36c1e215b5751473994d # 1.96.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: bufbuild/buf-action@37ac33d8960807670a6e9719080e885197b09cc6 # v1
+        with:
+          version: 1.75.0
+          setup_only: true
+          pr_comment: false
       - name: Install graphviz
         run: |
           sudo apt-get update

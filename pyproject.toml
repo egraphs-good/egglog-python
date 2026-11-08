@@ -1,6 +1,7 @@
 [build-system]
 requires = ["maturin>=1.7,<2.0"]
-build-backend = "maturin"
+build-backend = "_build_backend"
+backend-path = ["."]
 
 [project]
 name = "egglog"
@@ -33,7 +34,7 @@ dependencies = [
     "anywidget",
     "cloudpickle>=3",
     "opentelemetry-api",
-    "egglog-proto @ git+https://github.com/egraphs-good/egglog-experimental.git@ef70d3a6c8c5af2fd3eaac01fa81e64a23aa32e1#subdirectory=gen/python",
+    "egglog-proto @ git+https://github.com/egraphs-good/egglog-experimental.git@b1b9b6149078a7400d5cdeb1f1b6994a7b4a4eeb#subdirectory=gen/python",
 ]
 
 [project.optional-dependencies]
@@ -277,7 +278,12 @@ local_partial_types = true
 python-source = "python"
 module-name = "egglog.bindings"
 features = ["pyo3/extension-module"]
-include = ["egglog/_builtin_catalog.pb"]
+include = [
+    "egglog/_builtin_catalog.pb",
+    "egglog/builtins.pyi",
+    { path = "_build_backend.py", format = "sdist" },
+    { path = "scripts/generate_builtin_catalog.py", format = "sdist" },
+]
 
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib", "--doctest-modules", "--pyargs"]

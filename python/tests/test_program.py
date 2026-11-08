@@ -47,6 +47,7 @@ def _required_named_declaration(
         *program.relations,
         *program.user_defined_primitives,
     ):
+        assert isinstance(declaration, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive)
         if declaration.name == name:
             return declaration
     raise StopIteration
@@ -176,7 +177,7 @@ def test_direct_rule_option_presence_and_empty_head(monkeypatch, mode, expected)
     assert not record.no_decomp
     assert not record.include_subsumed
     assert record.kind.value.query == record.kind.value.actions == []
-    expected_str = "rule().then()" if mode == "seminaive" else f"rule(eval_mode={mode!r}).then()"
+    expected_str = "rule().then()" if mode == "seminaive" else f'rule(eval_mode="{mode}").then()'
     assert str(authored) == expected_str
     with pytest.raises(TypeError, match="Rules must be embedded in Ruleset collections"):
         pack([authored.__egg_ref__])
@@ -218,11 +219,7 @@ def test_direct_rule_option_presence_and_empty_head(monkeypatch, mode, expected)
         return [authored]
 
     destination.register(deferred)
-    pending = tuple(destination.deferred_rule_gens)
-    with pytest.raises(NotImplementedError, match="legacy declaration projection"):
-        _ = destination.__egg_decls__
     assert not calls
-    assert tuple(destination.deferred_rule_gens) == pending
     assert len(destination._snapshot().read().value.rules) == 2
     assert calls == ["called"]
     assert not destination.deferred_rule_gens
@@ -679,9 +676,12 @@ def test_nominal_family_callable_names_keep_independent_closure(reverse):
 @pytest.mark.parametrize("local", [False, True])
 def test_primitive_sort_dependency_never_falls_back_to_nominal_kind(local):
     builder = Builder()
-    sort = builder.add("sorts", pb.Sort(kind=Oneof("primitive", pb.PrimitiveSortRef(name="Pair"))))
+    sort = builder.add(
+        "sorts",
+        pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="Pair"))),
+    )
     if local:
-        builder.add("sorts", pb.Sort(kind=Oneof("eq", "Pair")))
+        builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Pair")))
     reference = builder.publish().ref("sorts", sort)
     with pytest.raises(ValueError, match="missing definitions"):
         pack([reference], ambient=() if local else {("eq_sort", "Pair")})
@@ -702,7 +702,7 @@ def test_same_kind_sort_definitions_reconcile_metadata_and_reject_primitive_conf
         Builder(environment=owners).publish()
     builder = Builder()
     for index in range(2):
-        builder.add("sorts", pb.Sort(doc=str(index), kind=Oneof("eq", "Pair")))
+        builder.add("sorts", pb.Sort(doc=str(index), kind=Oneof[Literal["eq"], str]("eq", "Pair")))
     owner = builder.publish()
     packed = pack([owner.ref("sorts", 0), owner.ref("sorts", 1)])
     assert packed.indices == (0, 0)
@@ -721,13 +721,18 @@ def test_named_binding_roots_reconcile_exact_sorts_and_keep_unset_slots(name):
     references = []
     for family in ("i64", "i64", "String"):
         builder = Builder()
-        sort = builder.add("sorts", pb.Sort(kind=Oneof("primitive", pb.PrimitiveSortRef(name=family))))
-        slot = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof("binding", name)))
+        sort = builder.add(
+            "sorts",
+            pb.Sort(
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name=family))
+            ),
+        )
+        slot = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["binding"], str]("binding", name)))
         references.append(builder.publish().ref("nodes", slot))
     ambient = {("primitive_sort", "i64"), ("primitive_sort", "String")}
     packed = pack(references[:2], ambient=ambient)
     assert packed.indices == (0, 0)
-    assert packed.program.nodes == [pb.Node(sort_id=0, kind=Oneof("binding", name))]
+    assert packed.program.nodes == [pb.Node(sort_id=0, kind=Oneof[Literal["binding"], str]("binding", name))]
     assert packed.program.commands == []
     assert not (
         *packed.program.constructors,
@@ -743,9 +748,9 @@ def test_named_binding_roots_reconcile_exact_sorts_and_keep_unset_slots(name):
 
 def test_global_binding_nominal_callable_and_lexical_names_are_independent():
     builder = Builder()
-    sort = builder.add("sorts", pb.Sort(kind=Oneof("eq", "same")))
-    binding = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof("binding", "same")))
-    variable = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof("var", "same")))
+    sort = builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "same")))
+    binding = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["binding"], str]("binding", "same")))
+    variable = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["var"], str]("var", "same")))
     callable_ = builder.add("constructors", pb.Constructor(name="same", output=sort))
     owner = builder.publish()
     packed = pack([owner.ref("nodes", binding), owner.ref("nodes", variable), owner.ref("constructors", callable_)])
@@ -1215,25 +1220,16 @@ def test_named_recursive_definition_closure_and_missing_names():
         )
     owner = builder.publish()
     result = pack([owner.ref("nodes", 1)])
-    assert all(
-        isinstance(d, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive)
-        for d in (
-            *result.program.constructors,
-            *result.program.functions,
-            *result.program.relations,
-            *result.program.user_defined_primitives,
-        )
-    )
-    assert {
-        d.name
-        for d in (
-            *result.program.constructors,
-            *result.program.functions,
-            *result.program.relations,
-            *result.program.user_defined_primitives,
-        )
-        if True
-    } == {"f", "g"}
+    names = set()
+    for declaration in (
+        *result.program.constructors,
+        *result.program.functions,
+        *result.program.relations,
+        *result.program.user_defined_primitives,
+    ):
+        assert isinstance(declaration, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive)
+        names.add(declaration.name)
+    assert names == {"f", "g"}
     assert len(result.program.nodes) == 3
     with pytest.raises(ValueError, match=r"missing.*i64"):
         pack([literal(1)])
@@ -1367,11 +1363,16 @@ def test_inline_rules_import_shared_context_once_and_pack_only_demanded_definiti
     assert program.sorts == [
         pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="Unit")))
     ]
-    assert [
-        d.name
-        for d in (*program.constructors, *program.functions, *program.relations, *program.user_defined_primitives)
-        if True
-    ] == ["r0"]
+    names = []
+    for declaration in (
+        *program.constructors,
+        *program.functions,
+        *program.relations,
+        *program.user_defined_primitives,
+    ):
+        assert isinstance(declaration, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive)
+        names.append(declaration.name)
+    assert names == ["r0"]
 
 
 def test_binders_defaults_and_payloads_are_not_reinterpreted():
@@ -1952,9 +1953,9 @@ def test_structural_view_deep_hash_cache_is_erasable_and_does_not_retain_owners(
 @pytest.mark.parametrize("doc", [None, "", "retained documentation"])
 def test_flat_callable_roles_relocate_input_sorts_and_owned_metadata(role, message, doc):
     builder = Builder()
-    builder.add("sorts", pb.Sort(kind=Oneof("eq", "unused")))
-    sort = builder.add("sorts", pb.Sort(kind=Oneof("eq", "Owned")))
-    body = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof("var", "_0")))
+    builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "unused")))
+    sort = builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Owned")))
+    body = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["var"], str]("var", "_0")))
     definition = message(name="flat", inputs=[sort], doc=doc)
     if isinstance(definition, pb.Constructor | pb.Function | pb.UserDefinedPrimitive):
         definition.output = sort
@@ -1963,7 +1964,7 @@ def test_flat_callable_roles_relocate_input_sorts_and_owned_metadata(role, messa
     elif isinstance(definition, pb.UserDefinedPrimitive):
         definition.body = body
     if isinstance(definition, pb.Constructor | pb.Function | pb.Relation):
-        definition.table_name = Oneof("public_alias", "")
+        definition.table_name = Oneof[Literal["public_alias"], str]("public_alias", "")
     index = builder.add(role, definition)
     owner = builder.publish()
     packed = pack([owner.ref(role, index)])
@@ -1985,7 +1986,7 @@ def test_flat_callable_roles_relocate_input_sorts_and_owned_metadata(role, messa
 
 def test_flat_callable_lists_share_one_definition_namespace():
     builder = Builder()
-    sort = builder.add("sorts", pb.Sort(kind=Oneof("eq", "Owned")))
+    sort = builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Owned")))
     constructor = builder.add("constructors", pb.Constructor(name="shared", output=sort))
     function = builder.add("functions", pb.Function(name="shared", output=sort))
     owner = builder.publish()

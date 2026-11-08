@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from typing import final
 
-__all__ = ["PrimitiveFailure", "_ProtoEngine", "_export_pyobject_catalog"]
+__all__ = ["PrimitiveFailure", "_ProtoEngine"]
 
 class PrimitiveFailure(Exception): ...  # noqa: N818
 
@@ -33,8 +33,6 @@ class _ProtoEngine:
     def destroy(self, request: bytes) -> bytes: ...
     def get_history(self, request: bytes) -> bytes: ...
     def get_builtins(self, request: bytes) -> bytes: ...
-
-def _export_pyobject_catalog() -> bytes: ...
 
 # Shared native scalar serialization; no engine or raw native values escape.
 def _encode_scalar(sort: str, value: object) -> bytes: ...

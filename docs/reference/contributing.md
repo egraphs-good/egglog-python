@@ -27,6 +27,10 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
+Install the Buf CLI too: the Git-based protobuf SDK dependency generates its
+Python modules during its build. Its pinned Python plugin is installed
+automatically; the Rust protobuf plugin is not needed for Python builds.
+
 Then install the package in editable mode with the development dependencies:
 
 ```bash
@@ -34,6 +38,18 @@ uv sync --all-extras
 ```
 
 Anytime you change the rust code, you can run `uv sync --reinstall-package egglog --all-extras` to force recompiling the rust code.
+
+`uv build` and editable installs regenerate the ignored builtin catalog and
+stubs from the compiled transport before packaging them. For an explicit local
+bootstrap, run `make builtin-bootstrap`. Direct maturin commands bypass this
+Python build step.
+
+For cross-target or multi-interpreter releases, generate these resources once
+with a native host build before invoking maturin for the release targets. The
+release workflow's shared bootstrap action uses `uv build --python 3.12` without
+changing the job's selected Python on `PATH`, then retains the existing maturin
+target and interpreter matrix. The PEP 517 backend is for native builds with
+its own interpreter; it does not load a cross-target or different-ABI wheel.
 
 If you would like to download a new version of the visualizer source, run `make clean; make`. This will download
 the most recent released version from the github actions artifact in the [egraph-visualizer](https://github.com/egraphs-good/egraph-visualizer) repo. It is checked in because it's a pain to get cargo to include only one git ignored file while ignoring the rest of the files that were ignored.

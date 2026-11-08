@@ -2878,11 +2878,6 @@ class Ruleset(Schedule):
         self.register(generator, _increase_frame=True)
         return self
 
-    @property
-    def __egg_decls__(self) -> Never:
-        msg = "Canonical rulesets have no legacy declaration projection"
-        raise NotImplementedError(msg)
-
     def _snapshot(self) -> Ref:
         while self.deferred_rule_gens:
             generator = self.deferred_rule_gens.pop()
@@ -2960,11 +2955,6 @@ class UnstableCombinedRuleset(Schedule):
         if self.ident is None:
             self._generated_ident = Ident(f"_combined_ruleset_{UnstableCombinedRuleset._next_generated_ident}")
             UnstableCombinedRuleset._next_generated_ident += 1
-
-    @property
-    def __egg_decls__(self) -> Never:
-        msg = "Canonical rulesets have no legacy declaration projection"
-        raise NotImplementedError(msg)
 
     @property
     def __egg_ident__(self) -> Ident:
@@ -4052,7 +4042,7 @@ class _HostModelRuntime:
             assert self.egraph._cost_model_frames.pop() is frame
 
 
-def get_callable_cost(fn: ExprCallable) -> int | None:
+def get_callable_cost(fn: Callable[..., BaseExpr | None] | BaseExpr) -> int | None:
     """
     Returns the cost of a callable, if it has one set. Otherwise returns None.
     """

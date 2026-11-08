@@ -26,6 +26,7 @@ def _evaluate_scalar(value, variables):
         assert args is not None
         if fn == Value.var:
             (name,) = args
+            assert isinstance(name, String)
             result = Fraction(variables[name.value]), 0
         elif fn in (Value.from_int, Value.from_float):
             result = Fraction(expression.value), 0

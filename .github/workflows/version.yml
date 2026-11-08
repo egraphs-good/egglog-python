@@ -76,6 +76,7 @@ jobs:
           ref: ${{ needs.bump.outputs.commit }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ needs.bump.result == 'skipped' }}
+      - uses: ./.github/actions/builtin-bootstrap
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           target: ${{ matrix.target }}
@@ -102,6 +103,7 @@ jobs:
         if: ${{ needs.bump.result == 'skipped' }}
       - name: Setup QEMU
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: ./.github/actions/builtin-bootstrap
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           manylinux: auto
@@ -132,6 +134,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python }}
+      - uses: ./.github/actions/builtin-bootstrap
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           command: build
@@ -167,6 +170,7 @@ jobs:
         run: |
           python3.14 -c 'import sysconfig; assert not sysconfig.get_config_var("Py_GIL_DISABLED")'
           python3.14t -c 'import sysconfig; assert sysconfig.get_config_var("Py_GIL_DISABLED") == 1'
+      - uses: ./.github/actions/builtin-bootstrap
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           command: build

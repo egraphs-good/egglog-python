@@ -211,7 +211,7 @@ def test_source_history_submits_freeze_with_installation(monkeypatch):
                 *request.program.relations,
                 *request.program.user_defined_primitives,
             )
-            assert request.program.sorts == [pb.Sort(kind=Oneof("eq", "installed"))]
+            assert request.program.sorts == [pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "installed"))]
             submitted.append(request.program)
             return output_frames(), None
 
@@ -221,7 +221,7 @@ def test_source_history_submits_freeze_with_installation(monkeypatch):
     monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
     state = EGraphState(save_egglog_string=True)
     builder = Builder()
-    sort = builder.add("sorts", pb.Sort(kind=Oneof("eq", "installed")))
+    sort = builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "installed")))
     command = builder.add("commands", pb.Command(kind=Oneof[Literal["freeze"], pb.Freeze]("freeze", pb.Freeze())))
     owner = builder.publish()
     state.run_program([owner.ref("commands", command)], roots=[owner.ref("sorts", sort)])
@@ -233,17 +233,22 @@ def test_freeze_retains_unused_nominal_sorts_and_unset_binding_slots():
     from egglog.runtime import RuntimeExpr  # noqa: PLC0415
 
     builder = Builder(environment=(builtin_catalog().owner,))
-    nominal = builder.add("sorts", pb.Sort(kind=Oneof("eq", "unused"), doc="retained nominal documentation"))
+    nominal = builder.add(
+        "sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "unused"), doc="retained nominal documentation")
+    )
     value_ref = i64(7).__egg_ref__
     value = builder.import_ref(value_ref)
     integer = builder.import_ref(value_ref.owner.ref("sorts", value_ref.read().sort_id))
-    slot = builder.add("nodes", pb.Node(sort_id=integer, kind=Oneof("binding", "unset")))
+    slot = builder.add("nodes", pb.Node(sort_id=integer, kind=Oneof[Literal["binding"], str]("binding", "unset")))
     command = builder.add(
         "commands",
         pb.Command(
-            kind=Oneof(
+            kind=Oneof[Literal["loop"], pb.Loop](
                 "loop",
-                pb.Loop(max_iterations=0, body=[pb.Command(kind=Oneof("let", pb.Let(binding=slot, value=value)))]),
+                pb.Loop(
+                    max_iterations=0,
+                    body=[pb.Command(kind=Oneof[Literal["let"], pb.Let]("let", pb.Let(binding=slot, value=value)))],
+                ),
             )
         ),
     )
@@ -274,7 +279,9 @@ def test_freeze_retains_unused_nominal_sorts_and_unset_binding_slots():
     )
     assert restored.freeze() == snapshot
     restored.let("unset", i64(9))
-    restored.check(eq(RuntimeExpr(owner.ref("nodes", slot))).to(i64(9)))
+    restored_value = i64(9)
+    assert isinstance(restored_value, RuntimeExpr)
+    restored.check(eq(RuntimeExpr(owner.ref("nodes", slot))).to(restored_value))
     assert graph.lookup_function_value(RuntimeExpr(owner.ref("nodes", slot))) is None
 
 
@@ -289,7 +296,7 @@ def test_source_producer_returns_only_program_bytes_and_scope_counts():
     )
     kinds = []
     commands = []
-    variables = set()
+    variables: set[str] = set()
     while (submission := source.next_submission()) is not None:
         kind, encoded, count = submission
         kinds.append(kind)
@@ -384,9 +391,11 @@ def test_source_block_streams_outputs_before_runtime_failure():
             "action",
             "action",
         ]
-        rule = program.rulesets[0].value.rules[0]
+        ruleset = program.rulesets[0].value
+        assert ruleset is not None
+        rule = ruleset.rules[0]
         rule.doc = "retained rule documentation"
-        program.commands.insert(2, pb.Command(kind=Oneof("freeze", pb.Freeze())))
+        program.commands.insert(2, pb.Command(kind=Oneof[Literal["freeze"], pb.Freeze]("freeze", pb.Freeze())))
         events = []
         chunks = []
         encoded_chunks = []
@@ -427,12 +436,15 @@ def test_source_block_streams_outputs_before_runtime_failure():
             for record in _nested_messages(chunks[-1])
             for field in record.desc().fields
         )
-        frozen = _required_data(chunks, "snapshot").outputs[0].kind.value
+        frozen = _required_oneof(_required_data(chunks, "snapshot").outputs[0].kind, "snapshot", pb.EGraphSnapshot)
         assert frozen.program is not None
-        assert frozen.program.rulesets[0].value.rules[0].doc == rule.doc
-        assert frozen.program.rulesets[0].value.rules[0].name == rule.name
-        history = graph.history()
-        assert history.rulesets[0].value.rules[0].doc == rule.doc
+        frozen_ruleset = frozen.program.rulesets[0].value
+        assert frozen_ruleset is not None
+        assert frozen_ruleset.rules[0].doc == rule.doc
+        assert frozen_ruleset.rules[0].name == rule.name
+        history_ruleset = graph.history().rulesets[0].value
+        assert history_ruleset is not None
+        assert history_ruleset.rules[0].doc == rule.doc
         sizes = _required_data(chunks, "sizes")
         assert sizes.outputs[0].kind == Oneof(
             "sizes", pb.TableSizes(sizes=[pb.TableSize(table="source_streamed", rows=1)])
@@ -673,6 +685,7 @@ def test_shared_snapshot_restores_logical_state_over_bytes(state):
     encoded = snapshot.to_binary()
     graph._state.destroy()
     snapshot = pb.EGraphSnapshot.from_binary(encoded)
+    assert snapshot.options is not None
     assert snapshot.program is not None
     owner = Builder.from_program(snapshot.program, environment=(builtin_catalog().owner,)).publish()
     restored = EGraph()
@@ -764,8 +777,7 @@ def _callback_program(tag, callback=_observed_pyerr_callback):
     """Author a closed call using the actual configured registrar, not fake signatures."""
     import cloudpickle  # noqa: PLC0415
 
-    # The generation-only exporter is intentionally absent from the public stub.
-    catalog = pb.BuiltinCatalog.from_binary(getattr(bindings, "_export_pyobject_catalog")())  # noqa: B009
+    catalog = pb.BuiltinCatalog.from_binary(bindings._ProtoEngine().get_builtins(pb.GetBuiltinsRequest().to_binary()))
     program = pb.Program(
         sorts=[
             next(
@@ -924,9 +936,9 @@ def test_callback_error_original_identity_and_adoption(table_transport, callback
     original_adopt = Builder.from_program.__func__  # type: ignore[attr-defined]
     adopted = []
 
-    def adopt(cls, returned):
+    def adopt(cls, returned, *, environment=()):
         adopted.append(returned)
-        return original_adopt(cls, returned)
+        return original_adopt(cls, returned, environment=environment)
 
     with monkeypatch.context() as patch:
         patch.setattr(Builder, "from_program", classmethod(adopt))
@@ -2929,15 +2941,12 @@ def test_constant_actions_submit_one_ordered_binary_program(monkeypatch):
         *program.relations,
         *program.user_defined_primitives,
     ):
-        declaration_kind = declaration
-        assert isinstance(declaration_kind, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive)
-        definitions[declaration_kind.name] = declaration
+        assert isinstance(declaration, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive)
+        definitions[declaration.name] = declaration
     first_definition = definitions[first.target.func]
-    assert first_definition is not None
     assert isinstance(first_definition, pb.Function)
     assert presentation(resolve_callable(later)).views[0].kind == CallKind.CONSTANT
     second_definition = definitions[second.target.func]
-    assert second_definition is not None
     assert second_definition.name == resolve_callable(later).read().name
     rhs_kind = program.nodes[second.value].kind
     assert rhs_kind is not None
@@ -3139,9 +3148,8 @@ def test_public_bytes_requests_and_response_ownership(monkeypatch: pytest.Monkey
         *program.relations,
         *program.user_defined_primitives,
     ):
-        declaration_kind = declaration
-        assert isinstance(declaration_kind, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive)
-        declarations.setdefault(declaration_kind.name, declaration)
+        assert isinstance(declaration, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive)
+        declarations.setdefault(declaration.name, declaration)
     assert not declarations
     assert presentation(builtin_catalog().definitions["callable", "egglog.core.i64.add"]).views[0].path == ("__add__",)
     local_type = presentation(builtin_catalog().definitions["primitive_sort", "i64"]).type_view
@@ -3317,18 +3325,34 @@ def test_error_context_note_renders_owned_code_without_engine(monkeypatch, owner
 
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
     nodes = [
-        pb.Node(sort_id=0, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("i64", 1)))),
-        pb.Node(sort_id=0, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("i64", 0)))),
-        pb.Node(sort_id=0, kind=Oneof("call", pb.Call(func="/", args=[0, 1]))),
+        pb.Node(
+            sort_id=0,
+            kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", 1))
+            ),
+        ),
+        pb.Node(
+            sort_id=0,
+            kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", 0))
+            ),
+        ),
+        pb.Node(sort_id=0, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="/", args=[0, 1]))),
     ]
-    action = pb.Action(kind=Oneof("set", pb.Set(target=pb.Call(func="authored_result"), value=2)))
+    action = pb.Action(
+        kind=Oneof[Literal["set"], pb.Set]("set", pb.Set(target=pb.Call(func="authored_result"), value=2))
+    )
     rule = pb.Rule(
         name="actual authored setter",
         eval_mode=pb.RuleEvalMode.SEMINAIVE,
-        kind=Oneof("rule", pb.RuleBody(actions=[pb.Action(kind=Oneof("panic", "other action")), action])),
+        kind=Oneof[Literal["rule"], pb.RuleBody](
+            "rule", pb.RuleBody(actions=[pb.Action(kind=Oneof[Literal["panic"], str]("panic", "other action")), action])
+        ),
     )
     context = pb.Program(
-        sorts=[pb.Sort(kind=Oneof("primitive", pb.PrimitiveSortRef(name="i64")))],
+        sorts=[
+            pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64")))
+        ],
         nodes=nodes,
         functions=[pb.Function(name="authored_result", output=0, merge=2)],
         rulesets=[pb.RulesetBinding(name="previous request", value=pb.Ruleset(rules=[rule]))],
@@ -3358,17 +3382,31 @@ def test_error_context_note_keeps_opaque_custom_values_inert(monkeypatch):
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
     monkeypatch.setattr(cloudpickle, "loads", forbidden)
     context = pb.Program(
-        sorts=[pb.Sort(kind=Oneof("primitive", pb.PrimitiveSortRef(name="PyObject")))],
+        sorts=[
+            pb.Sort(
+                kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="PyObject"))
+            )
+        ],
         nodes=[
             pb.Node(
                 sort_id=0,
-                kind=Oneof(
+                kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
                     "primitive_value",
-                    pb.PrimitiveValue(value=Oneof("custom", pb.CustomValue(payload=b"opaque payload"))),
+                    pb.PrimitiveValue(
+                        value=Oneof[Literal["custom"], pb.CustomValue](
+                            "custom", pb.CustomValue(payload=b"opaque payload")
+                        )
+                    ),
                 ),
             )
         ],
-        commands=[pb.Command(kind=Oneof("action", pb.Action(kind=Oneof("term", 0))))],
+        commands=[
+            pb.Command(
+                kind=Oneof[Literal["action"], pb.Action](
+                    "action", pb.Action(kind=Oneof[Literal["term"], int]("term", 0))
+                )
+            )
+        ],
     )
     note = _error_context_note(
         pb.Error(
@@ -3398,7 +3436,15 @@ def test_error_context_note_absence_and_serialization_failure(monkeypatch):
 
 
 def test_runtime_error_adds_context_note_without_changing_message_or_host_exception(monkeypatch):
-    context = pb.Program(commands=[pb.Command(kind=Oneof("action", pb.Action(kind=Oneof("panic", "authored marker"))))])
+    context = pb.Program(
+        commands=[
+            pb.Command(
+                kind=Oneof[Literal["action"], pb.Action](
+                    "action", pb.Action(kind=Oneof[Literal["panic"], str]("panic", "authored marker"))
+                )
+            )
+        ]
+    )
     failure = pb.Error(
         code=pb.ErrorCode.RUNTIME_FAILURE,
         message="engine message",
@@ -3413,7 +3459,9 @@ def test_runtime_error_adds_context_note_without_changing_message_or_host_except
             return pb.CreateEGraphResponse(egraph_id=1, threads=1).to_binary()
 
         def run(self, encoded):
-            return [pb.RunProgramResponse(result=Oneof("error", failure)).to_binary()], host_error
+            return [
+                pb.RunProgramResponse(result=Oneof[Literal["error"], pb.Error]("error", failure)).to_binary()
+            ], host_error
 
         def destroy(self, encoded):
             return pb.DestroyEGraphResponse().to_binary()

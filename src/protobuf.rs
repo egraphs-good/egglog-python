@@ -2,9 +2,7 @@
 //! No Python syntax is lowered here; ordinary results and errors remain bytes.
 
 use crate::py_object_sort::{PyObjectErrorState, PyObjectExtension};
-use egglog_experimental::builtin::PortableTypeInfo;
 use egglog_experimental::proto as pb;
-use egglog_experimental::protobuf::NativeExtension;
 use egglog_experimental::protobuf::cost_model::{
     CostModelContract, CostModelRuntime, ModelSort, NativeCostModel, Objective,
 };
@@ -121,27 +119,6 @@ pub(crate) fn _decode_scalar<'py>(
             host_integer(py, &BigInt::from(*value.denom()))?,
         ))?,
     })
-}
-
-/// Generation-time export from the actual registrar, not a parallel catalog.
-#[pyfunction]
-pub(crate) fn _export_pyobject_catalog(py: Python<'_>) -> PyResult<Bound<'_, PyBytes>> {
-    let mut graph = egglog_experimental::new_experimental_egraph();
-    crate::py_object_sort::PyObjectExtension::default()
-        .initialize(&mut graph)
-        .map_err(PyValueError::new_err)?;
-    let catalog = graph
-        .type_info()
-        .portable_builtin_catalog()
-        .map_err(PyValueError::new_err)?;
-    eprintln!(
-        "undescribed primitives: {:?}; families: {:?}; family primitives: {:?}; sorts: {:?}",
-        catalog.undescribed_primitives,
-        catalog.undescribed_families,
-        catalog.undescribed_family_primitives,
-        catalog.undescribed_sorts
-    );
-    Ok(PyBytes::new(py, &catalog.definitions.encode_to_vec()))
 }
 
 #[pyclass(name = "_ProtoEngine")]
@@ -411,6 +388,7 @@ impl CostModelRuntime for PythonModelRuntime {
 mod tests {
     use super::*;
     use crate::py_object_sort::{PyObjectExtension, PyPickledValue, dump, load};
+    use egglog_experimental::builtin::PortableTypeInfo;
     use egglog_experimental::proto as pb;
     use egglog_experimental::protobuf::NativeExtension;
     use prost::Message;
@@ -1046,15 +1024,6 @@ mod tests {
                 assert_eq!(a, b);
             }
         }
-        let exported =
-            Python::attach(|py| _export_pyobject_catalog(py).unwrap().as_bytes().to_vec());
-        assert_eq!(exported, catalog.definitions.encode_to_vec());
-        assert_eq!(
-            pb::BuiltinCatalog::decode(exported.as_slice())
-                .unwrap()
-                .encode_to_vec(),
-            exported
-        );
         assert_eq!(
             graph
                 .type_info()
@@ -1065,13 +1034,11 @@ mod tests {
         );
         let payload = Python::attach(|py| dump("hello".into_pyobject(py).unwrap()).unwrap().0);
         let mut engine = Engine::with_extension(extension);
-        let configured = pb::BuiltinCatalog::decode(
-            engine
-                .get_builtins(&pb::GetBuiltinsRequest::default().encode_to_vec())
-                .unwrap()
-                .as_slice(),
-        )
-        .unwrap();
+        let exported = engine
+            .get_builtins(&pb::GetBuiltinsRequest::default().encode_to_vec())
+            .unwrap();
+        let configured = pb::BuiltinCatalog::decode(exported.as_slice()).unwrap();
+        assert_eq!(configured.encode_to_vec(), exported);
         assert_eq!(configured, catalog.definitions);
         let id = create(&mut engine, false);
         let program = custom_program(payload.clone());
@@ -1436,7 +1403,9 @@ mod tests {
         let replay = extracted_program(&result, &payload);
         extracted_program(&run(&mut engine, id, replay), &payload);
         Python::attach(|py| {
-            _export_pyobject_catalog(py).unwrap();
+            engine
+                .get_builtins(&pb::GetBuiltinsRequest::default().encode_to_vec())
+                .unwrap();
             let builtins = PyModule::import(py, "builtins").unwrap();
             assert_eq!(
                 builtins
