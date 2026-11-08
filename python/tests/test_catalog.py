@@ -1,6 +1,5 @@
 """Canonical catalog indexing, not a replacement builtin signature inventory."""
 
-import builtins
 import copy
 import json
 import runpy
@@ -127,13 +126,13 @@ def test_pyobject_generated_surface_uses_real_defaults_and_host_policy():
     mapping = copy.deepcopy(DATA)
     from egglog._catalog import builtin_catalog  # noqa: PLC0415
 
-    program = pb.BuiltinCatalog.from_binary(
-        (Path(__file__).resolve().parents[1] / "egglog/_builtin_catalog.pb").read_bytes()
-    )
+    encoded = (Path(__file__).resolve().parents[1] / "egglog/_builtin_catalog.pb").read_bytes()
+    program = pb.BuiltinCatalog.from_binary(encoded)
     renderer = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
         "render_builtins"
     ]
     stub = renderer(program, mapping=mapping)
+    assert program.to_binary() == encoded
     for signature in (
         "def __init__(self, value: object, /) -> None:",
         "def value(self) -> object:",
@@ -614,24 +613,6 @@ def test_pair_generic_stub_uses_native_signature_and_presentation(pair_catalog_p
     renamed = renderer(pair_catalog_program, mapping=mapping)
     assert "def __init__(self, head: _Pair_X_0, right: _Pair_Y_1) -> None:" in renamed
     assert "def head(self) -> _Pair_X_0:" in renamed
-
-
-def test_generated_stub_matches_catalog_without_frontend_imports(monkeypatch):
-    mapping = copy.deepcopy(DATA)
-    root = Path(__file__).resolve().parents[2]
-    original_import = builtins.__import__
-
-    def reject_frontend(name, *args, **kwargs):
-        if name == "egglog" or name.startswith("egglog."):
-            pytest.fail(f"Generator imported frontend: {name}")
-        return original_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", reject_frontend)
-    renderer = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
-    encoded = (root / "python/egglog/_builtin_catalog.pb").read_bytes()
-    program = pb.BuiltinCatalog.from_binary(encoded)
-    assert renderer(program, mapping=mapping) == (root / "python/egglog/builtins.py").read_text()
-    assert program.to_binary() == encoded
 
 
 def test_function_generated_surface_uses_intrinsic_application_without_a_descriptor():

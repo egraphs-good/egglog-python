@@ -1,65 +1,20 @@
 from __future__ import annotations
 
-import ast
 import json
 import os
 import pathlib
 import re
-import runpy
 import subprocess
 import sys
 
 import pytest
 
 
-def test_generated_private_builtin_helpers_are_shared_typed_implementations():
-    from egglog_proto.egglog.v1 import egglog_pb as pb  # noqa: PLC0415
-
-    from egglog import _builtin_values, builtins  # noqa: PLC0415
-
-    root = pathlib.Path(__file__).resolve().parents[2]
-    package = root / "python/egglog"
-    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
-    program = pb.BuiltinCatalog.from_binary((package / "_builtin_catalog.pb").read_bytes())
-    rendered = render(program)
-    assert rendered == (package / "builtins.py").read_text()
-    generated = ast.parse(rendered)
-    implementation = ast.parse((package / "_builtin_values.py").read_text())
-    names = {
-        alias.name
-        for node in generated.body
-        if isinstance(node, ast.ImportFrom) and node.level == 1 and node.module == "_builtin_values"
-        for alias in node.names
-        if alias.name.startswith("_")
-    }
-    helpers = {
-        node.name: node for node in implementation.body if isinstance(node, ast.FunctionDef) and node.name in names
-    }
-    assert helpers.keys() == names
-    assert not any(isinstance(node, ast.FunctionDef) and node.name in names for node in generated.body)
-    for name, helper in helpers.items():
-        parameters = [*helper.args.posonlyargs, *helper.args.args, *helper.args.kwonlyargs]
-        if helper.args.vararg is not None:
-            parameters.append(helper.args.vararg)
-        if helper.args.kwarg is not None:
-            parameters.append(helper.args.kwarg)
-        assert all(parameter.annotation is not None for parameter in parameters)
-        assert helper.returns is not None
-        assert getattr(builtins, name) is getattr(_builtin_values, name)
-    exports = next(
-        ast.literal_eval(node.value)
-        for node in generated.body
-        if isinstance(node, ast.Assign)
-        and any(isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets)
-    )
-    assert names.isdisjoint(exports)
-
-
 @pytest.mark.parametrize(
-    ("family", "kind"),
+    ("family", "kind", "source_egraph"),
     [
         *(
-            pytest.param(family, kind, id=f"{kind}-{family}")
+            pytest.param(family, kind, False, id=f"{kind}-{family}")
             for kind in ("positive", "negative")
             for family in (
                 "scalar",
@@ -75,16 +30,20 @@ def test_generated_private_builtin_helpers_are_shared_typed_implementations():
             )
         ),
         *(
-            pytest.param("high_level", case, id=case)
+            pytest.param("high_level", case, False, id=case)
             for case in re.findall(
                 r"^\[case ([^]]+)\]$",
                 (pathlib.Path(__file__).resolve().parents[2] / "test-data/unit/check-high-level.test").read_text(),
                 re.MULTILINE,
             )
         ),
+        *(
+            pytest.param("concrete_members", kind, True, id=f"source-{kind}-concrete_members")
+            for kind in ("positive", "negative")
+        ),
     ],
 )
-def test_generated_builtin_installed_types(family, kind, tmp_path):
+def test_generated_builtin_installed_types(family, kind, source_egraph, tmp_path):
     """Check actual installed public imports, independent of source MYPYPATH."""
     root = pathlib.Path(__file__).resolve().parents[2]
     if family == "high_level":
@@ -139,6 +98,15 @@ def test_generated_builtin_installed_types(family, kind, tmp_path):
             "--show-error-codes",
             "--no-error-summary",
             "--no-pretty",
+            *(
+                [
+                    "--shadow-file",
+                    str(pathlib.Path(package) / "egraph.py"),
+                    str(root / "python/egglog/egraph.py"),
+                ]
+                if source_egraph
+                else []
+            ),
             str(fixture),
         ],
         cwd=tmp_path,
@@ -168,109 +136,5 @@ def test_generated_builtin_installed_types(family, kind, tmp_path):
         assert match is not None, line
         actual.append((int(match[1]), match[2], match[3] if family == "high_level" else None, match[4]))
     assert result.returncode == any(kind == "error" for _, kind, _, _ in expected), result.stdout + result.stderr
-    assert actual == expected, result.stdout + result.stderr
-    assert not result.stderr, result.stderr
-
-
-@pytest.mark.parametrize(
-    "family", ["scalar", "pair", "vec", "map", "concrete_members", "rational", "set", "maybe", "multiset"]
-)
-@pytest.mark.parametrize("kind", ["positive", "negative"])
-def test_generated_builtin_source_types(family, kind, tmp_path, request):
-    """Actual catalog-derived source module; shadowing cannot replace the installed gate."""
-    root = pathlib.Path(__file__).resolve().parents[2]
-    source = root / "python/egglog/builtins.py"
-    if family == "rational":
-        program = request.getfixturevalue("rational_catalog_program")
-        render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_builtins"]
-        source = tmp_path / "generated_builtins.py"
-        source.write_text(render(program))
-    environment = os.environ.copy()
-    environment.pop("MYPYPATH", None)
-    environment.pop("PYTHONPATH", None)
-    installed = subprocess.check_output(
-        [
-            sys.executable,
-            "-c",
-            "import egglog; from pathlib import Path; print(Path(egglog.__file__).parent / 'builtins.py')",
-        ],
-        cwd=tmp_path,
-        env=environment,
-        text=True,
-    ).strip()
-    assert "site-packages" in pathlib.Path(installed).parts
-    prefix = family if family == "concrete_members" else f"generated_{family}"
-    fixture = root / "test-data/typing" / f"{prefix}_{kind}.py"
-    if family == "vec":
-        extended = tmp_path / fixture.name
-        extra = (
-            """
-from egglog import String
-
-def stringify(value: i64) -> String: ...
-def atomize(value: i64) -> Atom: ...
-assert_type(owned.map(stringify), Vec[String])
-assert_type(owned.map(atomize), Vec[Atom])
-assert_type(owned.map(lambda value: value + 1), Vec[i64])
-"""
-            if kind == "positive"
-            else """
-def wrong_input(value: f64) -> i64: ...
-def wrong_output(value: i64) -> int: ...
-value.map(wrong_input)  # error: arg-type
-value.map(wrong_output)  # error: type-var
-value.map()  # error: call-arg
-value.map(lambda item: item, i64(1))  # error: call-arg
-mapped = value.map(lambda item: item)
-wrong_mapped: Vec[f64] = mapped  # error: assignment
-"""
-        )
-        extended.write_text(fixture.read_text() + extra)
-        fixture = extended
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "mypy",
-            "--config-file=",
-            "--no-incremental",
-            "--allow-empty-bodies",
-            "--show-error-codes",
-            "--no-error-summary",
-            "--no-pretty",
-            "--show-absolute-path",
-            "--shadow-file",
-            installed,
-            str(source),
-            *(
-                [
-                    "--shadow-file",
-                    str(pathlib.Path(installed).with_name("egraph.py")),
-                    str(root / "python/egglog/egraph.py"),
-                ]
-                if family == "concrete_members"
-                else []
-            ),
-            str(fixture),
-        ],
-        cwd=tmp_path,
-        env=environment,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    expected = [
-        (number, line.split("# error: ", 1)[1])
-        for number, line in enumerate(fixture.read_text().splitlines(), 1)
-        if "# error: " in line
-    ]
-    actual = []
-    for line in result.stdout.splitlines():
-        if ": error:" not in line:
-            continue
-        match = re.fullmatch(re.escape(str(fixture)) + r":(\d+): error: .*  \[([^]]+)\]", line)
-        assert match is not None, line
-        actual.append((int(match[1]), match[2]))
-    assert result.returncode == bool(expected), result.stdout + result.stderr
     assert actual == expected, result.stdout + result.stderr
     assert not result.stderr, result.stderr

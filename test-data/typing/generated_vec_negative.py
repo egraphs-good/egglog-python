@@ -39,3 +39,17 @@ def size(value: VecLike[i64, int]) -> i64: ...
 
 size(["wrong"])  # error: list-item
 size(Vec(f64(1.0)))  # error: arg-type
+
+
+def wrong_input(value: f64) -> i64: ...
+
+
+def wrong_output(value: i64) -> int: ...
+
+
+value.map(wrong_input)  # error: arg-type
+value.map(wrong_output)  # error: type-var
+value.map()  # error: call-arg
+value.map(lambda item: item, i64(1))  # error: call-arg
+mapped = value.map(lambda item: item)
+wrong_mapped: Vec[f64] = mapped  # error: assignment

@@ -443,7 +443,6 @@ class _ExprMetaclass(type):
         )
         module = namespace.get("__module__", "")
         path = [*module.split("."), name] if module else [name]
-        builder = Builder()
         if BuiltinExpr in bases:
             if ruleset is not None:
                 msg = "Builtin classes cannot use a ruleset"
@@ -473,6 +472,7 @@ class _ExprMetaclass(type):
             if parameters:
                 result.__egg_arguments__ = parameters
             return result
+        builder = Builder()
         definition = builder.add(
             "sorts",
             pb.Sort(
@@ -1798,11 +1798,11 @@ class EGraph:
                 self.register(*actions)
 
     def num_threads(self) -> int:
-        """Return the actual thread count acknowledged at creation."""
+        """Return the number of worker threads configured for this e-graph."""
         return self._state.threads
 
     def no_decomp(self) -> bool:
-        """Return the immutable query-planning setting selected at creation."""
+        """Return whether rule decomposition is disabled for this e-graph."""
         return self._state.no_decomp
 
     @property
@@ -2298,7 +2298,12 @@ class EGraph:
         cost_model: TreeCostModel[Any] | DagCostModel[Any] | None = None,
         extractor: ExtractionMode = "tree",
     ) -> list[BASE_EXPR] | list[list[BASE_EXPR]] | list[tuple[BASE_EXPR, Any]] | list[list[tuple[BASE_EXPR, Any]]]:
-        """Extract ordered variants for one root or a sequence of roots over bytes."""
+        """
+        Extract up to ``n`` variants of one expression or each expression in a sequence.
+
+        Sequence results preserve the roots' order and may contain an empty
+        list when a root has no extractable representation.
+        """
         n = index_integer(n)
         if n <= 0:
             msg = "The number of variants must be positive"
@@ -2519,7 +2524,11 @@ class EGraph:
         return dot
 
     def display(self, graphviz: bool = False, **kwargs: Unpack[GraphvizKwargs]) -> None:
-        """Display the protobuf snapshot with the interactive widget or Graphviz."""
+        """
+        Displays the e-graph.
+
+        If in IPython it will display it inline, otherwise it will write it to a file and open it.
+        """
         from IPython.display import SVG, display  # noqa: PLC0415
 
         from .visualizer_widget import IN_IPYTHON, VisualizerWidget  # noqa: PLC0415
@@ -3597,7 +3606,7 @@ def rule(
 
 
 def var(name: str, bound: TypeForm[T], egg_name: str | None = None) -> T:
-    """Create a typed query variable named ``egg_name or name or '_'``."""
+    """Create a new variable with the given name and type."""
     return cast("T", _var(name, bound, egg_name=egg_name))
 
 

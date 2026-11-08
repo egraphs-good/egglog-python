@@ -6,23 +6,8 @@ file_format: mystnb
 
 The high level bindings available at the top module (`egglog`) expose most of the functionality of the `egglog` text format. This guide explains how to translate between the two.
 
-Any EGraph can also be converted to egglog with the `egraph.as_egglog_string` property, as long as it was created with `EGraph(save_egglog_string=True)`.
-Call `egraph.close()` to remove that saved transcript when it is no longer
-needed. A recorded e-graph does not accept further logical commands after it is closed.
-If a failure cannot be represented by Egglog's `(fail ...)` command—for
-example, a Python exception or a parse, expansion, or typechecking error—the
-transcript can no longer be guaranteed to replay the live state. Later
-commands and transcript reads then raise `RuntimeError`.
-Because the transcript is Egglog source, explicit callable, sort, variable,
-ruleset, and `let` names must also be unambiguous Egglog symbols. Names that are
-valid only through the encoded protocol are rejected before executing the saved
-command; direct e-graphs continue to accept them.
-Recorded graphs currently require `seminaive=True`: Source has no initial
-configuration context for `seminaive=False`, so that combination is rejected
-before graph creation. Runtime resource policies (threads, report detail and
-`no_decomp`) are not logical transcript commands and can still be queried or
-updated after closing a transcript. Logical replay need not retain their
-optimizer plans, match ordering or profile measurements.
+For recorded input history and lazy Egglog source export, see
+[Exporting input history as source](python-integration.md#exporting-input-history-as-source).
 
 ## Builtin Types
 

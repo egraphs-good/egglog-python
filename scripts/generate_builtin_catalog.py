@@ -147,20 +147,17 @@ def render_builtins(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object]
         exported.add("py_eval_fn")
 
     # Structural function application is a frontend protocol, not a builtin descriptor.
-    function_protocol = True
-    if function_protocol:
-        # Python presentation policy for the structural owner, not a host family.
-        exported.add("UnstableFn")
-        reserved_names.update({
-            "Callable",
-            "TypeVarTuple",
-            "Unpack",
-            "overload",
-            "_UnstableFn_T",
-            "_UnstableFn_TS",
-            "_UnstableFn_T1",
-            "_UnstableFn_T2",
-        })
+    exported.add("UnstableFn")
+    reserved_names.update({
+        "Callable",
+        "TypeVarTuple",
+        "Unpack",
+        "overload",
+        "_UnstableFn_T",
+        "_UnstableFn_TS",
+        "_UnstableFn_T1",
+        "_UnstableFn_T2",
+    })
 
     def identifier(name: str) -> str:
         if not name.isidentifier() or keyword.iskeyword(name):
@@ -235,9 +232,6 @@ def render_builtins(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object]
             return parameters[kind.value]
         if kind is not None and kind.field == "func":
             function = kind.value
-            if not function_protocol:
-                msg = "Function sort requires an admitted structural function view"
-                raise ValueError(msg)
             result = sort_type(
                 reference.owner.ref("sorts", function.result),
                 parameters=parameters,
@@ -610,7 +604,7 @@ def render_builtins(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object]
             raise ValueError(msg)
         exported.add(map_alias)
         used_names.update((map_alias, *map_hosts))
-    collections_imports = (["Callable"] if function_protocol or pyobject_protocol else []) + (
+    collections_imports = ["Callable"] + (
         ["Iterator"] if vec_protocol or map_protocol or set_protocol or multiset_protocol else []
     )
     lines = [
@@ -620,20 +614,19 @@ def render_builtins(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object]
         "",
         "from __future__ import annotations",
         "",
-        *(["from collections.abc import " + ", ".join(collections_imports)] if collections_imports else []),
+        "from collections.abc import " + ", ".join(collections_imports),
         *(["from fractions import Fraction"] if any(name in families for name in ("Rational", "BigRat")) else []),
         "from functools import partial",
         "from types import FunctionType, MethodType",
         "from typing import Generic, Never"
         + (", Protocol" if pyobject_protocol else "")
-        + ", TypeAlias, TypeVar"
-        + (", TypeVarTuple, Unpack" if function_protocol else "")
+        + ", TypeAlias, TypeVar, TypeVarTuple, Unpack"
         + (
             ", cast"
             if member_defaults or any("cast(" in expression for _, expression in free_defaults.values())
             else ""
         )
-        + (", overload" if function_protocol or any(p.conversion_sort for p in _SCALARS.values()) else ""),
+        + ", overload",
         "",
         "from typing_extensions import deprecated",
         "",
@@ -664,37 +657,36 @@ def render_builtins(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object]
     lines.extend(f"{name} = {expression}" for name, expression in member_defaults.values())
     if member_defaults:
         lines.append("")
-    if function_protocol:
-        lines.extend([
-            '_UnstableFn_T = TypeVar("_UnstableFn_T", bound=BaseExpr)',
-            '_UnstableFn_TS = TypeVarTuple("_UnstableFn_TS")',
-            '_UnstableFn_T1 = TypeVar("_UnstableFn_T1")',
-            '_UnstableFn_T2 = TypeVar("_UnstableFn_T2")',
-            "",
-            'class UnstableFn(BuiltinExpr, Generic[_UnstableFn_T, *_UnstableFn_TS], egg_sort="UnstableFn"):',
-            '    __match_args__ = ("value",)',
-            "    @overload",
-            "    def __init__(self, f: Callable[[Unpack[_UnstableFn_TS]], _UnstableFn_T]) -> None: ...",
-            "    @overload",
-            "    def __init__(self, f: Callable[[_UnstableFn_T1, Unpack[_UnstableFn_TS]], _UnstableFn_T], _a: _UnstableFn_T1, /) -> None: ...",
-            "    @overload",
-            "    def __init__(self, f: Callable[[_UnstableFn_T1, _UnstableFn_T2, Unpack[_UnstableFn_TS]], _UnstableFn_T], _a: _UnstableFn_T1, _b: _UnstableFn_T2, /) -> None: ...",
-            "    def __init__(self, f: Callable[..., BaseExpr], *partial: object) -> None: ...",
-            "    def __call__(self, *args: *_UnstableFn_TS) -> _UnstableFn_T: ...",
-            "    @property",
-            "    @method(preserve=True)",
-            "    def value(self) -> Callable[[Unpack[_UnstableFn_TS]], _UnstableFn_T]:",
-            "        from .deconstruct import get_literal_value  # noqa: PLC0415 -- avoid the inspection import cycle",
-            "        value = get_literal_value(self)",
-            "        if value is None:",
-            '            raise ExprValueError(self, "UnstableFn(f, *args)")',
-            "        return value",
-            "    @method(preserve=True)",
-            '    @deprecated("use .value")',
-            "    def eval(self) -> Callable[[Unpack[_UnstableFn_TS]], _UnstableFn_T]:",
-            "        return self.value",
-            "",
-        ])
+    lines.extend([
+        '_UnstableFn_T = TypeVar("_UnstableFn_T", bound=BaseExpr)',
+        '_UnstableFn_TS = TypeVarTuple("_UnstableFn_TS")',
+        '_UnstableFn_T1 = TypeVar("_UnstableFn_T1")',
+        '_UnstableFn_T2 = TypeVar("_UnstableFn_T2")',
+        "",
+        'class UnstableFn(BuiltinExpr, Generic[_UnstableFn_T, *_UnstableFn_TS], egg_sort="UnstableFn"):',
+        '    __match_args__ = ("value",)',
+        "    @overload",
+        "    def __init__(self, f: Callable[[Unpack[_UnstableFn_TS]], _UnstableFn_T]) -> None: ...",
+        "    @overload",
+        "    def __init__(self, f: Callable[[_UnstableFn_T1, Unpack[_UnstableFn_TS]], _UnstableFn_T], _a: _UnstableFn_T1, /) -> None: ...",
+        "    @overload",
+        "    def __init__(self, f: Callable[[_UnstableFn_T1, _UnstableFn_T2, Unpack[_UnstableFn_TS]], _UnstableFn_T], _a: _UnstableFn_T1, _b: _UnstableFn_T2, /) -> None: ...",
+        "    def __init__(self, f: Callable[..., BaseExpr], *partial: object) -> None: ...",
+        "    def __call__(self, *args: *_UnstableFn_TS) -> _UnstableFn_T: ...",
+        "    @property",
+        "    @method(preserve=True)",
+        "    def value(self) -> Callable[[Unpack[_UnstableFn_TS]], _UnstableFn_T]:",
+        "        from .deconstruct import get_literal_value  # noqa: PLC0415 -- avoid the inspection import cycle",
+        "        value = get_literal_value(self)",
+        "        if value is None:",
+        '            raise ExprValueError(self, "UnstableFn(f, *args)")',
+        "        return value",
+        "    @method(preserve=True)",
+        '    @deprecated("use .value")',
+        "    def eval(self) -> Callable[[Unpack[_UnstableFn_TS]], _UnstableFn_T]:",
+        "        return self.value",
+        "",
+    ])
     # A widening Like alias includes its symbolic conversion source. Emit that
     # source class first as well, so reciprocal operator inference sees its
     # already-checked methods rather than a deferred decorated class.

@@ -68,7 +68,7 @@ is fixed at creation; `num_threads()` reports the acknowledged worker count.
 ```python
 from egglog import EGraph
 
-egraph = EGraph(num_threads=0)
+egraph = EGraph(num_threads=4)
 assert egraph.num_threads() >= 1
 ```
 

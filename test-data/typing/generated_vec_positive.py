@@ -1,7 +1,7 @@
 from collections.abc import Iterator
 from typing import TypeVar, assert_type
 
-from egglog import BaseExpr, Expr, Pair, Unit, Vec, VecLike, convert, f64, function, i64
+from egglog import BaseExpr, Expr, Pair, String, Unit, Vec, VecLike, convert, f64, function, i64
 
 owned = Vec[i64](i64(1), i64(2))
 inferred = Vec(i64(1) + 2, i64(3))
@@ -61,3 +61,14 @@ assert_type(vector(), Vec[i64])
 assert_type(size((1, 2)), i64)
 assert_type(size([1, 2]), i64)
 assert_type(size(owned), i64)
+
+
+def stringify(value: i64) -> String: ...
+
+
+def atomize(value: i64) -> Atom: ...
+
+
+assert_type(owned.map(stringify), Vec[String])
+assert_type(owned.map(atomize), Vec[Atom])
+assert_type(owned.map(lambda value: value + 1), Vec[i64])

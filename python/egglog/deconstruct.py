@@ -1,4 +1,6 @@
-"""Inspect owned expression records locally, without evaluating expressions."""
+"""
+Utility functions to deconstruct expressions in Python.
+"""
 
 from __future__ import annotations
 

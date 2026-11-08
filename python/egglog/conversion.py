@@ -54,7 +54,9 @@ class _ComposedConverter:
 
 
 def converter(from_type: type | RuntimeClass, to_type: type | RuntimeClass, fn: Callable, cost: int = 1) -> None:
-    """Register a Python converter; target semantics remain owned sort records."""
+    """
+    Register a converter from some type to an egglog type.
+    """
     if not isinstance(to_type, RuntimeClass):
         raise TypeError(f"Expected an egglog return type, got {to_type!r}")
     if from_type == to_type:
@@ -208,7 +210,10 @@ def _binary_conversion_candidates(
 
 
 def convert(source: object, target: type[V]) -> V:
-    runtime_target = cast("object", target)
+    """
+    Convert a source object to a target type.
+    """
+    runtime_target: object = target
     if not isinstance(runtime_target, RuntimeClass) or runtime_target.__egg_sort__ is None:
         msg = "Conversion target must be a concrete egglog type"
         raise TypeError(msg)
@@ -216,6 +221,9 @@ def convert(source: object, target: type[V]) -> V:
 
 
 def convert_to_same_type(source: object, target: RuntimeExpr) -> RuntimeExpr:
+    """
+    Convert a source object to the same type as the target.
+    """
     node: pb.Node = target.__egg_ref__.read()
     return resolve_literal(target.__egg_ref__.owner.ref("sorts", node.sort_id), source)
 
@@ -230,4 +238,7 @@ def with_type_args(arguments: tuple[RuntimeClass, ...]) -> Generator[None, None,
 
 
 def get_type_args() -> tuple[RuntimeClass, ...]:
+    """
+    Get the type args for the type being converted.
+    """
     return TYPE_ARGS.get()

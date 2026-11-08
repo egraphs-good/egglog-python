@@ -153,14 +153,6 @@ work in direct protobuf queries but cannot be rendered as source. With
 `save_egglog_string=True`, those source errors arise when requesting
 `as_egglog_string`, without preventing engine execution.
 
-This differs from the legacy backend's implicit underscore prefix:
-
-| Variable pair | Legacy join | Canonical-name join |
-| --- | --- | --- |
-| `var("x", i64)` and `var("shown", i64, egg_name="_x")` | Same | Different |
-| `var("x", i64)` and `var("shown", i64, egg_name="x")` | Different | Same |
-
-Aliases are exact canonical names now; use `egg_name="x"` to join `var("x", i64)`.
 Separate queries and function bodies retain their own binders.
 
 For a callable (method, function, classmethod, or constructor), use `get_callable_fn(expr)` to get the underlying Python function:

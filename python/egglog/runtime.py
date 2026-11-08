@@ -1086,6 +1086,7 @@ class RuntimeClass(type):
     def __repr__(cls) -> str:
         return str(cls)
 
+    # Make hashable so can go in Union
     def __hash__(cls) -> int:
         return (
             hash(StructuralView(cls.__egg_sort__))
@@ -1094,14 +1095,18 @@ class RuntimeClass(type):
         )
 
     def __eq__(cls, other: object) -> bool:
+        """
+        Support equality for runtime comparison of egglog classes.
+        """
         if not isinstance(other, RuntimeClass):
             return NotImplemented
         if cls.__egg_sort__ is not None and other.__egg_sort__ is not None:
             return StructuralView(cls.__egg_sort__) == StructuralView(other.__egg_sort__)
         return cls.__egg_definition__ == other.__egg_definition__ and cls.__egg_arguments__ == other.__egg_arguments__
 
-    def __or__(cls, other: object) -> Any:
-        return Union[cls, other]  # noqa: UP007 -- runtime union of language class values
+    # Support unioning like types
+    def __or__(cls, value: object) -> Any:
+        return Union[cls, value]  # noqa: UP007 -- runtime union of language class values
 
     @property
     def __parameters__(cls) -> tuple[object, ...]:
