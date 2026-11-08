@@ -242,7 +242,6 @@ impl egglog_experimental::protobuf::NativeExtension for PyObjectExtension {
         graph: &EGraph,
         native_sort: &ArcSort,
         value: &pb::CustomValue,
-        span: Option<pb::Span>,
         destination: &mut pb::Program,
     ) -> Result<pb::Call, String> {
         if native_sort.name() != "PyObject"
@@ -265,7 +264,6 @@ impl egglog_experimental::protobuf::NativeExtension for PyObjectExtension {
             u32::try_from(destination.nodes.len()).map_err(|_| "too many custom helper nodes")?;
         destination.nodes.push(pb::Node {
             sort_id,
-            span,
             kind: Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue {
                 value: Some(pb::primitive_value::Value::String(
                     STANDARD.encode(&value.payload),
@@ -404,7 +402,7 @@ mod tests {
         let mut destination = original.clone();
         assert!(
             extension
-                .lower_custom_value(&graph, string, &value, None, &mut destination)
+                .lower_custom_value(&graph, string, &value, &mut destination)
                 .is_err()
         );
         assert_eq!(destination, original);
@@ -414,7 +412,7 @@ mod tests {
         };
         assert!(
             extension
-                .lower_custom_value(&graph, sort, &child_bearing, None, &mut destination)
+                .lower_custom_value(&graph, sort, &child_bearing, &mut destination)
                 .is_err()
         );
         assert_eq!(destination, original);

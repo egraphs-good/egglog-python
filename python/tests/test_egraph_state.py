@@ -62,7 +62,7 @@ def test_failed_recorded_scope_restores_parent_inputs_and_remains_usable() -> No
             if node.kind is not None
             and node.kind.field == "call"
             # A relation's authored Callable is its RuntimeFunction presentation at runtime.
-            and node.kind.value.func == marker.__egg_ref__.read().kind.value.name  # type: ignore[attr-defined]
+            and node.kind.value.func == marker.__egg_ref__.read().name  # type: ignore[attr-defined]
         ]
         assert len(marker_calls) == 1
         value_kind = snapshot.program.nodes[marker_calls[0].args[0]].kind

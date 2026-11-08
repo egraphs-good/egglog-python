@@ -24,12 +24,8 @@ def infer_call_bindings(
     No values or converters participate. Ordinary deconstruction retains only
     result-inferred bindings; a concrete named Func also retains its input sorts.
     """
-    record: pb.Declaration | pb.Primitive = declaration.read()
-    if isinstance(record, pb.Declaration):
-        assert record.kind is not None
-        kind = record.kind.value
-    else:
-        kind = record
+    record: pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive | pb.Primitive = declaration.read()
+    kind = record
     if isinstance(kind, pb.Primitive) and kind.signature is not None:
         signature = kind.signature
         if not signature.has_field("output"):
@@ -49,7 +45,7 @@ def infer_call_bindings(
     bindings: dict[int, Ref] = {}
     for index, actual in enumerate(arguments):
         pattern = inputs[index] if index < len(inputs) else tail[(index - len(inputs)) % len(tail)]
-        infer_sort(declaration.owner.ref("sorts", pattern.sort), actual, size, bindings)
+        infer_sort(declaration.owner.ref("sorts", pattern), actual, size, bindings)
     determined = frozenset(bindings)
     infer_sort(declaration.owner.ref("sorts", output), result, size, bindings)
     if len(bindings) != size:

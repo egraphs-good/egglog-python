@@ -45,7 +45,15 @@ class Catalog:
         self.owner = program if isinstance(program, Owner) else Builder.from_program(program).publish()
         self.roots = tuple(
             self.owner.ref(role, index)
-            for role in ("primitive_sorts", "primitives", "sorts", "declarations")
+            for role in (
+                "primitive_sorts",
+                "primitives",
+                "sorts",
+                "constructors",
+                "functions",
+                "relations",
+                "user_defined_primitives",
+            )
             for index in range(len(self.owner._slots[role]))
             if _definition_key(self.owner.ref(role, index).read()) is not None
         )
@@ -70,20 +78,22 @@ class Catalog:
         constants: dict[tuple[str, ...], tuple[Ref, int]] = {}
         members: dict[tuple[tuple[str, str] | None, str], tuple[Ref, int]] = {}
         for ref in self.roots:
-            declaration: pb.Sort | pb.Node | pb.Declaration | pb.Primitive | pb.PrimitiveSort = ref.read()
+            declaration: (
+                pb.Sort
+                | pb.Node
+                | pb.Constructor
+                | pb.Function
+                | pb.Relation
+                | pb.UserDefinedPrimitive
+                | pb.Primitive
+                | pb.PrimitiveSort
+            ) = ref.read()
             key = _definition_key(declaration)
             assert key is not None
             if key in definitions:
                 raise ValueError(f"Duplicate catalog definition: {key}")
             definitions[key] = ref
-            if isinstance(declaration, pb.Declaration) and declaration.kind is None:
-                msg = "Catalog declaration has no kind"
-                raise ValueError(msg)
-            if isinstance(declaration, pb.Declaration):
-                assert declaration.kind is not None
-                kind = declaration.kind.value
-            else:
-                kind = declaration
+            kind = declaration
             if isinstance(kind, (pb.PrimitiveSort, pb.Sort)):
                 binding = presentation(ref).type_view
                 if binding is not None:

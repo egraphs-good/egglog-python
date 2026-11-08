@@ -143,7 +143,13 @@ def pretty_ref(  # noqa: C901, PLR0912
             continue
         seen.add(reference)
         for child, _ in _structural_parts(reference, identity=False)[1]:
-            if child.role not in {"sorts", "declarations", "files"}:
+            if child.role not in {
+                "sorts",
+                "constructors",
+                "functions",
+                "relations",
+                "user_defined_primitives",
+            }:
                 parents[child] += 1
                 pending.append(child)
     active: set[Ref] = set()
@@ -618,11 +624,7 @@ def pretty_ref(  # noqa: C901, PLR0912
                     ):
                         msg = "Tail specialization supports only function and method views"
                         raise ValueError(msg)
-                    if isinstance(declared, pb.Declaration):
-                        assert declared.kind is not None
-                        kind = declared.kind.value
-                    else:
-                        kind = declared
+                    kind = declared
                     signature = (
                         kind.signature if isinstance(kind, pb.Primitive) and kind.signature is not None else None
                     )
@@ -770,7 +772,7 @@ def pretty_ref(  # noqa: C901, PLR0912
                                 for parameter, argument in zip(patterns, args, strict=True):
                                     payload: pb.Node = argument.read()
                                     infer_sort(
-                                        declaration.owner.ref("sorts", parameter.sort),
+                                        declaration.owner.ref("sorts", parameter),
                                         argument.owner.ref("sorts", payload.sort_id),
                                         signature.type_param_count,
                                         substitutions,
@@ -815,7 +817,7 @@ def pretty_ref(  # noqa: C901, PLR0912
                             (target, False, False),
                         ])
                         continue
-                case "union":
+                case "eq":
                     pieces = ["eq("]
                     for index, argument in enumerate(record.kind.value.members):
                         if index:
@@ -861,7 +863,7 @@ def pretty_ref(  # noqa: C901, PLR0912
                 if options:
                     pieces.append((", " if rule.query else "") + ", ".join(options))
                 pieces.append(").then(")
-                for index, action in enumerate(rule.head):
+                for index, action in enumerate(rule.actions):
                     if index:
                         pieces.append(", ")
                     pieces.append((reference, action))
@@ -876,7 +878,7 @@ def pretty_ref(  # noqa: C901, PLR0912
             if action.kind.field == "term":
                 term = owner.ref("nodes", action.kind.value)
                 node: pb.Node = term.read()
-                if node.kind is not None and node.kind.field == "union":
+                if node.kind is not None and node.kind.field == "eq":
                     if len(node.kind.value.members) != 2:
                         msg = "Only binary Union action presentation is migrated"
                         raise NotImplementedError(msg)
@@ -932,16 +934,12 @@ def pretty_ref(  # noqa: C901, PLR0912
                 target = _copy_record(action.kind.value)
                 declaration = _definition_at(reference, "callable", target.func)
                 declared = declaration.read()
-                if (
-                    not isinstance(declared, pb.Declaration)
-                    or declared.kind is None
-                    or not isinstance(declared.kind.value, pb.Constructor | pb.Function | pb.Relation)
-                ):
+                if not isinstance(declared, pb.Constructor | pb.Function | pb.Relation):
                     msg = "Delete and Subsume require a table call"
                     raise ValueError(msg)
                 builder = Builder()
                 builder.import_ref(declaration)
-                table = declared.kind.value
+                table = declared
                 if isinstance(table, pb.Relation):
                     builder.import_ref(builtin_catalog().definitions["primitive_sort", "Unit"])
                     result_sort = builder.add(

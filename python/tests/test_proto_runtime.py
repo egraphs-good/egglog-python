@@ -400,8 +400,8 @@ def test_ne_uses_actual_generic_catalog_and_ordered_canonical_calls(monkeypatch)
     assert signature is not None
     assert signature.type_param_count == 1
     assert len(signature.inputs) == 2
-    assert signature.inputs[0].sort == signature.inputs[1].sort
-    assert declaration.owner.ref("sorts", signature.inputs[0].sort).read().kind == Oneof("var", 0)
+    assert signature.inputs[0] == signature.inputs[1]
+    assert declaration.owner.ref("sorts", signature.inputs[0]).read().kind == Oneof("var", 0)
     assert declaration.owner.ref("sorts", signature.output).read().kind == Oneof(
         "primitive", pb.PrimitiveSortRef(name="Unit")
     )
@@ -647,7 +647,7 @@ def test_canonical_scheduler_until_queries_and_live_rulesets_without_engine(monk
     assert conditional_data.max_iterations == 1
     stop_call, stop_equality = (program.nodes[index] for index in conditional_data.until)
     _required_oneof(stop_call.kind, "call", pb.Call)
-    _required_oneof(stop_equality.kind, "union", pb.Union)
+    _required_oneof(stop_equality.kind, "eq", pb.Eq)
     assert _required_oneof(conditional_data.body[0].kind, "run", pb.Run).scheduler == binding_data.name
     assert "until=[" in str(schedule)
     assert "eq(" in str(schedule)
@@ -783,7 +783,7 @@ def test_rule_key_default_and_lambda_use_domains_without_engine():
     assert value_sort is not None
     builder = Builder()
     sort = builder.import_ref(value_sort)
-    empty = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union())))
+    empty = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq())))
     default = RuntimeExpr(builder.publish().ref("nodes", empty))
 
     @function
@@ -797,7 +797,7 @@ def test_rule_key_default_and_lambda_use_domains_without_engine():
     assert hash(key) == hash(equal)
     view = presentation(resolve_callable(choose)).views[0]
     assert view.params[0].default == view.params[1].default
-    assert all(node.kind is not None and node.kind.field != "union" for node in packed.program.nodes)
+    assert all(node.kind is not None and node.kind.field != "eq" for node in packed.program.nodes)
     # Unused frontend defaults do not participate in semantic rule identity.
     assert "default" not in packed.program.to_json()
 
@@ -806,7 +806,7 @@ def test_rule_key_default_and_lambda_use_domains_without_engine():
         sort = builder.import_ref(value_sort)
         func = builder.add("sorts", pb.Sort(kind=Oneof[Literal["func"], pb.FuncSort]("func", pb.FuncSort(result=sort))))
         bodies = [
-            builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union())))
+            builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq())))
             for _ in range(2)
         ]
         functions = [
@@ -834,7 +834,9 @@ def test_rule_key_default_and_lambda_use_domains_without_engine():
             pb.Rule(
                 kind=Oneof[Literal["rule"], pb.RuleBody](
                     "rule",
-                    pb.RuleBody(head=[pb.Action(kind=Oneof[Literal["term"], int]("term", node)) for node in functions]),
+                    pb.RuleBody(
+                        actions=[pb.Action(kind=Oneof[Literal["term"], int]("term", node)) for node in functions]
+                    ),
                 )
             ),
         )
@@ -865,7 +867,7 @@ def test_rule_key_shared_dag_work_is_bounded(monkeypatch, allocating, bidirectio
         assert value_sort is not None
         builder = Builder()
         sort = builder.import_ref(value_sort)
-        empty = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union())))
+        empty = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq())))
         left = RuntimeExpr(builder.publish().ref("nodes", empty))
     else:
         left = i64(1)
@@ -924,7 +926,7 @@ def test_rule_template_union_contexts_and_occurrence_identity(monkeypatch):
                 "nodes",
                 pb.Node(
                     sort_id=sort,
-                    kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[] if empty else [member])),
+                    kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq(members=[] if empty else [member])),
                 ),
             )
             for _ in range(2)
@@ -937,7 +939,7 @@ def test_rule_template_union_contexts_and_occurrence_identity(monkeypatch):
                     "rule",
                     pb.RuleBody(
                         query=[] if empty else nodes,
-                        head=[pb.Action(kind=Oneof[Literal["term"], int]("term", node)) for node in head],
+                        actions=[pb.Action(kind=Oneof[Literal["term"], int]("term", node)) for node in head],
                     ),
                 ),
                 eval_mode=pb.RuleEvalMode.SEMINAIVE,
@@ -978,15 +980,7 @@ def test_rule_template_comparison_uses_only_referenced_declarations(monkeypatch)
     assert hash(_rule_key(first.__egg_ref__)) == hash(_rule_key(second.__egg_ref__))
     packed = _pack_rule(second.__egg_ref__)
     program = packed.program
-    target = next(
-        _required_oneof(declaration.kind, "function", pb.Function)
-        for declaration in program.declarations
-        if (
-            declaration.kind.field == "function"
-            if declaration.kind is not None
-            else pytest.fail("Missing declaration kind")
-        )
-    )
+    target = next(declaration for declaration in program.functions if (True))
     value = next(
         index
         for index, node in enumerate(program.nodes)
@@ -1196,7 +1190,7 @@ def test_detached_equality_uses_predicates_without_borrowing_members(class_autho
     assert isinstance(inequality, Unit)
     assert equality
     assert expr_parts(inequality) == expr_parts(ne(detached).to(other))
-    assert equality.__egg_ref__.read().kind.field == "union"
+    assert equality.__egg_ref__.read().kind.field == "eq"
     assert inequality.__egg_ref__.read().kind.value.func == "egglog.core.ne"
     for name in ("__eq__", "__ne__", "__add__"):
         with pytest.raises(AttributeError, match="has no generated Python member"):
@@ -1264,7 +1258,7 @@ def test_direct_rewrite_owns_records_without_an_engine(monkeypatch, bidirectiona
     with pytest.raises(TypeError, match="destinations must be Rulesets"):
         rewrite(lhs, ruleset=object()).to(rhs)  # type: ignore[arg-type]
     condition_action = rule().then(condition)
-    head = condition_action.__egg_ref__.read().kind.value.head
+    head = condition_action.__egg_ref__.read().kind.value.actions
     assert len(head) == 1
     assert head[0].kind.field == "term"
     assert condition_action.__egg_ref__.owner.ref("nodes", head[0].kind.value) == condition.__egg_ref__
@@ -1381,7 +1375,7 @@ def test_birewrite_comparison_isolates_directional_union_allocations():
         nodes = [
             builder.add(
                 "nodes",
-                pb.Node(sort_id=sort, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[member]))),
+                pb.Node(sort_id=sort, kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq(members=[member]))),
             )
             for _ in range(5)
         ]
@@ -1389,7 +1383,7 @@ def test_birewrite_comparison_isolates_directional_union_allocations():
         sides = [
             builder.add(
                 "nodes",
-                pb.Node(sort_id=sort, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=members))),
+                pb.Node(sort_id=sort, kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq(members=members))),
             )
             for members in ([left, left if shared_left else nodes[2]], [right, right if shared_right else nodes[3]])
         ]
@@ -1430,10 +1424,10 @@ def test_direct_rule_reuses_query_variable_in_inline_set(monkeypatch):
     assert _required_oneof(packed.nodes[index].kind, "var", str) == "x"
     assert packed.rulesets[0].value is not None
     rule_record = _required_oneof(packed.rulesets[0].value.rules[0].kind, "rule", pb.RuleBody)
-    members = _required_oneof(packed.nodes[rule_record.query[0]].kind, "union", pb.Union).members
+    members = _required_oneof(packed.nodes[rule_record.query[0]].kind, "eq", pb.Eq).members
     assert members[1] == index
     assert _required_oneof(packed.nodes[members[0]].kind, "call", pb.Call).args == [index]
-    assignment_record = _required_oneof(rule_record.head[0].kind, "set", pb.Set)
+    assignment_record = _required_oneof(rule_record.actions[0].kind, "set", pb.Set)
     assert assignment_record.target is not None
     assert assignment_record.target.args == [index]
     assert assignment_record.value == index
@@ -1476,18 +1470,18 @@ def test_direct_rule_relocates_inline_actions_without_an_engine(monkeypatch):
     assert record.has_field("name")
     assert record.eval_mode == pb.RuleEvalMode.NAIVE
     assert record.no_decomp
-    assert [action.kind.field for action in record.kind.value.head] == ["set", "term", "term", "term"]
+    assert [action.kind.field for action in record.kind.value.actions] == ["set", "term", "term", "term"]
     packed = _pack_rule(authored.__egg_ref__)
     assert not packed.program.commands
     assert packed.program.rulesets[0].value is not None
     body = _required_oneof(packed.program.rulesets[0].value.rules[0].kind, "rule", pb.RuleBody)
-    assert body.query[0] != body.query[1]  # Distinct equal Union occurrences stay distinct.
+    assert body.query[0] != body.query[1]  # Distinct equal Eq occurrences stay distinct.
     assert (
-        _required_oneof(body.head[1].kind, "term", int)
-        == _required_oneof(body.head[2].kind, "term", int)
+        _required_oneof(body.actions[1].kind, "term", int)
+        == _required_oneof(body.actions[2].kind, "term", int)
         == body.query[0]
     )
-    assignment_record = _required_oneof(body.head[0].kind, "set", pb.Set)
+    assignment_record = _required_oneof(body.actions[0].kind, "set", pb.Set)
     assert assignment_record.target is not None
     assert assignment_record.target.args == []
     scalar_value = _required_oneof(
@@ -1495,10 +1489,13 @@ def test_direct_rule_relocates_inline_actions_without_an_engine(monkeypatch):
     )
     assert _required_oneof(scalar_value.value, "i64", int) == 7
     assert any(
-        (declaration.kind.field == "function" and declaration.kind.value.name == assignment_record.target.func)
-        if declaration.kind is not None
-        else pytest.fail("Missing declaration kind")
-        for declaration in packed.program.declarations
+        isinstance(declaration, pb.Function) and declaration.name == assignment_record.target.func
+        for declaration in (
+            *packed.program.constructors,
+            *packed.program.functions,
+            *packed.program.relations,
+            *packed.program.user_defined_primitives,
+        )
     )
     expected = (
         "rule(eq(RuleBox(1)).to(RuleBox(2)), eq(RuleBox(1)).to(RuleBox(2)), "
@@ -1508,7 +1505,7 @@ def test_direct_rule_relocates_inline_actions_without_an_engine(monkeypatch):
         ")"
     )
     assert str(authored) == repr(authored) == expected
-    record.kind.value.head.clear()
+    record.kind.value.actions.clear()
     left.__egg_ref__ = RuleBox(9).__egg_ref__  # type: ignore[arg-type]
     assert str(authored) == expected
     decoded = pb.Program.from_binary(packed.program.to_binary())
@@ -1687,12 +1684,8 @@ def test_set_formed_value_rejects_malformed_children(set_runtime, malformed):
     )
     if malformed == "user_call":
         builder.add(
-            "declarations",
-            pb.Declaration(
-                kind=Oneof[Literal["function"], pb.Function](
-                    "function", pb.Function(name="egglog.core.set.of", output=sort)
-                )
-            ),
+            "functions",
+            pb.Function(name="egglog.core.set.of", output=sort),
         )
         kind = Oneof[Literal["call"], pb.Call]("call", pb.Call(func="egglog.core.set.of", args=[child]))
     root = builder.add("nodes", pb.Node(sort_id=sort, kind=kind))
@@ -1724,7 +1717,7 @@ def test_set_empty_converter_and_formed_pretty_use_retained_presentation(
 
 def test_map_from_pairs_stays_symbolic_with_forged_input_metadata(set_catalog_program, request):
     declaration = next(d for d in set_catalog_program.primitives if d.name == "egglog.core.map.of")
-    input_sort = set_catalog_program.sorts[declaration.signature.inputs[0].sort]
+    input_sort = set_catalog_program.sorts[declaration.signature.inputs[0]]
     assert input_sort.kind.field == "primitive"
     assert input_sort.kind.value.name == "Vec"
     input_sort.kind.value.name = "Set"
@@ -2782,9 +2775,7 @@ def test_map_shallow_inspection_and_program_validation_have_distinct_boundaries(
             value,
             pb.Node(
                 sort_id=builder.import_ref(f64.__egg_sort__),  # type: ignore[attr-defined]
-                kind=Oneof[Literal["union"], pb.Union](
-                    "union", pb.Union(members=[999 if invalid == "union_oob" else value])
-                ),
+                kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq(members=[999 if invalid == "union_oob" else value])),
             ),
         )
     entry = pb.MapEntry(
@@ -2796,12 +2787,8 @@ def test_map_shallow_inspection_and_program_validation_have_distinct_boundaries(
     )
     if invalid == "user_call":
         builder.add(
-            "declarations",
-            pb.Declaration(
-                kind=Oneof[Literal["function"], pb.Function](
-                    "function", pb.Function(name="egglog.core.map.empty", output=sort)
-                )
-            ),
+            "functions",
+            pb.Function(name="egglog.core.map.empty", output=sort),
         )
         kind = Oneof[Literal["call"], pb.Call]("call", pb.Call(func="egglog.core.map.empty"))
     elif invalid == "call_arity":
@@ -2836,12 +2823,8 @@ def test_map_shallow_inspection_preserves_equality_boundary_cycles():
         ),
     )
     builder.add(
-        "declarations",
-        pb.Declaration(
-            kind=Oneof[Literal["constructor"], pb.Constructor](
-                "constructor", pb.Constructor(name="WrapRecursiveMap", inputs=[pb.Arg(sort=mapping)], output=element)
-            )
-        ),
+        "constructors",
+        pb.Constructor(name="WrapRecursiveMap", inputs=[mapping], output=element),
     )
     root = builder.reserve("nodes")
     child = builder.reserve("nodes")
@@ -2854,7 +2837,7 @@ def test_map_shallow_inspection_preserves_equality_boundary_cycles():
     builder.fill(
         "nodes",
         child,
-        pb.Node(sort_id=element, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[member]))),
+        pb.Node(sort_id=element, kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq(members=[member]))),
     )
     key = builder.import_ref(key_ref)
     builder.fill(
@@ -2904,19 +2887,14 @@ def test_map_from_pairs_defers_malformed_nested_data_to_program_validation(inval
     )
     if invalid == "pair_user":
         builder.add(
-            "declarations",
-            pb.Declaration(
-                kind=Oneof[Literal["function"], pb.Function](
-                    "function",
-                    pb.Function(
-                        name="egglog.core.pair.make",
-                        inputs=[
-                            pb.Arg(sort=builder.import_ref(i64.__egg_sort__)),  # type: ignore[attr-defined]
-                            pb.Arg(sort=builder.import_ref(f64.__egg_sort__)),  # type: ignore[attr-defined]
-                        ],
-                        output=pair_sort,
-                    ),
-                )
+            "functions",
+            pb.Function(
+                name="egglog.core.pair.make",
+                inputs=[
+                    builder.import_ref(i64.__egg_sort__),  # type: ignore[attr-defined]
+                    builder.import_ref(f64.__egg_sort__),  # type: ignore[attr-defined]
+                ],
+                output=pair_sort,
             ),
         )
         pair_kind = Oneof[Literal["call"], pb.Call]("call", pb.Call(func="egglog.core.pair.make", args=[key, value]))
@@ -3080,7 +3058,13 @@ def test_vec_map_callback_capture_core_order_and_binary_roundtrip(equality_outpu
     assert calls == [1]
     encoded = pack([reference])
     assert not any(
-        item.kind is not None and item.kind.field == "user_defined_primitive" for item in encoded.program.declarations
+        isinstance(item, pb.UserDefinedPrimitive)
+        for item in (
+            *encoded.program.constructors,
+            *encoded.program.functions,
+            *encoded.program.relations,
+            *encoded.program.user_defined_primitives,
+        )
     )
     builder = Builder.from_program(
         pb.Program.from_binary(encoded.program.to_binary()), environment=reference.owner._environment
@@ -3198,7 +3182,12 @@ def test_vec_generic_authoring_local_protocols_and_pretty(vec_runtime, monkeypat
     assert StructuralView(argument) == StructuralView(to_runtime_expr(i64(5)).__egg_ref__)
     assert StructuralView(reference.owner.ref("sorts", node.sort_id)) == StructuralView(vector[i64].__egg_sort__)
     packed = pack([reference])
-    assert not packed.program.declarations
+    assert not (
+        *packed.program.constructors,
+        *packed.program.functions,
+        *packed.program.relations,
+        *packed.program.user_defined_primitives,
+    )
     assert runtime._definition_at(reference, "callable", "egglog.core.vec.range").role == "primitives"
     decoded = Builder.from_program(
         pb.Program.from_binary(packed.program.to_binary()), environment=reference.owner._environment
@@ -3334,12 +3323,8 @@ def test_vec_value_rejects_invalid_payload_and_provenance(vec_runtime, malformed
     )
     if malformed == "user_call":
         builder.add(
-            "declarations",
-            pb.Declaration(
-                kind=Oneof[Literal["function"], pb.Function](
-                    "function", pb.Function(name="egglog.core.vec.of", output=sort)
-                )
-            ),
+            "functions",
+            pb.Function(name="egglog.core.vec.of", output=sort),
         )
         kind = Oneof[Literal["call"], pb.Call]("call", pb.Call(func="egglog.core.vec.of", args=[child]))
     root = builder.add("nodes", pb.Node(sort_id=sort, kind=kind))
@@ -3364,11 +3349,18 @@ def test_vec_computed_value_is_not_locally_evaluated(vec_runtime):
 
     pair = computed_pair()
     assert isinstance(pair, Pair[i64, f64])  # type: ignore[misc]
-    assert resolve_callable(computed_pair).read().kind.field == "function"
+    assert isinstance(resolve_callable(computed_pair).read(), pb.Function)
     program = pack([pair.__egg_ref__]).program
-    assert [declaration.kind.value.name for declaration in program.declarations if declaration.kind is not None] == [
-        resolve_callable(computed_pair).read().kind.value.name
-    ]
+    assert [
+        declaration.name
+        for declaration in (
+            *program.constructors,
+            *program.functions,
+            *program.relations,
+            *program.user_defined_primitives,
+        )
+        if True
+    ] == [resolve_callable(computed_pair).read().name]
     assert {
         sort.kind.value.name for sort in program.sorts if sort.kind is not None and sort.kind.field == "primitive"
     } >= {"Pair", "i64", "f64"}
@@ -3568,14 +3560,14 @@ def test_pair_value_payload_preserves_child_refs_and_union_identity(pair_runtime
     scalar = builder.import_ref(i64.__egg_sort__)  # type: ignore[attr-defined]
     literal = builder.import_ref(i64(1).__egg_ref__)
     first = builder.add(
-        "nodes", pb.Node(sort_id=scalar, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[literal])))
+        "nodes", pb.Node(sort_id=scalar, kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq(members=[literal])))
     )
     second = (
         first
         if same
         else builder.add(
             "nodes",
-            pb.Node(sort_id=scalar, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[literal]))),
+            pb.Node(sort_id=scalar, kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq(members=[literal]))),
         )
     )
     root = builder.add(
@@ -3687,12 +3679,8 @@ def test_pair_value_rejects_nominal_and_user_call_provenance(pair_runtime):
     builder = Builder()
     output = builder.import_ref(pair_runtime[i64, f64].__egg_sort__)
     builder.add(
-        "declarations",
-        pb.Declaration(
-            kind=Oneof[Literal["constructor"], pb.Constructor](
-                "constructor", pb.Constructor(name="egglog.core.pair.make", output=output)
-            )
-        ),
+        "constructors",
+        pb.Constructor(name="egglog.core.pair.make", output=output),
     )
     root = builder.add(
         "nodes",
@@ -3737,8 +3725,8 @@ def test_function_source_records_defaults_and_metadata(doc, monkeypatch):
     record = reference.read()
     assert record.doc == (doc or "")
     assert record.has_field("doc") == (doc is not None)
-    assert record.kind.field == "function"
-    assert record.kind.value.name == "exact score"
+    assert isinstance(record, pb.Function)
+    assert record.name == "exact score"
     expression = score(1)  # type: ignore[arg-type]
     assert str(expression) == "score(1)"
     assert str(score(offset=3, x=1)) == "score(1, 3)"  # type: ignore[arg-type]
@@ -3790,12 +3778,7 @@ def test_owned_definition_lookup_keeps_exact_refs_without_detaching(monkeypatch,
             ),
             pb.Sort(kind=Oneof("eq", name)),
         ],
-        declarations=[
-            pb.Declaration(
-                kind=Oneof[Literal["relation"], pb.Relation]("relation", pb.Relation(name=name)),
-                doc="retained documentation",
-            ),
-        ],
+        relations=[pb.Relation(name=name, doc="retained documentation")],
         nodes=[pb.Node(kind=Oneof[Literal["var"], str]("var", "origin"))],
     )
     native = Builder.from_builtins(pb.BuiltinCatalog(primitive_sorts=[pb.PrimitiveSort(name=name)])).publish()
@@ -3803,13 +3786,15 @@ def test_owned_definition_lookup_keeps_exact_refs_without_detaching(monkeypatch,
     original = Builder.from_program(requested, environment=(native, fallback.owner)).publish()
     origin = original.ref("nodes", 0)
     expected = {
-        "callable": original.ref("declarations", 0),
+        "callable": original.ref("relations", 0),
         "primitive_sort": native.ref("primitive_sorts", 0),
         "eq_sort": original.ref("sorts", 1),
     }
-    _required_oneof(requested.declarations[0].kind, "relation", pb.Relation).name = "changed caller input"
+    (*requested.constructors, *requested.functions, *requested.relations, *requested.user_defined_primitives)[
+        0
+    ].name = "changed caller input"
     detached = expected["callable"].read()
-    detached.kind.value.name = "changed detached record"
+    detached.name = "changed detached record"
     detached.doc = "changed detached documentation"
     assert expected["callable"].read().doc == "retained documentation"
     missing = "__egglog_lookup_later"
@@ -3825,12 +3810,8 @@ def test_owned_definition_lookup_keeps_exact_refs_without_detaching(monkeypatch,
     extended.import_ref(expected["callable"])
     if later != "none":
         added = extended.add(
-            "declarations",
-            pb.Declaration(
-                kind=Oneof[Literal["relation"], pb.Relation](
-                    "relation", pb.Relation(name=name if later == "conflicting" else missing)
-                )
-            ),
+            "relations",
+            pb.Relation(name=name if later == "conflicting" else missing),
         )
     scalar = extended.import_ref(original.ref("sorts", 0))
     query_index = extended.add("nodes", pb.Node(sort_id=scalar, kind=Oneof[Literal["var"], str]("var", "new origin")))
@@ -3852,11 +3833,11 @@ def test_owned_definition_lookup_keeps_exact_refs_without_detaching(monkeypatch,
                 assert runtime._definition_at(query, namespace, name) == reference
         assert runtime._definition_at(query, "primitive_sort", "i64") == fallback
         if later == "distinct":
-            assert runtime._definition_at(query, "callable", missing) == extended_owner.ref("declarations", added)
+            assert runtime._definition_at(query, "callable", missing) == extended_owner.ref("relations", added)
         else:
             with pytest.raises(LookupError, match="No owned canonical definition"):
                 runtime._definition_at(query, "callable", missing)
-    assert expected["callable"].read().kind.value.name == name
+    assert expected["callable"].read().name == name
 
 
 def test_owned_definition_lookup_and_deconstruction_are_linear(monkeypatch):
@@ -3874,8 +3855,8 @@ def test_owned_definition_lookup_and_deconstruction_are_linear(monkeypatch):
         )
         for index in range(size):
             builder.add(
-                "declarations",
-                pb.Declaration(kind=Oneof[Literal["relation"], pb.Relation]("relation", pb.Relation(name=f"r{index}"))),
+                "relations",
+                pb.Relation(name=f"r{index}"),
             )
             builder.add(
                 "nodes", pb.Node(sort_id=unit, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func=f"r{index}")))
@@ -3896,14 +3877,18 @@ def test_owned_definition_lookup_and_deconstruction_are_linear(monkeypatch):
             for _ in range(2):
                 for index in range(size):
                     expression = RuntimeExpr(owner.ref("nodes", index))
-                    expected = owner.ref("declarations", index)
+                    expected = owner.ref("relations", index)
                     assert runtime._definition_at(expression.__egg_ref__, "callable", f"r{index}") == expected
                     recovered = get_callable_fn(expression)
                     assert isinstance(recovered, RuntimeFunction)
                     assert recovered.__egg_ref__ == expected
         indices = getattr(owner, "_definition_indices", None) or {}
         retained = sum(len(slots) for slots in indices.values())
-        assert all(role == "declarations" and type(slot) is int for slots in indices.values() for role, slot in slots)
+        assert all(
+            role in {"constructors", "functions", "relations", "user_defined_primitives"} and type(slot) is int
+            for slots in indices.values()
+            for role, slot in slots
+        )
         measurements.append((size, visits, retained))
         released = weakref(owner)
         del owner, expected, expression, recovered
@@ -4029,8 +4014,8 @@ def test_bodyless_none_and_docstring_do_not_execute_python():
     def documented() -> f64:
         """Only documentation."""
 
-    assert resolve_callable(plain).read().kind.field == "function"
-    assert resolve_callable(documented).read().kind.field == "function"
+    assert isinstance(resolve_callable(plain).read(), pb.Function)
+    assert isinstance(resolve_callable(documented).read(), pb.Function)
     assert str(plain()) == "plain()"
     assert documented.__doc__ == "Only documentation."
 
@@ -4051,8 +4036,8 @@ def test_named_eager_body_is_authored_once_without_engine():
     runtime_body = _required_runtime_function(body)
     assert runtime_body.__egg_prepare__ is None
     declaration = resolve_callable(body)
-    assert declaration.read().kind.field == "user_defined_primitive"
-    assert declaration.owner.ref("nodes", declaration.read().kind.value.body).read().kind.value.value.value == 1
+    assert isinstance(declaration.read(), pb.UserDefinedPrimitive)
+    assert declaration.owner.ref("nodes", declaration.read().body).read().kind.value.value.value == 1
 
     @function(cost=1)  # type: ignore[type-var]
     def invalid() -> i64: ...
@@ -4075,9 +4060,10 @@ def test_named_eager_binders_keep_slots_and_callee_closure():
         return inner(first, second) + inner(second)
 
     reference = resolve_callable(outer)
-    primitive = reference.read().kind.value
+    primitive = reference.read()
     assert isinstance(primitive, pb.UserDefinedPrimitive)
-    assert [argument.name for argument in primitive.inputs] == ["unused", "second", "first"]
+    assert primitive.inputs == [primitive.output] * 3
+    assert [parameter.name for parameter in presentation(reference).views[0].params] == ["unused", "second", "first"]
     body = RuntimeExpr(reference.owner.ref("nodes", primitive.body))
     assert str(body) == "inner(_2, _1) + inner(_1)"
     inner_reference = resolve_callable(inner)
@@ -4085,22 +4071,27 @@ def test_named_eager_binders_keep_slots_and_callee_closure():
     program = pack([reference]).program
     inner_copy = next(
         declaration
-        for declaration in program.declarations
-        if declaration.kind is not None and declaration.kind.value.name == inner_reference.read().kind.value.name
+        for declaration in (
+            *program.constructors,
+            *program.functions,
+            *program.relations,
+            *program.user_defined_primitives,
+        )
+        if declaration.name == inner_reference.read().name
     )
-    assert inner_copy.kind is not None
-    assert isinstance(inner_copy.kind.value, pb.UserDefinedPrimitive)
+    assert isinstance(inner_copy, pb.UserDefinedPrimitive)
     assert pack([inner_reference]).program.to_binary() == before
-    inner_body = RuntimeExpr(inner_reference.owner.ref("nodes", inner_reference.read().kind.value.body))
+    inner_body = RuntimeExpr(inner_reference.owner.ref("nodes", inner_reference.read().body))
     assert str(inner_body) == "_0 + _1"
     default = presentation(inner_reference).views[0].params[1].default
     assert default is not None
     default_kind = default.read().kind
     assert default_kind is not None
     assert isinstance(default_kind.value, pb.Call)
-    assert default_kind.value.func == resolve_callable(seed).read().kind.value.name
+    assert default_kind.value.func == resolve_callable(seed).read().name
     assert inner_reference in {
-        reference.owner.ref("declarations", index) for index in range(len(reference.owner._slots["declarations"]))
+        reference.owner.ref("user_defined_primitives", index)
+        for index in range(len(reference.owner._slots["user_defined_primitives"]))
     }
 
 
@@ -4128,7 +4119,7 @@ def test_named_eager_partial_call_captures_bind_formals_only():
         return UnstableFn(add, value)
 
     reference = resolve_callable(capture)
-    body = reference.owner.ref("nodes", reference.read().kind.value.body)
+    body = reference.owner.ref("nodes", reference.read().body)
     value = RuntimeExpr(body)
     assert str(value) == "partial(add, _1)"
     assert body.read().kind.value.value.field == "partial_call"
@@ -4187,13 +4178,13 @@ def test_named_eager_eqsort_result_and_ambient_ruleset_isolation():
         assert get_current_ruleset() is ambient
     assert calls == [None]
     assert isinstance(result, Box)
-    assert resolve_callable(body).read().kind.field == "user_defined_primitive"
+    assert isinstance(resolve_callable(body).read(), pb.UserDefinedPrimitive)
     assert not ambient._snapshot().read().value.rules
 
     def empty(value: i64): ...
 
     empty.__annotations__["return"] = Box
-    assert resolve_callable(function(empty)).read().kind.field == "constructor"
+    assert isinstance(resolve_callable(function(empty)).read(), pb.Constructor)
 
 
 def test_named_eager_result_conversion_has_no_ambient_ruleset():
@@ -4244,7 +4235,7 @@ def test_free_ruleset_body_is_a_deferred_constructor_rewrite(subsume_body):
         expression = body(i64(9))
         assert get_current_ruleset() is ambient
     assert calls == [(destination, "unused", "value")]
-    assert resolve_callable(body).read().kind.field == "constructor"
+    assert isinstance(resolve_callable(body).read(), pb.Constructor)
     arguments = get_callable_args(expression)
     assert arguments is not None
     assert [argument.value for argument in arguments] == [9, 4]
@@ -4268,11 +4259,10 @@ def test_free_ruleset_body_is_a_deferred_constructor_rewrite(subsume_body):
     encoded = pack([snapshot]).program.to_binary()
     program = pb.Program.from_binary(encoded)
     assert program.to_binary() == encoded
-    assert {
-        declaration.kind.value.name
-        for declaration in program.declarations
-        if declaration.kind is not None and declaration.kind.field == "constructor"
-    } == {resolve_callable(body).read().kind.value.name, resolve_callable(FreeRewriteBox).read().kind.value.name}
+    assert {declaration.name for declaration in program.constructors} == {
+        resolve_callable(body).read().name,
+        resolve_callable(FreeRewriteBox).read().name,
+    }
 
 
 @pytest.mark.parametrize(("name", "expected"), [("value", "_value"), ("0", "_0"), ("_0", "__0")])
@@ -4306,11 +4296,7 @@ def test_free_ruleset_body_preserves_original_positional_variable_relation(name,
     assert call_arguments[0].__egg_ref__.read().kind.value == "_0"
     assert free.__egg_ref__.read().kind.value == expected
     program = pack([snapshot]).program
-    declaration = next(
-        item.kind.value
-        for item in program.declarations
-        if item.kind is not None and isinstance(item.kind.value, pb.UserDefinedPrimitive)
-    )
+    declaration = next(item for item in program.user_defined_primitives)
     inner_body = program.nodes[declaration.body]
     assert inner_body.kind is not None
     assert isinstance(inner_body.kind.value, pb.Call)
@@ -4439,14 +4425,14 @@ def test_free_ruleset_body_preserves_constructor_options(options):
 
     reference = resolve_callable(body)
     record = reference.read()
-    assert record.kind.field == "constructor"
-    assert record.kind.value.unextractable is options.get("unextractable", False)
+    assert isinstance(record, pb.Constructor)
+    assert record.unextractable is options.get("unextractable", False)
     if "cost" in options:
-        assert record.kind.value.has_field("cost")
-        cost = reference.owner.ref("nodes", record.kind.value.cost).read()
+        assert record.has_field("cost")
+        cost = reference.owner.ref("nodes", record.cost).read()
         assert cost.kind.value.value == Oneof[Literal["i64"], int]("i64", options["cost"])
     else:
-        assert not record.kind.value.has_field("cost")
+        assert not record.has_field("cost")
     assert calls == [destination]
     assert len(destination._snapshot().read().value.rules) == 1
     expression = body()
@@ -4568,7 +4554,7 @@ def test_free_function_retains_local_output_hooks_then_collects():
         def leaf(value: i64 = i64(1)) -> Box: ...
 
         expression = leaf()
-        assert resolve_callable(leaf).read().kind.field == "constructor"
+        assert isinstance(resolve_callable(leaf).read(), pb.Constructor)
         return expression, weakref(Box), weakref(resolve_callable(leaf).owner), weakref(leaf)
 
     expression, cls, owner, callable_ref = factory()
@@ -4604,7 +4590,7 @@ def test_public_union_action_freezes_canonical_operands_and_conversion(class_aut
     assert command.kind.value.kind.field == "term"
     root = action.__egg_ref__.owner.ref("nodes", command.kind.value.kind.value)
     node = root.read()
-    assert node.kind.field == "union"
+    assert node.kind.field == "eq"
     assert len(node.kind.value.members) == 2
     runtime_union_node, _union_context = _required_authored_class(UnionNode)
     union_sort = runtime_union_node.__egg_sort__
@@ -4644,7 +4630,7 @@ def test_public_union_reuse_and_separate_constructions_retain_identity(class_aut
     assert roots[0] == roots[1] == roots[2]
     assert roots[0] != roots[3]
     authored = rule().then(action, action, cloned, separate)
-    head = authored.__egg_ref__.read().kind.value.head
+    head = authored.__egg_ref__.read().kind.value.actions
     assert head[0].kind.value == head[1].kind.value == head[2].kind.value
     assert head[0].kind.value != head[3].kind.value
     assert _rule_key(rule().then(action).__egg_ref__) == _rule_key(rule().then(separate).__egg_ref__)
@@ -4668,7 +4654,7 @@ def test_public_union_contextual_rule_and_fact_presentation(class_authoring_with
     packed = _pack_rule(authored.__egg_ref__).program
     assert packed.rulesets[0].value is not None
     canonical = _required_oneof(packed.rulesets[0].value.rules[0].kind, "rule", pb.RuleBody)
-    assert canonical.query == [_required_oneof(canonical.head[0].kind, "term", int)]
+    assert canonical.query == [_required_oneof(canonical.actions[0].kind, "term", int)]
     assert pb.Program.from_binary(packed.to_binary()) == packed
 
 
@@ -4696,11 +4682,11 @@ def test_fact_action_reuses_authored_union_nodes_without_engine(class_authoring_
     program = pb.Program.from_binary(packet.program.to_binary())
     first, second = packet.indices
     assert first != second
-    _required_oneof(program.nodes[first].kind, "union", pb.Union)
-    _required_oneof(program.nodes[second].kind, "union", pb.Union)
+    _required_oneof(program.nodes[first].kind, "eq", pb.Eq)
+    _required_oneof(program.nodes[second].kind, "eq", pb.Eq)
     assert (
         sum(
-            node.kind.field == "union" if node.kind is not None else pytest.fail("Missing node kind")
+            node.kind.field == "eq" if node.kind is not None else pytest.fail("Missing node kind")
             for node in program.nodes
         )
         == 2
@@ -4711,7 +4697,7 @@ def test_fact_action_reuses_authored_union_nodes_without_engine(class_authoring_
     assert addition is not None
     canonical = _required_oneof(addition.rules[0].kind, "rule", pb.RuleBody)
     assert canonical.query == [first]
-    assert [_required_oneof(action.kind, "term", int) for action in canonical.head] == [first, first, second]
+    assert [_required_oneof(action.kind, "term", int) for action in canonical.actions] == [first, first, second]
     assert fact.__egg_ref__.read().to_binary() == original
 
 
@@ -4723,12 +4709,10 @@ def test_set_and_term_authoring_own_commands_without_evaluating(monkeypatch):
     builder = Builder()
     output = builder.import_ref(i64.__egg_sort__)  # type: ignore[attr-defined]
     index = builder.add(
-        "declarations",
-        pb.Declaration(
-            kind=Oneof[Literal["function"], pb.Function]("function", pb.Function(name="slot", output=output))
-        ),
+        "functions",
+        pb.Function(name="slot", output=output),
     )
-    target = RuntimeFunction(builder.publish().ref("declarations", index))()
+    target = RuntimeFunction(builder.publish().ref("functions", index))()
     assert target is not None
     rhs = to_runtime_expr(i64(4))
     action = set_(target).to(rhs)
@@ -4872,7 +4856,7 @@ def test_constant_eager_defaults_are_closed_nullary_primitives(monkeypatch):
         (constant("missing", Maybe[i64], None), Maybe[i64].none()),
     ]:
         declaration = resolve_callable(value)
-        primitive = declaration.read().kind.value
+        primitive = declaration.read()
         assert isinstance(primitive, pb.UserDefinedPrimitive)
         assert not primitive.inputs
         assert expr_parts(RuntimeExpr(declaration.owner.ref("nodes", primitive.body))) == expr_parts(expected)
@@ -4905,7 +4889,7 @@ def test_constant_merges_are_nullary_functions_without_engine(monkeypatch):
     assert calls == [None]
     for value, expected in [(maximum_value, "old.max(new)"), (token, "old")]:
         declaration = resolve_callable(value)
-        merged = declaration.read().kind.value
+        merged = declaration.read()
         assert isinstance(merged, pb.Function)
         assert not merged.inputs
         assert str(RuntimeExpr(declaration.owner.ref("nodes", merged.merge))) == expected
@@ -4929,7 +4913,7 @@ def test_constant_ruleset_default_is_a_destination_constructor_rewrite(monkeypat
     with set_current_ruleset(ambient):
         value = constant("token", DefaultToken, default, ruleset=destination)
         assert get_current_ruleset() is ambient
-    assert resolve_callable(value).read().kind.field == "constructor"
+    assert isinstance(resolve_callable(value).read(), pb.Constructor)
     assert not previous.read().value.rules
     assert not ambient._snapshot().read().value.rules
     snapshot = destination._snapshot()
@@ -4981,8 +4965,8 @@ def test_constants_own_distinct_canonical_presentation_and_declaration_kinds(mon
 
     table = constant("current", i64, egg_name="exact table name")
     token = constant("token", Token, egg_name="exact token name")
-    assert resolve_callable(table).read().kind.field == "function"
-    assert resolve_callable(token).read().kind.field == "constructor"
+    assert isinstance(resolve_callable(table).read(), pb.Function)
+    assert isinstance(resolve_callable(token).read(), pb.Constructor)
     assert str(table) == "current"
     assert str(token) == "token"
     assert token.tag() == "retained"
@@ -5000,13 +4984,9 @@ def test_constants_own_distinct_canonical_presentation_and_declaration_kinds(mon
         set_(token).to(token)
     packed = pack([table.__egg_ref__])
     program = pb.Program.from_binary(packed.program.to_binary())
-    next(
-        d
-        for d in program.declarations
-        if (d.kind.field == "function" if d.kind is not None else pytest.fail("Missing declaration kind"))
-    )
+    next(d for d in program.functions if (True))
     builder = Builder.from_program(program, environment=table.__egg_ref__.owner._environment)
-    builder.presentations["callable", resolve_callable(table).read().kind.value.name] = Presentation(
+    builder.presentations["callable", resolve_callable(table).read().name] = Presentation(
         views=(dataclasses.replace(presentation(resolve_callable(table)).views[0], kind=CallKind.FUNCTION),)
     )
     reconstructed = RuntimeExpr(builder.publish().ref("nodes", packed.indices[0]))
@@ -5056,7 +5036,7 @@ def test_user_constructor_defaults_keywords_and_names_are_records(monkeypatch):
     first = Num()
     declaration = resolve_callable(Num)
     record = declaration.read()
-    assert record.kind.value.name == "exact constructor"
+    assert record.name == "exact constructor"
     sort_definition = runtime_num.__egg_definition__
     assert isinstance(sort_definition, Ref)
     assert sort_definition.read().kind.value.name == "exact sort"
@@ -5175,8 +5155,8 @@ def test_recursive_class_sorts_resolve_without_recursive_member_compilation():
     left_sort, right_sort = runtime_left.__egg_sort__, runtime_right.__egg_sort__
     assert left_sort is not None
     assert right_sort is not None
-    assert StructuralView(left.owner.ref("sorts", left.read().kind.value.inputs[0].sort)) == StructuralView(right_sort)
-    assert StructuralView(right.owner.ref("sorts", right.read().kind.value.inputs[0].sort)) == StructuralView(left_sort)
+    assert StructuralView(left.owner.ref("sorts", left.read().inputs[0])) == StructuralView(right_sort)
+    assert StructuralView(right.owner.ref("sorts", right.read().inputs[0])) == StructuralView(left_sort)
 
 
 def test_type_factory_retains_canonical_sort_and_formals(class_authoring_without_engine):
@@ -5196,13 +5176,12 @@ def test_type_factory_retains_canonical_sort_and_formals(class_authoring_without
     assert namespace == {"__module__": __name__, "__init__": init, "choose": choose}
     reference = resolve_callable(runtime_dynamic.choose)
     declaration = reference.read()
-    assert declaration.kind.field == "user_defined_primitive"
-    assert [argument.name for argument in declaration.kind.value.inputs] == ["self", "value"]
-    body = reference.owner.ref("nodes", declaration.kind.value.body)
+    assert isinstance(declaration, pb.UserDefinedPrimitive)
+    assert [parameter.name for parameter in presentation(reference).views[0].params] == ["value"]
+    assert len(declaration.inputs) == 2
+    body = reference.owner.ref("nodes", declaration.body)
     assert body.read().kind == Oneof[Literal["var"], str]("var", "_1")
-    assert StructuralView(reference.owner.ref("sorts", declaration.kind.value.inputs[0].sort)) == StructuralView(
-        dynamic_sort
-    )
+    assert StructuralView(reference.owner.ref("sorts", declaration.inputs[0])) == StructuralView(dynamic_sort)
     with pytest.raises(TypeError):
         runtime.RuntimeClass("Spoof", (Expr,), {})  # type: ignore[arg-type, call-arg]
     with pytest.raises(TypeError):
@@ -5254,9 +5233,9 @@ def test_unmigrated_constructor_options_never_publish_members(options):
         expression = Invalid()
         reference = resolve_callable(Invalid)
         record = reference.read()
-        assert record.kind.field == "constructor"
+        assert isinstance(record, pb.Constructor)
         assert presentation(reference).views[0].kind == CallKind.INITIALIZER
-        cost = reference.owner.ref("nodes", record.kind.value.cost).read()
+        cost = reference.owner.ref("nodes", record.cost).read()
         assert cost.kind.value.value == Oneof[Literal["i64"], int]("i64", 1)
         assert get_callable_fn(expression) == Invalid
         assert resolve_callable(Invalid) is reference
@@ -5288,7 +5267,7 @@ def test_reverse_args_members_map_heterogeneous_inputs_and_mutation(class_author
     expression = source.make("tag")
     declaration = resolve_callable(ReversedSource.make)
     record = declaration.read()
-    assert [argument.name for argument in record.kind.value.inputs] == ["count", "label", "self"]
+    assert len(record.inputs) == 3
     view = presentation(declaration).views[0]
     assert view.receiver == 2
     assert [(parameter.name, parameter.core_input) for parameter in view.params] == [("label", 1), ("count", 0)]
@@ -5319,7 +5298,7 @@ def test_reverse_args_members_map_heterogeneous_inputs_and_mutation(class_author
     )
     assert expr_parts(detached) == expr_parts(expression)
     assert get_callable_args(detached) is not None
-    assert str(detached).startswith(record.kind.value.name + "(")
+    assert str(detached).startswith(record.name + "(")
     retained = Builder.from_program(program, environment=expression.__egg_ref__.owner._environment)
     retained.presentations.update({
         key: presentation(definition)
@@ -5332,8 +5311,8 @@ def test_reverse_args_members_map_heterogeneous_inputs_and_mutation(class_author
 
     created = ReversedSource.create("tag", i64(4))
     create_ref = resolve_callable(ReversedSource.create)
-    create = create_ref.read()
-    assert [argument.name for argument in create.kind.value.inputs] == ["count", "label"]
+    assert len(create_ref.read().inputs) == 2
+    assert [parameter.name for parameter in presentation(create_ref).views[0].params] == ["label", "count"]
     assert presentation(create_ref).views[0].receiver is None
     assert get_callable_args(created) == (to_runtime_expr(String("tag")), to_runtime_expr(i64(4)))
 
@@ -5355,7 +5334,7 @@ def test_reverse_args_initializer_retains_python_parameter_order(class_authoring
     expression = ReversedInitializer("tag", i64(4))
     declaration_ref = resolve_callable(ReversedInitializer)
     declaration = declaration_ref.read()
-    assert [argument.name for argument in declaration.kind.value.inputs] == ["count", "label"]
+    assert len(declaration.inputs) == 2
     view = presentation(declaration_ref).views[0]
     assert view.receiver is None
     assert [(parameter.name, parameter.core_input) for parameter in view.params] == [("label", 1), ("count", 0)]
@@ -5439,7 +5418,7 @@ def test_unsupported_class_members_and_parameter_kinds_are_not_ignored():
     runtime_keyword_only, keyword_only_context = _required_authored_class(KeywordOnly)
     # Eager method bodies are supported; fixed member parameter kinds still apply.
     assert isinstance(HasBody().other(), i64)
-    assert resolve_callable(HasBody.other).read().kind.field == "user_defined_primitive"
+    assert isinstance(resolve_callable(HasBody.other).read(), pb.UserDefinedPrimitive)
     with pytest.raises(NotImplementedError, match="positional-or-keyword"):
         KeywordOnly()  # type: ignore[call-arg]
     assert keyword_only_context.catalog is not None
@@ -5481,17 +5460,15 @@ def test_concrete_member_records_defaults_and_unbound_views(monkeypatch):
     assert str(Node.COUNT) == "Node.COUNT"
     score = resolve_callable(Node.score)
     score_record = score.read()
-    assert score_record.kind.field == "function"
-    assert score_record.kind.value.name == "exact member"
+    assert isinstance(score_record, pb.Function)
+    assert score_record.name == "exact member"
     view = presentation(score).views[0]
     assert view.receiver == 0
     assert [(p.name, p.core_input) for p in view.params] == [("x", 1)]
-    assert StructuralView(score.owner.ref("sorts", score_record.kind.value.inputs[0].sort)) == StructuralView(
-        runtime_node.__egg_sort__
-    )
-    assert resolve_callable(Node.make).read().kind.field == "constructor"
-    assert resolve_callable(Node.ZERO).read().kind.field == "constructor"
-    assert resolve_callable(Node.COUNT).read().kind.field == "function"
+    assert StructuralView(score.owner.ref("sorts", score_record.inputs[0])) == StructuralView(runtime_node.__egg_sort__)
+    assert isinstance(resolve_callable(Node.make).read(), pb.Constructor)
+    assert isinstance(resolve_callable(Node.ZERO).read(), pb.Constructor)
+    assert isinstance(resolve_callable(Node.COUNT).read(), pb.Function)
     default.__replace_expr__(i64(9))
     assert _required_callable_args(expression.score())[1].value == 4
     assert _required_callable_args(Node.make())[0].value == 4
@@ -5646,19 +5623,25 @@ def test_eager_member_forward_completion_owns_only_final_definitions(class_autho
     assert captured == [Eager.later]
     assert resolve_callable(captured[0]) is later
     assert calls == ["first", "later", "number", "make"]
-    assert first.read().kind.field == later.read().kind.field == "user_defined_primitive"
-    body = RuntimeExpr(first.owner.ref("nodes", first.read().kind.value.body))
+    assert isinstance(first.read(), pb.UserDefinedPrimitive)
+    assert isinstance(later.read(), pb.UserDefinedPrimitive)
+    body = RuntimeExpr(first.owner.ref("nodes", first.read().body))
     assert str(body) == "_0.later(_1) + 1"
     assert isinstance(expression.first(), i64)
     assert isinstance(expression.number, i64)
     assert isinstance(Eager.make(), Eager)
     packed = pack([to_runtime_expr(expression.first()).__egg_ref__, first, later, resolve_callable(captured[0])])
     names = []
-    for record in packed.program.declarations:
-        kind = record.kind
-        assert kind is not None
-        names.append(kind.value.name)
-    assert names.count(first.read().kind.value.name) == names.count(later.read().kind.value.name) == 1
+    for record in (
+        *packed.program.constructors,
+        *packed.program.functions,
+        *packed.program.relations,
+        *packed.program.user_defined_primitives,
+    ):
+        kind = record
+        assert isinstance(kind, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive)
+        names.append(kind.name)
+    assert names.count(first.read().name) == names.count(later.read().name) == 1
     assert pb.Program.from_binary(packed.program.to_binary()) == packed.program
     assert calls == ["first", "later", "number", "make"]
 
@@ -5672,10 +5655,11 @@ def test_eager_member_reverse_args_keep_callback_and_core_order(class_authoring_
             return Pair(self, other)
 
     reference = resolve_callable(Reverse.ordered)
-    primitive = reference.read().kind.value
+    primitive = reference.read()
     view = presentation(reference).views[0]
     assert isinstance(primitive, pb.UserDefinedPrimitive)
-    assert [argument.name for argument in primitive.inputs] == ["other", "self"]
+    assert [parameter.name for parameter in view.params] == ["other"]
+    assert len(primitive.inputs) == 2
     assert view.receiver == 1
     assert [parameter.core_input for parameter in view.params] == [0]
     assert str(RuntimeExpr(reference.owner.ref("nodes", primitive.body))) == "Pair[Reverse, i64](_1, _0)"
@@ -5714,10 +5698,10 @@ def test_eager_member_eqsort_views_and_later_bodyless_member(class_authoring_wit
         (Views.early, value.early()),
     ):
         reference = resolve_callable(member)
-        assert isinstance(reference.read().kind.value, pb.UserDefinedPrimitive)
+        assert isinstance(reference.read(), pb.UserDefinedPrimitive)
         assert isinstance(expression, Result)
         pack([to_runtime_expr(expression).__egg_ref__])
-    assert resolve_callable(Views.later).read().kind.field == "constructor"
+    assert isinstance(resolve_callable(Views.later).read(), pb.Constructor)
 
 
 def test_eager_initializer_gets_symbolic_self_and_rejects_retained_recursion(class_authoring_without_engine):
@@ -5734,7 +5718,7 @@ def test_eager_initializer_gets_symbolic_self_and_rejects_retained_recursion(cla
 
     value = Initialized(2)  # type: ignore[arg-type]
     reference = resolve_callable(Initialized)
-    primitive = reference.read().kind.value
+    primitive = reference.read()
     assert isinstance(primitive, pb.UserDefinedPrimitive)
     runtime_initialized, _initialized_context = _required_authored_class(Initialized)
     assert seen == [(primitive.name, "value", runtime_initialized.__egg_sort__)]
@@ -5762,7 +5746,7 @@ def test_eager_initializer_gets_symbolic_self_and_rejects_retained_recursion(cla
 
     pack([to_runtime_expr(Replaced(3)).__egg_ref__])  # type: ignore[arg-type]
     replacement = resolve_callable(Replaced)
-    assert str(RuntimeExpr(replacement.owner.ref("nodes", replacement.read().kind.value.body))) == "Replaced.wrap(_0)"
+    assert str(RuntimeExpr(replacement.owner.ref("nodes", replacement.read().body))) == "Replaced.wrap(_0)"
 
 
 @pytest.mark.parametrize("mutual", [False, True])
@@ -5951,9 +5935,9 @@ def test_eager_member_default_reentry_retains_completed_refs_and_prefix(class_au
     assert calls == ["body", "conversion"]
     first = resolve_callable(Defaults.first)
     assert first is resolve_callable(captured[0])
-    assert isinstance(first.read().kind.value, pb.UserDefinedPrimitive)
+    assert isinstance(first.read(), pb.UserDefinedPrimitive)
     assert defaults_context.catalog is not None
-    catalog_ref = defaults_context.catalog.definitions["callable", first.read().kind.value.name]
+    catalog_ref = defaults_context.catalog.definitions["callable", first.read().name]
     # Owner.ref reconstructs Ref wrappers; canonical identity is owner/role/index,
     # not Python allocation identity and not a structural-equality substitute.
     assert catalog_ref == first
@@ -5967,17 +5951,20 @@ def test_eager_member_default_reentry_retains_completed_refs_and_prefix(class_au
     packet = pack([to_runtime_expr(expression).__egg_ref__, first])
     assert (
         sum(
-            record.kind.value.name == first.read().kind.value.name
-            if record.kind is not None
-            else pytest.fail("Missing declaration kind")
-            for record in packet.program.declarations
+            record.name == first.read().name
+            for record in (
+                *packet.program.constructors,
+                *packet.program.functions,
+                *packet.program.relations,
+                *packet.program.user_defined_primitives,
+            )
         )
         == 1
     )
     default = resolve_callable(Defaults.with_default)
     template = presentation(default).views[0].params[0].default
     assert template is not None
-    assert template.read().kind.value.func == first.read().kind.value.name
+    assert template.read().kind.value.func == first.read().name
     assert calls == ["body", "conversion"]
 
 
@@ -6048,10 +6035,13 @@ def test_member_default_transitive_forward_headers_and_snapshot(class_authoring_
     packet = pack([to_runtime_expr(expression).__egg_ref__, first])
     assert (
         sum(
-            record.kind.value.name == first.read().kind.value.name
-            if record.kind is not None
-            else pytest.fail("Missing declaration kind")
-            for record in packet.program.declarations
+            record.name == first.read().name
+            for record in (
+                *packet.program.constructors,
+                *packet.program.functions,
+                *packet.program.relations,
+                *packet.program.user_defined_primitives,
+            )
         )
         == 1
     )
@@ -6247,7 +6237,7 @@ def test_member_header_value_callbacks_wait_for_static_barrier(  # noqa: C901
         assert not runtime_barrier.__egg_attr_cache__
     else:
         reference = resolve_callable(Barrier.configured)
-        assert reference.read().kind.field == ("function" if kind == "merge" else "constructor")
+        assert isinstance(reference.read(), pb.Function if kind == "merge" else pb.Constructor)
         assert calls == ["first", "later", kind]
         pack([reference])
         assert calls == ["first", "later", kind]
@@ -6383,7 +6373,7 @@ def test_classvar_eager_defaults_are_closed_nullary_primitives(class_authoring_w
         assert value is not None
         declaration = resolve_callable(value)
         record = declaration.read()
-        primitive = record.kind.value
+        primitive = record
         assert isinstance(primitive, pb.UserDefinedPrimitive)
         assert not primitive.inputs
         assert expr_parts(RuntimeExpr(declaration.owner.ref("nodes", primitive.body))) == expr_parts(expected)
@@ -6500,7 +6490,7 @@ def test_member_default_union_freshness_and_snapshot():
         "nodes",
         pb.Node(
             sort_id=builder.import_ref(Child.__egg_sort__),  # type: ignore[attr-defined]
-            kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[child, child])),
+            kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq(members=[child, child])),
         ),
     )
     default = RuntimeExpr(builder.publish().ref("nodes", index))
@@ -6516,7 +6506,7 @@ def test_member_default_union_freshness_and_snapshot():
     assert first.__egg_ref__ != second.__egg_ref__
     for result in (first, second):
         record = result.__egg_ref__.read()
-        assert record.kind.field == "union"
+        assert record.kind.field == "eq"
         left, right = record.kind.value.members
         assert result.__egg_ref__.owner.ref("nodes", left) == result.__egg_ref__.owner.ref("nodes", right)
 
@@ -6578,9 +6568,9 @@ def test_symbolic_getattr_uses_existing_header(class_authoring_without_engine, s
     declaration = resolve_callable(A.__getattr__)
     record = declaration.read()
     view = presentation(declaration).views[0]
-    assert record.kind.field == "constructor"
-    assert record.kind.value.output == record.kind.value.inputs[0].sort
-    assert [argument.name for argument in record.kind.value.inputs] == ["self", "name"]
+    assert isinstance(record, pb.Constructor)
+    assert record.output == record.inputs[0]
+    assert len(record.inputs) == 2
     assert view.kind == CallKind.METHOD
     assert view.receiver == 0
     assert [(parameter.name, parameter.core_input) for parameter in view.params] == [("name", 1)]
@@ -6869,11 +6859,11 @@ def test_bodyless_mutating_members_use_canonical_calls(class_authoring_without_e
     for name, parameters in [("__delitem__", ["key"]), ("__setitem__", ["key", "value"])]:
         declaration = resolve_callable(getattr(A, name))
         record = declaration.read()
-        assert record.kind.field == "constructor"
-        signature = record.kind.value
+        assert isinstance(record, pb.Constructor)
+        signature = record
         view = presentation(declaration).views[0]
-        assert signature.output == signature.inputs[0].sort
-        assert [argument.name for argument in signature.inputs] == ["self", *parameters]
+        assert signature.output == signature.inputs[0]
+        assert len(signature.inputs) == len(parameters) + 1
         assert view.kind == CallKind.METHOD
         assert view.receiver == view.mutates == 0
         assert [(parameter.name, parameter.core_input) for parameter in view.params] == [
@@ -6909,10 +6899,10 @@ def test_bodyless_free_mutation_owns_calls_and_aliases(class_authoring_without_e
 
     reference = resolve_callable(update)
     declaration = reference.read()
-    assert declaration.kind.field == "constructor"
-    signature = declaration.kind.value
+    assert isinstance(declaration, pb.Constructor)
+    signature = declaration
     view = presentation(reference).views[0]
-    assert signature.output == signature.inputs[0].sort
+    assert signature.output == signature.inputs[0]
     assert view.kind == CallKind.FUNCTION
     assert view.mutates is not None
     assert view.mutates == 0
@@ -6994,7 +6984,7 @@ def test_eager_free_mutation_uses_original_formals_once(class_authoring_without_
         other.__replace_expr__(Mutable(9))  # type: ignore[arg-type]
 
     reference = resolve_callable(replace)
-    primitive = reference.read().kind.value
+    primitive = reference.read()
     assert isinstance(primitive, pb.UserDefinedPrimitive)
     body = reference.owner.ref("nodes", primitive.body)
     assert body.read().kind.field == "var"
@@ -7070,12 +7060,14 @@ def test_mutation_metadata_rejects_before_argument_callbacks(class_authoring_wit
 
     packed = pack([resolve_callable(update)])
     program = packed.program
-    declaration = program.declarations[packed.indices[0]]
+    declaration = (*program.constructors, *program.functions, *program.relations, *program.user_defined_primitives)[
+        packed.indices[0]
+    ]
     view = presentation(resolve_callable(update)).views[0]
     if corruption == "index":
         view = dataclasses.replace(view, mutates=1)
     elif corruption == "output":
-        function_record = _required_oneof(declaration.kind, "function", pb.Function)
+        function_record = declaration
         function_record.output = len(program.sorts)
         program.sorts.append(pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "wrong-output")))
     elif corruption == "initializer":
@@ -7083,7 +7075,7 @@ def test_mutation_metadata_rejects_before_argument_callbacks(class_authoring_wit
     else:
         view = dataclasses.replace(view, params=())
     builder = Builder.from_program(program)
-    builder.presentations["callable", resolve_callable(update).read().kind.value.name] = Presentation(views=(view,))
+    builder.presentations["callable", resolve_callable(update).read().name] = Presentation(views=(view,))
     owner = builder.publish()
 
     def forbidden(*args):
@@ -7091,7 +7083,7 @@ def test_mutation_metadata_rejects_before_argument_callbacks(class_authoring_wit
 
     with pytest.raises(ValueError, match="Invalid mutated input"):
         _author_call(
-            owner.ref("declarations", packed.indices[0]), 0, (object(),), {}, node_of=forbidden, convert=forbidden
+            owner.ref("functions", packed.indices[0]), 0, (object(),), {}, node_of=forbidden, convert=forbidden
         )
 
 
@@ -7140,7 +7132,7 @@ def test_bodyless_named_mutation_defaults_and_errors(class_authoring_without_eng
     runtime_accumulator, accumulator_context = _required_authored_class(Accumulator)
     receiver = Accumulator()
     declaration = resolve_callable(Accumulator.update)
-    assert declaration.read().kind.value.name == "exact mutable member"
+    assert declaration.read().name == "exact mutable member"
     assert Accumulator.update.__doc__ == "A bodyless mutating declaration."
     assert destination._snapshot().read().value.rules == []
     default.__replace_expr__(i64(9))
@@ -7331,9 +7323,9 @@ def test_class_ruleset_bodyless_callable_headers(class_authoring_without_engine)
     boolean_sort = runtime_boolean.__egg_sort__
     assert boolean_sort is not None
     reference = resolve_callable(Boolean.if_)
-    inputs = reference.read().kind.value.inputs
+    inputs = reference.read().inputs
     for argument in inputs[1:]:
-        sort = reference.owner.ref("sorts", argument.sort)
+        sort = reference.owner.ref("sorts", argument)
         assert sort.read().kind.field == "func"
         function_sort = sort.read().kind.value
         assert function_sort.params == []
@@ -7694,7 +7686,7 @@ def test_user_default_expansion_has_fresh_union_identity_and_retains_sharing():
         "nodes",
         pb.Node(
             sort_id=builder.import_ref(Num.__egg_sort__),  # type: ignore[attr-defined]
-            kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[member, member])),
+            kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq(members=[member, member])),
         ),
     )
     default = RuntimeExpr(builder.publish().ref("nodes", root))
@@ -7729,20 +7721,25 @@ def test_reconstructed_constructor_uses_local_parameter_not_python_signature():
     program = pack([Num(1).__egg_ref__]).program  # type: ignore[arg-type]
     index, _constructor = next(
         (index, declaration)
-        for index, declaration in enumerate(program.declarations)
+        for index, declaration in enumerate((
+            *program.constructors,
+            *program.functions,
+            *program.relations,
+            *program.user_defined_primitives,
+        ))
         if (
-            declaration.kind.field == "constructor"
-            if declaration.kind is not None
+            isinstance(declaration, pb.Constructor)
+            if isinstance(declaration, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive)
             else pytest.fail("Missing declaration kind")
         )
     )
     view = presentation(resolve_callable(Num)).views[0]
     view = dataclasses.replace(view, params=(dataclasses.replace(view.params[0], name="renamed"),))
     builder = Builder.from_program(program, environment=resolve_callable(Num).owner._environment)
-    builder.presentations["callable", resolve_callable(Num).read().kind.value.name] = Presentation(views=(view,))
+    builder.presentations["callable", resolve_callable(Num).read().name] = Presentation(views=(view,))
     owner = builder.publish()
     runtime_num, _num_context = _required_authored_class(Num)
-    function = RuntimeFunction(owner.ref("declarations", index), 0, runtime_num)
+    function = RuntimeFunction(owner.ref("constructors", index), 0, runtime_num)
     result = function(renamed=8)
     assert _required_callable_args(result)[0].value == 8
     with pytest.raises(TypeError):
@@ -7788,7 +7785,7 @@ def test_generic_inference_uses_binder_positions_and_is_transactional():
     owner = builder.publish()
     bindings: dict[int, Ref] = {}
     # Binder indices remain independent under substitution.
-    signature = pb.GenericSignature(type_param_count=2, inputs=[pb.Arg(sort=2)], output=0)
+    signature = pb.GenericSignature(type_param_count=2, inputs=[2], output=0)
     infer_sort(owner.ref("sorts", 2), owner.ref("sorts", 5), signature.type_param_count, bindings)
     assert bindings == {0: owner.ref("sorts", 3), 1: owner.ref("sorts", 4)}
     assert StructuralView(substitute_sort(owner.ref("sorts", 2), bindings)) == StructuralView(owner.ref("sorts", 5))
@@ -7866,7 +7863,7 @@ def test_call_authoring_binds_keywords_defaults_and_core_input_order():
         "primitives",
         pb.Primitive(
             name="sample.subtract",
-            signature=pb.GenericSignature(inputs=[pb.Arg(sort=sort), pb.Arg(sort=sort)], output=sort),
+            signature=pb.GenericSignature(inputs=[sort, sort], output=sort),
         ),
     )
     owner = builder.publish(
@@ -7920,6 +7917,23 @@ def test_call_authoring_binds_keywords_defaults_and_core_input_order():
             convert=convert,
         )
 
+    detached = Builder.from_builtins(
+        pb.BuiltinCatalog(
+            sorts=[owner.ref("sorts", sort).read()], primitives=[owner.ref("primitives", declaration).read()]
+        )
+    ).publish()
+    imported, _ = _author_call(
+        detached.ref("primitives", 0),
+        None,
+        (),
+        {"arg0": 4, "arg1": 9},
+        node_of=lambda _: None,
+        convert=convert,
+    )
+    assert isinstance(imported, Ref)
+    imported_args = [imported.owner.ref("nodes", index) for index in imported.read().kind.value.args]
+    assert [argument.read().kind.value.value.value for argument in imported_args] == [4, 9]
+
 
 @pytest.mark.parametrize(("order", "captures"), [((1, 0), ()), ((0, 2, 1), (i64(10),))])
 @pytest.mark.parametrize("decoded", [False, True])
@@ -7929,13 +7943,8 @@ def test_function_value_rejects_reordered_remaining_arguments(order, captures, d
     assert isinstance(integer, Ref)
     sort = builder.import_ref(integer)
     declaration = builder.add(
-        "declarations",
-        pb.Declaration(
-            kind=Oneof[Literal["function"], pb.Function](
-                "function",
-                pb.Function(name="sample.subtract_reversed", inputs=[pb.Arg(sort=sort) for _ in order], output=sort),
-            ),
-        ),
+        "functions",
+        pb.Function(name="sample.subtract_reversed", inputs=[sort for _ in order], output=sort),
     )
     builder.presentations["callable", "sample.subtract_reversed"] = Presentation(
         views=(
@@ -7977,7 +7986,7 @@ def test_function_value_rejects_reordered_remaining_arguments(order, captures, d
         with pytest.raises(NotImplementedError, match="Reordered Python function-value presentations"):
             get_literal_value(expression)
     else:
-        function = RuntimeFunction(builder.publish().ref("declarations", declaration), 0)
+        function = RuntimeFunction(builder.publish().ref("functions", declaration), 0)
         with pytest.raises(NotImplementedError, match="Reordered Python function-value presentations"):
             runtime._partial_function(function, captures, None)
 
@@ -7988,12 +7997,8 @@ def test_function_value_rejects_mutation_before_replacing_receiver(class_authori
     builder = Builder()
     sort = builder.import_ref(reference.owner.ref("sorts", reference.read().sort_id))
     declaration = builder.add(
-        "declarations",
-        pb.Declaration(
-            kind=Oneof[Literal["function"], pb.Function](
-                "function", pb.Function(name="sample.mutable", inputs=[pb.Arg(sort=sort)], output=sort)
-            ),
-        ),
+        "functions",
+        pb.Function(name="sample.mutable", inputs=[sort], output=sort),
     )
     builder.presentations["callable", "sample.mutable"] = Presentation(
         views=(
@@ -8006,7 +8011,7 @@ def test_function_value_rejects_mutation_before_replacing_receiver(class_authori
             ),
         )
     )
-    function = RuntimeFunction(builder.publish().ref("declarations", declaration), 0, original)
+    function = RuntimeFunction(builder.publish().ref("functions", declaration), 0, original)
     with pytest.raises(AssertionError, match="Mutable partial functions not supported"):
         runtime._partial_function(function, (), None)
     assert original.__egg_ref__ is reference
@@ -8140,7 +8145,7 @@ def test_decoded_builtin_callable_identity_uses_definition_and_selected_view(nat
         elif change == "signature":
             assert record.signature is not None
 
-            record.signature.inputs.append(pb.Arg(sort=record.signature.output))
+            record.signature.inputs.append(record.signature.output)
             changed_views = (
                 dataclasses.replace(views[0], params=(*views[0].params, Parameter(core_input=2, name="extra"))),
                 *views[1:],
@@ -8298,7 +8303,7 @@ def test_generic_empty_call_requires_result_owner_and_keeps_signature_unchanged(
         "primitives",
         pb.Primitive(
             name="sample.vec.of",
-            signature=pb.GenericSignature(type_param_count=1, output=pattern, varargs=[pb.Arg(sort=variable)]),
+            signature=pb.GenericSignature(type_param_count=1, output=pattern, varargs=[variable]),
         ),
     )
     owner = builder.publish(
@@ -8342,8 +8347,8 @@ def test_grouped_tail_checks_every_element_and_complete_substitution():
             name="test.grouped.tail",
             signature=pb.GenericSignature(
                 type_param_count=2,
-                inputs=[pb.Arg(sort=key, name="seed")],
-                varargs=[pb.Arg(sort=key), pb.Arg(sort=value)],
+                inputs=[key],
+                varargs=[key, value],
                 output=value,
             ),
         ),
@@ -8379,7 +8384,12 @@ def test_grouped_tail_checks_every_element_and_complete_substitution():
     with pytest.raises(TypeConstraintError, match="Unresolved"):
         call(i64(0))
     assert reference.read().to_binary() == before
-    assert not pack([root]).program.declarations
+    assert not (
+        *pack([root]).program.constructors,
+        *pack([root]).program.functions,
+        *pack([root]).program.relations,
+        *pack([root]).program.user_defined_primitives,
+    )
     descriptor = reference.read()
     assert isinstance(descriptor, pb.Primitive)
     signature = descriptor.signature
@@ -8514,7 +8524,7 @@ def test_multiset_occurrences_preserve_union_identity(same):
     payload = _required_oneof(packed.program.nodes[packed.indices[0]].kind, "primitive_value", pb.PrimitiveValue)
     args = _required_oneof(payload.value, "multiset", pb.ValueList).items
     for argument in args:
-        _required_oneof(packed.program.nodes[argument].kind, "union", pb.Union)
+        _required_oneof(packed.program.nodes[argument].kind, "eq", pb.Eq)
     assert (args[0] == args[1]) == same
 
 
@@ -8542,12 +8552,8 @@ def test_multiset_formed_values_reject_malformed_children(malformed):
     )
     if malformed == "user_call":
         builder.add(
-            "declarations",
-            pb.Declaration(
-                kind=Oneof[Literal["function"], pb.Function](
-                    "function", pb.Function(name="egglog.core.multiset.of", output=sort)
-                )
-            ),
+            "functions",
+            pb.Function(name="egglog.core.multiset.of", output=sort),
         )
         kind = Oneof[Literal["call"], pb.Call]("call", pb.Call(func="egglog.core.multiset.of", args=[child]))
     root = builder.add("nodes", pb.Node(sort_id=sort, kind=kind))

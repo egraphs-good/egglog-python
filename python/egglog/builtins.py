@@ -298,12 +298,10 @@ converter(FunctionType, UnstableFn, lambda value: UnstableFn[get_type_args()](va
 converter(MethodType, UnstableFn, lambda value: UnstableFn[get_type_args()](value))
 converter(partial, UnstableFn, lambda value: UnstableFn[get_type_args()](value.func, *value.args))
 for _definition in _catalog.definitions.values():
-    _declaration: pb.Declaration | pb.Primitive | pb.PrimitiveSort = _definition.read()
-    if isinstance(_declaration, pb.Declaration):
-        assert _declaration.kind is not None
-        _kind = _declaration.kind.value
-    else:
-        _kind = _declaration
+    _declaration: (
+        pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive | pb.Primitive | pb.PrimitiveSort
+    ) = _definition.read()
+    _kind = _declaration
     if not isinstance(_kind, pb.PrimitiveSort):
         continue
     _binding = presentation(_definition).type_view

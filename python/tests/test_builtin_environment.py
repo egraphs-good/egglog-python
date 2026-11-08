@@ -25,7 +25,7 @@ def _provider_catalog(*, inputs: int = 1) -> pb.BuiltinCatalog:
         primitives=[
             pb.Primitive(
                 name="provider.identity",
-                signature=pb.GenericSignature(inputs=[pb.Arg(sort=0) for _ in range(inputs)], output=0),
+                signature=pb.GenericSignature(inputs=[0 for _ in range(inputs)], output=0),
             )
         ],
     )
@@ -55,7 +55,7 @@ def test_custom_environment_resolves_without_package_fallback_and_packs_no_descr
     with pytest.raises(LookupError, match="owned canonical definition"):
         _definition_at(result.__egg_ref__, "callable", "egglog.core.i64.add")
     packed = pack([result.__egg_ref__]).program
-    assert not packed.declarations
+    assert not (*packed.constructors, *packed.functions, *packed.relations, *packed.user_defined_primitives)
     assert len(packed.sorts) == 1
     assert packed.nodes[0].kind is not None
     assert packed.nodes[0].kind.field == "call"

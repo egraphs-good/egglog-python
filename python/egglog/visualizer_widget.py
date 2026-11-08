@@ -55,7 +55,7 @@ def _node_presentation(node: pb.Node, sort_label: str, labels: dict[str, str]) -
             label = f"cost({label})"
     elif node.kind.field in {"var", "binding"}:
         label = node.kind.value
-    elif node.kind.field == "union":
+    elif node.kind.field == "eq":
         label = "Union"
     elif node.kind.field == "primitive_value":
         primitive = node.kind.value.value
@@ -111,7 +111,15 @@ def _snapshot_to_data(  # noqa: C901, PLR0912
     definitions = {
         _definition_key(reference.read()): reference
         for source in (*owner._environment, owner)
-        for role in ("sorts", "declarations", "primitive_sorts", "primitives")
+        for role in (
+            "sorts",
+            "constructors",
+            "functions",
+            "relations",
+            "user_defined_primitives",
+            "primitive_sorts",
+            "primitives",
+        )
         for index in range(len(source._slots[role]))
         for reference in (source.ref(role, index),)
         if _definition_key(reference.read()) is not None
@@ -123,11 +131,7 @@ def _snapshot_to_data(  # noqa: C901, PLR0912
     for key, reference in definitions.items():
         assert key is not None
         declaration = reference.read()
-        if isinstance(declaration, pb.Declaration):
-            assert declaration.kind is not None
-            kind = declaration.kind.value
-        else:
-            kind = declaration
+        kind = declaration
         if isinstance(kind, pb.Sort | pb.PrimitiveSort):
             bindings = presentation(reference).type_view
             if isinstance(kind, pb.Sort):
@@ -137,10 +141,13 @@ def _snapshot_to_data(  # noqa: C901, PLR0912
             else:
                 type_name = kind.name
             type_names[key] = bindings.path[-1] if bindings is not None else type_name
-    for declaration in program.declarations:
-        if declaration.kind is None:
-            continue
-        kind = declaration.kind.value
+    callables: tuple[pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive, ...] = (
+        *program.constructors,
+        *program.functions,
+        *program.relations,
+        *program.user_defined_primitives,
+    )
+    for kind in callables:
         label = kind.name
         views = presentation(definitions["callable", kind.name]).views
         if views:
@@ -184,7 +191,7 @@ def _snapshot_to_data(  # noqa: C901, PLR0912
         if action.field == "term":
             terms.add(action.value)
             node = program.nodes[action.value]
-            if node.kind is not None and node.kind.field == "union":
+            if node.kind is not None and node.kind.field == "eq":
                 cid = f"class-{action.value}"
                 inventory.add(cid)
                 if not node.kind.value.members:
@@ -230,7 +237,7 @@ def _snapshot_to_data(  # noqa: C901, PLR0912
         if node.sort_id not in sort_labels:
             sort_labels[node.sort_id] = pretty_ref(owner.ref("sorts", node.sort_id), sort_names=type_names)
         class_data[cid] = {"type": sort_labels[node.sort_id]}
-        if node.kind.field == "union" and cid in inventory:
+        if node.kind.field == "eq" and cid in inventory:
             pending.extend(node.kind.value.members)
             continue
         label, children = _node_presentation(node, sort_labels[node.sort_id], labels)

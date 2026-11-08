@@ -191,13 +191,9 @@ def _proof_program() -> pb.Program:
             ),
             pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Num")),
         ],
-        declarations=[
+        constructors=[
             *(
-                pb.Declaration(
-                    kind=Oneof[Literal["constructor"], pb.Constructor](
-                        "constructor", pb.Constructor(name=name, inputs=[pb.Arg(sort=0, name="x")], output=1)
-                    )
-                )
+                pb.Constructor(name=name, inputs=[0], output=1)
                 for name in ("N", "Goal", "Absent")
             ),
         ],
@@ -212,7 +208,9 @@ def _proof_program() -> pb.Program:
                             eval_mode=pb.RuleEvalMode.SEMINAIVE,
                             kind=Oneof[Literal["rule"], pb.RuleBody](
                                 "rule",
-                                pb.RuleBody(query=[3], head=[pb.Action(kind=Oneof[Literal["term"], int]("term", 4))]),
+                                pb.RuleBody(
+                                    query=[3], actions=[pb.Action(kind=Oneof[Literal["term"], int]("term", 4))]
+                                ),
                             ),
                         )
                     ]
@@ -341,7 +339,7 @@ def test_binary_proof_prefix_clone_and_native_error_order(proof_engine):
     handles.append(cloned.egraph_id)
     proofs_enabled = mode in (pb.ExecutionMode.PROOFS, pb.ExecutionMode.PROOF_TESTING)
     program = _proof_program()
-    program.declarations.clear()
+    program.constructors.clear()
     program.commands = [
         pb.Command(
             kind=Oneof[Literal["prove_exists"], pb.ProveExists]("prove_exists", pb.ProveExists(constructor="Goal"))

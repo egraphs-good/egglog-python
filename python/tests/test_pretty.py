@@ -424,12 +424,8 @@ def test_shared_call_without_class_presentation(pretty_without_engine) -> None:
     value = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["var"], str]("var", "x" * 80)))
     for name, arity in [("plain", 1), ("pair", 2)]:
         builder.add(
-            "declarations",
-            pb.Declaration(
-                kind=Oneof[Literal["function"], pb.Function](
-                    "function", pb.Function(name=name, inputs=[pb.Arg(sort=sort) for _ in range(arity)], output=sort)
-                )
-            ),
+            "functions",
+            pb.Function(name=name, inputs=[sort for _ in range(arity)], output=sort),
         )
     shared = builder.add(
         "nodes",

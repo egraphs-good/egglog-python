@@ -30,36 +30,18 @@ def snapshot():
                 kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="Unit"))
             ),
         ],
-        declarations=[
-            pb.Declaration(
-                kind=Oneof[Literal["constructor"], pb.Constructor](
-                    "constructor", pb.Constructor(name="C", inputs=[pb.Arg(sort=1)], output=0)
-                )
-            ),
-            pb.Declaration(
-                kind=Oneof[Literal["constructor"], pb.Constructor](
-                    "constructor", pb.Constructor(name="Wrap", inputs=[pb.Arg(sort=0)], output=0)
-                )
-            ),
-            pb.Declaration(
-                kind=Oneof[Literal["function"], pb.Function](
-                    "function", pb.Function(name="cell", inputs=[pb.Arg(sort=0)], output=3)
-                )
-            ),
-            pb.Declaration(
-                kind=Oneof[Literal["function"], pb.Function]("function", pb.Function(name="scalar", output=2))
-            ),
-            pb.Declaration(
-                kind=Oneof[Literal["function"], pb.Function]("function", pb.Function(name="unit", output=4))
-            ),
-            pb.Declaration(
-                kind=Oneof[Literal["relation"], pb.Relation](
-                    "relation", pb.Relation(name="member", inputs=[pb.Arg(sort=0)])
-                )
-            ),
+        constructors=[
+            pb.Constructor(name="C", inputs=[1], output=0),
+            pb.Constructor(name="Wrap", inputs=[0], output=0),
         ],
+        functions=[
+            pb.Function(name="cell", inputs=[0], output=3),
+            pb.Function(name="scalar", output=2),
+            pb.Function(name="unit", output=4),
+        ],
+        relations=[pb.Relation(name="member", inputs=[0])],
         nodes=[
-            pb.Node(sort_id=0, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[2, 3]))),
+            pb.Node(sort_id=0, kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq(members=[2, 3]))),
             pb.Node(
                 sort_id=1,
                 kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
@@ -68,8 +50,8 @@ def snapshot():
             ),
             pb.Node(sort_id=0, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="C", args=[1]))),
             pb.Node(sort_id=0, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="Wrap", args=[0]))),
-            pb.Node(sort_id=0, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union())),
-            pb.Node(sort_id=0, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union())),
+            pb.Node(sort_id=0, kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq())),
+            pb.Node(sort_id=0, kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq())),
             pb.Node(
                 sort_id=3,
                 kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
@@ -179,11 +161,7 @@ def test_snapshot_function_type_labels_use_only_owned_records(monkeypatch):
             ),
             pb.Sort(kind=Oneof[Literal["func"], pb.FuncSort]("func", pb.FuncSort(params=[2], result=1))),
         ],
-        declarations=[
-            pb.Declaration(
-                kind=Oneof[Literal["function"], pb.Function]("function", pb.Function(name="callback", output=3))
-            ),
-        ],
+        functions=[pb.Function(name="callback", output=3)],
         nodes=[
             pb.Node(
                 sort_id=1,
@@ -220,7 +198,11 @@ def test_snapshot_function_type_labels_use_only_owned_records(monkeypatch):
 @pytest.mark.parametrize("assigned", [False, True])
 def test_snapshot_costs_preserve_declared_value_and_assigned_override(snapshot, assigned):
     program = snapshot.program
-    constructor = next(d.kind.value for d in program.declarations if d.kind.value.name == "C")
+    constructor = next(
+        d
+        for d in (*program.constructors, *program.functions, *program.relations, *program.user_defined_primitives)
+        if d.name == "C"
+    )
     constructor.cost = len(program.nodes)
     program.nodes.append(
         pb.Node(
@@ -262,7 +244,11 @@ def test_snapshot_custom_costs_never_invoke_codec_or_debug(snapshot, monkeypatch
                 ),
             )
         )
-    constructor = next(d.kind.value for d in program.declarations if d.kind.value.name == "C")
+    constructor = next(
+        d
+        for d in (*program.constructors, *program.functions, *program.relations, *program.user_defined_primitives)
+        if d.name == "C"
+    )
     constructor.cost = first
     snapshot.options.cost_sort = cost_sort
     if assigned:

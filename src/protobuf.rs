@@ -795,7 +795,6 @@ mod tests {
                 _: &egglog::EGraph,
                 _: &egglog::ArcSort,
                 _: &pb::CustomValue,
-                _: Option<pb::Span>,
                 _: &mut pb::Program,
             ) -> Result<pb::Call, String> {
                 *self.errors.lock().unwrap() = self.original.lock().unwrap().take();
@@ -999,7 +998,7 @@ mod tests {
                 signature
                     .inputs
                     .iter()
-                    .map(|arg| sort_name(arg.sort))
+                    .map(|&index| sort_name(index))
                     .collect::<Vec<_>>(),
                 inputs
             );
@@ -1007,7 +1006,7 @@ mod tests {
                 signature
                     .varargs
                     .iter()
-                    .map(|arg| sort_name(arg.sort))
+                    .map(|&index| sort_name(index))
                     .collect::<Vec<_>>(),
                 tail
             );
@@ -1137,7 +1136,7 @@ mod tests {
             let Some(signature) = &primitive.signature else {
                 panic!("missing actual signature")
             };
-            let string_sort = signature.inputs[0].sort;
+            let string_sort = signature.inputs[0];
             let pyobject_sort = signature.output.unwrap();
             let mut forged = context.clone();
             let forged_primitive = forged
@@ -1148,7 +1147,7 @@ mod tests {
             let Some(signature) = &mut forged_primitive.signature else {
                 panic!("missing actual signature")
             };
-            signature.inputs[0].sort = signature.output.unwrap();
+            signature.inputs[0] = signature.output.unwrap();
             let forged_primitive = forged
                 .primitives
                 .iter()
@@ -1162,7 +1161,6 @@ mod tests {
             );
             let program = pb::Program {
                 sorts: context.sorts.clone(),
-                files: context.files.clone(),
                 nodes: vec![
                     pb::Node {
                         sort_id: pyobject_sort,
@@ -1235,7 +1233,6 @@ mod tests {
             .unwrap();
         let mut odd = pb::Program {
             sorts: context.sorts,
-            files: context.files,
             ..Default::default()
         };
         for args in [vec![], vec![0]] {
@@ -1376,13 +1373,18 @@ mod tests {
                 &graph,
                 graph.get_sort_by_name("PyObject").unwrap(),
                 custom,
-                None,
                 &mut lowered,
             )
             .unwrap();
         assert_eq!(lowered.nodes[..original.nodes.len()], original.nodes);
         assert_eq!(lowered.sorts[..original.sorts.len()], original.sorts);
-        assert_eq!(lowered.declarations, original.declarations);
+        assert_eq!(lowered.constructors, original.constructors);
+        assert_eq!(lowered.functions, original.functions);
+        assert_eq!(lowered.relations, original.relations);
+        assert_eq!(
+            lowered.user_defined_primitives,
+            original.user_defined_primitives
+        );
         assert_eq!(lowered.nodes.len(), original.nodes.len() + 1);
         let mut recorder = ProtoEngine::default();
         let recorded_id = create(&mut recorder.engine, true);
@@ -1663,7 +1665,6 @@ mod tests {
             program = pb::Program {
                 nodes: result.nodes.clone(),
                 sorts: result.sorts.clone(),
-                files: frames[0].files.clone(),
                 commands: vec![pb::Command {
                     kind: Some(pb::command::Kind::Extract(pb::Extract {
                         roots: vec![root],
@@ -1751,7 +1752,6 @@ mod tests {
         pb::Program {
             nodes: result.nodes.clone(),
             sorts: result.sorts.clone(),
-            files: frames[0].files.clone(),
             commands: vec![pb::Command {
                 kind: Some(pb::command::Kind::Extract(pb::Extract {
                     roots: vec![extracted.term],
@@ -1900,9 +1900,11 @@ impl ProtoEngine {
         let program = pb::Program::decode(sorts.as_bytes())
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
         if !program.nodes.is_empty()
-            || !program.declarations.is_empty()
+            || !program.constructors.is_empty()
+            || !program.functions.is_empty()
+            || !program.relations.is_empty()
+            || !program.user_defined_primitives.is_empty()
             || !program.commands.is_empty()
-            || !program.files.is_empty()
         {
             return Err(PyValueError::new_err(
                 "model registration requires a sort-only Program",

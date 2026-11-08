@@ -21,11 +21,22 @@ The Python generator joins that semantic catalog to its local presentation map;
 the map does not repeat native signatures.
 Programs, snapshots and history contain user definitions and refer to configured
 builtins by canonical keys. They do not contain builtin descriptor snapshots.
+Callable definitions are setup records in `Program.constructors`,
+`Program.functions`, `Program.relations` and `Program.user_defined_primitives`.
+All four collections share one callable namespace and link before commands;
+collection order does not determine installation order. Each concrete definition
+carries its optional `doc`; table definitions also carry the
+`public_alias`/`default_name` table-name choice. Compatible definitions may be
+repeated. `RuleBody.query` shares one conjunctive binder, and `RuleBody.actions`
+executes actions in order for each match.
+Equality-class nodes use `Node.eq` with `Eq.members`. Python keeps
+`eq(...).to(...)` for equality facts and `union(...).with_(...)` for merge
+actions. Directional function-row writes remain `Set`.
 Every equality entry in an input `Program.sorts` establishes that nominal type,
-including unused entries. Its optional `doc` and input `span` carry definition metadata.
+including unused entries. Its optional `doc` carries definition metadata.
 Every typed `Node.binding` establishes a global slot in a separate name
 namespace; `Node.var` remains lexical. `Command.let` assigns a value to a binding
-node, supports same-sort rebinding and loops, and is excluded from rule heads.
+node, supports same-sort rebinding and loops, and is excluded from rule actions.
 Snapshots retain all installed nominal sorts and typed slots, with one Let per
 populated slot. Saved code retains binding references while stored data is closed.
 `Program.rulesets` carries complete named collection definitions as setup before
@@ -49,16 +60,23 @@ outputs remain valid after a later error. Diagnostics carry a format and opaque
 bytes. Completion is acknowledged by an empty success frame or a final error.
 `EGraph.freeze()` returns an owned `EGraphSnapshot`.
 
-Successful execution frames and snapshots contain no source files or spans,
-including nested reconstruction Programs, saved rules and deferred lambda code.
-Documentation, readable names and diagnostic rule labels remain. Source-produced
-`Node.var` records keep the authored binder names; private backend hygiene does
-not alter these protocol names.
+The protocol contains no source files or byte spans. Documentation, readable names
+and diagnostic rule labels remain. Source-produced `Node.var` records keep the
+authored binder names; private backend hygiene does not alter these protocol names.
+The source parser retains its own input locations for frontend diagnostics.
 
-An error frame carries only the source file referenced by its span, remapped to
-file index zero. An error without a span has no files. Recorded input history and
-live source diagnostics retain their input origins. `GetBuiltins` remains a
-separate provider catalog with its own metadata.
+An attributable error carries a compact, independently owned `Error.context`
+Program containing the offending authored command, rule or merge declaration and
+its referenced user definitions. `Error.site.path` selects that owner or action
+inside the returned context using protobuf field numbers and repeated-element
+indices; its optional `node_id` selects the exact failing expression in the
+context's node arena. `Error.location` independently identifies the active
+command in the submitted request. Malformed or internal failures may have no
+known context. Python retains the generated error record on `EggSmolError` and
+adds a generated protobuf JSON note for the authored context and site, preserving the
+engine message and exception arguments. Presentation never runs the Program or
+loads opaque custom values. Original Python callback exceptions retain their
+identity and traceback through the separate host exception channel.
 
 ## Thread safety
 

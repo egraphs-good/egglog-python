@@ -302,7 +302,7 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
         # Bound scalar counts by the actual referenced sort closure before
         # creating parameter names; a small malformed packet cannot request
         # range-sized frontend allocations.
-        pending_sorts = [signature.output, *(argument.sort for argument in [*signature.inputs, *signature.varargs])]
+        pending_sorts = [signature.output, *signature.inputs, *signature.varargs]
         seen_sorts = set()
         referenced_parameters = set()
         while pending_sorts:
@@ -430,7 +430,7 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                 effective_inputs.extend(signature.varargs)
             if (view.receiver is not None) and (
                 view.receiver >= len(effective_inputs)
-                or sort_type(effective_inputs[view.receiver].sort, parameters=parameters) != owner
+                or sort_type(effective_inputs[view.receiver], parameters=parameters) != owner
             ):
                 msg = "Python receiver must select a fixed input matching owner"
                 raise ValueError(msg)
@@ -451,7 +451,7 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                 if tail and (parameter is not view.params[-1] or (parameter.default is not None)):
                     msg = "A uniform tail must be the final parameter without a default"
                     raise ValueError(msg)
-                expected_sort = signature.varargs[0].sort if tail else effective_inputs[parameter.core_input].sort
+                expected_sort = signature.varargs[0] if tail else effective_inputs[parameter.core_input]
                 annotation = sort_type(
                     expected_sort, input_type=True, parameters=parameters, used_parameters=used_parameters
                 )
@@ -518,10 +518,10 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                 if (
                     name not in {"__lt__", "__le__", "__gt__", "__ge__"}
                     and output == owner
-                    and all(sort_type(argument.sort) == owner for argument in effective_inputs)
+                    and all(sort_type(argument) == owner for argument in effective_inputs)
                 ):
                     reverse = "__r" + name[2:]
-                    annotation = sort_type(effective_inputs[view.params[0].core_input].sort, input_type=True)
+                    annotation = sort_type(effective_inputs[view.params[0].core_input], input_type=True)
                     generated[reverse] = f"    def {reverse}(self, other: {annotation}) -> {output}: ..."
             for method_name, text in generated.items():
                 if method_name in methods[family_name]:

@@ -522,22 +522,18 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
                 default = resolve_literal(sort, namespace[name])
             body = _lower_function_body(builder, default.__egg_ref__, [])
         kind = (
-            Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
-                "user_defined_primitive", pb.UserDefinedPrimitive(name=egg_name, output=output, body=body)
-            )
+            pb.UserDefinedPrimitive(name=egg_name, output=output, body=body)
             if body is not None
-            else Oneof[Literal["constructor"], pb.Constructor](
-                "constructor", pb.Constructor(name=egg_name, output=output)
-            )
+            else pb.Constructor(name=egg_name, output=output)
             if sort_record.kind is not None and sort_record.kind.field == "eq"
-            else Oneof[Literal["function"], pb.Function]("function", pb.Function(name=egg_name, output=output))
+            else pb.Function(name=egg_name, output=output)
         )
-        index = builder.add(
-            "declarations",
-            pb.Declaration(
-                kind=kind,
-            ),
-        )
+        role = {
+            pb.Constructor: "constructors",
+            pb.Function: "functions",
+            pb.UserDefinedPrimitive: "user_defined_primitives",
+        }[type(kind)]
+        index = builder.add(role, kind)
         builder.presentations["callable", egg_name] = Presentation(
             views=(
                 CallPresentation(
@@ -547,7 +543,7 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
                 ),
             )
         )
-        definitions.append(builder.publish().ref("declarations", index))
+        definitions.append(builder.publish().ref(role, index))
         context.catalog = Catalog.from_refs(definitions)
         if name in namespace and ruleset is not None:
             default = resolve_literal(sort, namespace[name])
@@ -611,13 +607,13 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
         )
         header = function.__egg_pending_declaration__
         assert header is not None
-        assert header.kind is not None
-        key = ("callable", header.kind.value.name)
+
+        key = ("callable", header.name)
         duplicate = key in context.catalog.definitions
         for previous in pending:
             previous_header = previous.__egg_pending_declaration__ or previous.__egg_ref__.read()
-            assert previous_header.kind is not None
-            duplicate |= previous_header.kind.value.name == key[1]
+
+            duplicate |= previous_header.name == key[1]
         if duplicate:
             raise ValueError(f"Duplicate catalog definition: {key}")
         assert isinstance(fn, FunctionType)
@@ -626,7 +622,7 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
         # Keep the source prefix of complete headers, but never materialize a
         # later header across a pending conversion before the static barrier.
         values_pending |= function.__egg_pending_values__
-        if values_pending or header.kind.field == "user_defined_primitive":
+        if values_pending or isinstance(header, pb.UserDefinedPrimitive):
             runtime_cls.__egg_attr_cache__[name] = function
             pending.append(function)
         else:
@@ -636,18 +632,21 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
     for fn, function, subsume_body in bodies:
         assert ruleset is not None
         reference = function.__egg_ref__
-        declaration: pb.Declaration = reference.read()
-        assert declaration.kind is not None
-        assert isinstance(declaration.kind.value, pb.Constructor)
+        declaration: pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive = reference.read()
+
+        assert isinstance(declaration, pb.Constructor)
         view = presentation(reference).views[0]
         builder = Builder()
         arguments: list[int] = []
-        for argument in declaration.kind.value.inputs:
+        parameter_names = {parameter.core_input: parameter.name for parameter in view.params}
+        if view.receiver is not None:
+            parameter_names[view.receiver] = next(iter(signature(fn).parameters))
+        for position, argument in enumerate(declaration.inputs):
             index = builder.add(
                 "nodes",
                 pb.Node(
-                    sort_id=builder.import_ref(reference.owner.ref("sorts", argument.sort)),
-                    kind=Oneof[Literal["var"], str]("var", argument.name),
+                    sort_id=builder.import_ref(reference.owner.ref("sorts", argument)),
+                    kind=Oneof[Literal["var"], str]("var", parameter_names[position]),
                 ),
             )
             # All callback arguments are views over the canonical input sorts.
@@ -669,7 +668,7 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
         if result is None:
             msg = "Callable bodies must return a value"
             raise ValueError(msg)
-        output_sort = reference.owner.ref("sorts", declaration.kind.value.output)
+        output_sort = reference.owner.ref("sorts", declaration.output)
         rhs = resolve_literal(output_sort, result)
         # A body may replace its argument wrappers. The pattern still binds the
         # original variables; reconstruct it only after body/result validation.
@@ -867,7 +866,7 @@ class _FunctionConstructor:
         pending_values = self.merge is not None or self.cost is not None
         for index, (parameter, sort) in enumerate(zip(parameters, input_sorts, strict=True)):
             assert isinstance(sort, Ref)
-            inputs.append(pb.Arg(sort=builder.import_ref(sort), name=parameter.name))
+            inputs.append(builder.import_ref(sort))
             if receiver and index == 0:
                 continue
             parameter_record = PresentationParameter(
@@ -921,36 +920,27 @@ class _FunctionConstructor:
                 raise ValueError(msg)
             for supplied, expected in zip(
                 (*input_sorts, output),
-                (*(argument.sort for argument in actual_signature.inputs), actual_signature.output),
+                (*actual_signature.inputs, actual_signature.output),
                 strict=True,
             ):
                 assert isinstance(supplied, Ref)
                 infer_sort(builtin_reference.owner.ref("sorts", expected), supplied, 0, {})
         kind = (
-            Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
-                "user_defined_primitive", pb.UserDefinedPrimitive(name=name, inputs=inputs, output=output_index)
-            )
+            pb.UserDefinedPrimitive(name=name, inputs=inputs, output=output_index)
             if has_body and self.ruleset is None
-            else Oneof[Literal["relation"], pb.Relation]("relation", pb.Relation(name=name, inputs=inputs))
+            else pb.Relation(name=name, inputs=inputs)
             if not has_body and output_record.kind.field == "primitive" and output_record.kind.value.name == "Unit"
-            else Oneof[Literal["constructor"], pb.Constructor](
-                "constructor",
-                pb.Constructor(name=name, inputs=inputs, output=output_index, unextractable=self.unextractable),
-            )
+            else pb.Constructor(name=name, inputs=inputs, output=output_index, unextractable=self.unextractable)
             if equality and not has_merge
-            else Oneof[Literal["function"], pb.Function](
-                "function",
-                pb.Function(
-                    name=name,
-                    inputs=inputs,
-                    output=output_index,
-                ),
+            else pb.Function(
+                name=name,
+                inputs=inputs,
+                output=output_index,
             )
         )
-        declaration = pb.Declaration(
-            kind=kind,
-            doc=fn.__doc__,
-        )
+        if fn.__doc__ is not None:
+            kind.doc = fn.__doc__
+        declaration = kind
 
         def finish() -> Ref:  # noqa: C901, PLR0912
             completed_parameters = []
@@ -966,27 +956,29 @@ class _FunctionConstructor:
                     completed_parameters.append(parameter_record)
             merge = _resolve_merge(output, self.merge)
             if merge is not None:
-                assert isinstance(kind.value, pb.Function)
-                kind.value.merge = builder.import_ref(merge)
+                assert isinstance(kind, pb.Function)
+                kind.merge = builder.import_ref(merge)
             if self.cost is not None:
                 from .builtins import i64  # noqa: PLC0415
 
                 cost_sort = resolve_type_annotation(i64)
                 assert isinstance(cost_sort, Ref)
-                assert isinstance(kind.value, pb.Constructor)
-                kind.value.cost = builder.import_ref(resolve_literal(cost_sort, self.cost).__egg_ref__)
+                assert isinstance(kind, pb.Constructor)
+                kind.cost = builder.import_ref(resolve_literal(cost_sort, self.cost).__egg_ref__)
             body = None
             if has_body and (owner is None or self.ruleset is None):
                 formals = Builder()
                 formal_indices = []
-                for argument, sort in zip(inputs, input_sorts, strict=True):
+                for parameter, sort in zip(
+                    reversed(parameters) if reverse_args else parameters, input_sorts, strict=True
+                ):
                     assert isinstance(sort, Ref)
                     formal_indices.append(
                         formals.add(
                             "nodes",
                             pb.Node(
                                 sort_id=formals.import_ref(sort),
-                                kind=Oneof[Literal["var"], str]("var", argument.name),
+                                kind=Oneof[Literal["var"], str]("var", parameter.name),
                             ),
                         )
                     )
@@ -1036,11 +1028,16 @@ class _FunctionConstructor:
                     rewrite_body=self.ruleset is not None,
                     recursive_name=name if owner is not None and view.kind == CallKind.INITIALIZER else None,
                 )
-                if isinstance(kind.value, pb.UserDefinedPrimitive):
-                    kind.value.body = body
+                if isinstance(kind, pb.UserDefinedPrimitive):
+                    kind.body = body
             if builtin_reference is None:
-                index = builder.add("declarations", declaration)
-                role = "declarations"
+                role = {
+                    pb.Constructor: "constructors",
+                    pb.Function: "functions",
+                    pb.Relation: "relations",
+                    pb.UserDefinedPrimitive: "user_defined_primitives",
+                }[type(declaration)]
+                index = builder.add(role, declaration)
             else:
                 actual = _copy_record(
                     builtin_reference.read(),
@@ -1101,7 +1098,7 @@ def _lower_function_body(  # noqa: C901
             else:
                 raise ValueError(f"Free variable {node.kind.value!r} in named eager body")
             node.kind = Oneof[Literal["var"], str]("var", name)
-        elif node.kind.field == "union" and not rewrite_body:
+        elif node.kind.field == "eq" and not rewrite_body:
             msg = "Union in named eager bodies is not supported"
             raise NotImplementedError(msg)
         nested_body = None
@@ -1268,14 +1265,12 @@ def relation(name: str, /, *tps: type, egg_fn: str | None = None) -> Callable[..
             msg = "Relations require concrete input sorts"
             raise TypeError(msg)
         label = f"arg{index}"
-        inputs.append(pb.Arg(sort=builder.import_ref(sort), name=label))
+        inputs.append(builder.import_ref(sort))
         params.append(PresentationParameter(core_input=index, name=label))
     logical_name = egg_fn or re.sub(r"[^\w\-+*/?!=<>&|^/%]", "_", ".".join(path))
     declaration = builder.add(
-        "declarations",
-        pb.Declaration(
-            kind=Oneof[Literal["relation"], pb.Relation]("relation", pb.Relation(name=logical_name, inputs=inputs)),
-        ),
+        "relations",
+        pb.Relation(name=logical_name, inputs=inputs),
     )
     builder.presentations["callable", logical_name] = Presentation(
         views=(
@@ -1286,7 +1281,7 @@ def relation(name: str, /, *tps: type, egg_fn: str | None = None) -> Callable[..
             ),
         )
     )
-    reference = builder.publish().ref("declarations", declaration)
+    reference = builder.publish().ref("relations", declaration)
     Catalog.from_refs([reference])
     return cast("Callable[..., Unit]", RuntimeFunction(reference, 0))
 
@@ -1405,33 +1400,26 @@ def constant(
     merge_expression = _resolve_merge(sort, cast("Callable[[object, object], object] | None", merge))
     logical_name = egg_name or re.sub(r"[^\w\-+*/?!=<>&|^/%]", "_", "%" + ".".join(path))
     kind = (
-        Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
-            "user_defined_primitive", pb.UserDefinedPrimitive(name=logical_name, output=output, body=body)
-        )
+        pb.UserDefinedPrimitive(name=logical_name, output=output, body=body)
         if body is not None and ruleset is None
-        else Oneof[Literal["constructor"], pb.Constructor](
-            "constructor", pb.Constructor(name=logical_name, output=output)
-        )
+        else pb.Constructor(name=logical_name, output=output)
         if return_type_is_eqsort and not has_merge
-        else Oneof[Literal["function"], pb.Function](
-            "function",
-            pb.Function(
-                name=logical_name,
-                output=output,
-                merge=builder.import_ref(merge_expression) if merge_expression is not None else None,
-            ),
+        else pb.Function(
+            name=logical_name,
+            output=output,
+            merge=builder.import_ref(merge_expression) if merge_expression is not None else None,
         )
     )
-    index = builder.add(
-        "declarations",
-        pb.Declaration(
-            kind=kind,
-        ),
-    )
+    role = {
+        pb.Constructor: "constructors",
+        pb.Function: "functions",
+        pb.UserDefinedPrimitive: "user_defined_primitives",
+    }[type(kind)]
+    index = builder.add(role, kind)
     builder.presentations["callable", logical_name] = Presentation(
         views=(CallPresentation(kind=CallKind.CONSTANT, path=tuple(path)),)
     )
-    reference = builder.publish().ref("declarations", index)
+    reference = builder.publish().ref(role, index)
     Catalog.from_refs([reference])  # Validate the persisted Python view before exposing the expression.
     value = RuntimeFunction(reference, 0)()
     if body is not None and ruleset is not None:
@@ -1580,17 +1568,15 @@ class EGraph:
     def input(self, fn: Callable[..., BASE_EXPR], path: str) -> None:
         """Load tab-separated data; saved transcripts replay without the input file."""
         reference = resolve_callable(fn)
-        declaration: pb.Declaration | pb.Primitive = reference.read()
-        if (
-            not isinstance(declaration, pb.Declaration)
-            or declaration.kind is None
-            or not isinstance(declaration.kind.value, pb.Function | pb.Constructor | pb.Relation)
-        ):
+        declaration: pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive | pb.Primitive = (
+            reference.read()
+        )
+        if not isinstance(declaration, pb.Function | pb.Constructor | pb.Relation):
             msg = "CSV input requires a table-backed relation, constructor, or bodyless function"
-            raise ValueError(msg)
+            raise ValueError(msg)  # noqa: TRY004 -- preserve the public table validation error
         descriptor = pack(roots=[reference])
         self._state.run_program(descriptor)
-        encoded = self._state.transport.produce_input(descriptor.program.to_binary(), declaration.kind.value.name, path)
+        encoded = self._state.transport.produce_input(descriptor.program.to_binary(), declaration.name, path)
         rows = pb.Program.from_binary(encoded)
         self._state.run_program(Packed(rows, (), descriptor.definitions))
 
@@ -2114,16 +2100,14 @@ class EGraph:
         builder = Builder()
         tables = []
         for reference in references:
-            declaration: pb.Declaration | pb.Primitive = reference.read()
-            if (
-                not isinstance(declaration, pb.Declaration)
-                or declaration.kind is None
-                or not isinstance(declaration.kind.value, pb.Function | pb.Constructor | pb.Relation)
-            ):
+            declaration: pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive | pb.Primitive = (
+                reference.read()
+            )
+            if not isinstance(declaration, pb.Function | pb.Constructor | pb.Relation):
                 msg = "This operation requires a table-backed relation, constructor, or bodyless function"
-                raise ValueError(msg)
+                raise ValueError(msg)  # noqa: TRY004 -- preserve the public table validation error
             builder.import_ref(reference)
-            tables.append(declaration.kind.value.name)
+            tables.append(declaration.name)
         registration = (
             self._state.cost_model(
                 _HostModelFactory(self, cast("TreeCostModel[Comparable] | DagCostModel[ComparableAdd]", cost_model)),
@@ -2198,7 +2182,7 @@ class EGraph:
         """Read logical state over bytes and project a separate, filtered display."""
         from .visualizer_widget import _snapshot_to_data  # noqa: PLC0415
 
-        split = {resolve_callable(fn).read().kind.value.name for fn in kwargs.get("split_functions", [])}
+        split = {resolve_callable(fn).read().name for fn in kwargs.get("split_functions", [])}
         snapshot = self.freeze() if snapshot is None else snapshot
         assert snapshot.program is not None
         owner = self._state._adopt_value_records(snapshot.program, pending=self._state._active_definitions)
@@ -2371,18 +2355,16 @@ class EGraph:
         builtin primitives do not.
         """
         reference = resolve_callable(fn)
-        declaration: pb.Declaration | pb.Primitive = reference.read()
-        if (
-            not isinstance(declaration, pb.Declaration)
-            or declaration.kind is None
-            or not isinstance(declaration.kind.value, pb.Function | pb.Constructor | pb.Relation)
-        ):
+        declaration: pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive | pb.Primitive = (
+            reference.read()
+        )
+        if not isinstance(declaration, pb.Function | pb.Constructor | pb.Relation):
             msg = (
                 "This operation requires a table-backed relation, constructor, or bodyless function; "
                 "eager and builtin primitives do not have tables"
             )
-            raise ValueError(msg)
-        table = declaration.kind.value.name
+            raise ValueError(msg)  # noqa: TRY004 -- preserve the public table validation error
+        table = declaration.name
         builder = Builder()
         builder.import_ref(reference)
         command = builder.add(
@@ -2449,18 +2431,16 @@ class EGraph:
         argument index or output. No partial dictionary or placeholder is returned.
         """
         reference = resolve_callable(fn)
-        declaration: pb.Declaration | pb.Primitive = reference.read()
-        if (
-            not isinstance(declaration, pb.Declaration)
-            or declaration.kind is None
-            or not isinstance(declaration.kind.value, pb.Function | pb.Constructor | pb.Relation)
-        ):
+        declaration: pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive | pb.Primitive = (
+            reference.read()
+        )
+        if not isinstance(declaration, pb.Function | pb.Constructor | pb.Relation):
             msg = (
                 "This operation requires a table-backed relation, constructor, or bodyless function; "
                 "eager and builtin primitives do not have tables"
             )
-            raise ValueError(msg)
-        signature = declaration.kind.value
+            raise ValueError(msg)  # noqa: TRY004 -- preserve the public table validation error
+        signature = declaration
         if length is not None:
             self._state.run_program([], roots=[reference])
             try:
@@ -2519,7 +2499,7 @@ class EGraph:
                         raise ValueError(f"{context} references an invalid unavailable sort")
                     actual_sort = owner.ref("sorts", cell.kind.value)
                 expected = (
-                    signature.inputs[position].sort
+                    signature.inputs[position]
                     if position < len(row.args)
                     else signature.output
                     if not isinstance(signature, pb.Relation)
@@ -2570,14 +2550,10 @@ class EGraph:
         runtime_expr = to_runtime_expr(expr)
         node: pb.Node = runtime_expr.__egg_ref__.read()
         if node.kind is not None and node.kind.field == "call":
-            declaration: pb.Declaration | pb.Primitive = _definition_at(
-                runtime_expr.__egg_ref__, "callable", node.kind.value.func
-            ).read()
-            if (
-                not isinstance(declaration, pb.Declaration)
-                or declaration.kind is None
-                or not isinstance(declaration.kind.value, pb.Function | pb.Constructor | pb.Relation)
-            ):
+            declaration: pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive | pb.Primitive = (
+                _definition_at(runtime_expr.__egg_ref__, "callable", node.kind.value.func).read()
+            )
+            if not isinstance(declaration, pb.Function | pb.Constructor | pb.Relation):
                 msg = "Lookup requires a table-backed callable; eager and builtin primitives do not have tables"
                 raise ValueError(msg)
         if self._cost_model_frames:
@@ -2592,11 +2568,13 @@ class EGraph:
     def has_custom_cost(self, fn: ExprCallable) -> bool:
         """Inspect assigned row costs from a complete shared snapshot."""
         reference = resolve_callable(fn)
-        declaration: pb.Declaration | pb.Primitive = reference.read()
+        declaration: pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive | pb.Primitive = (
+            reference.read()
+        )
         if isinstance(declaration, pb.Primitive):
             return False
-        assert declaration.kind is not None
-        name = declaration.kind.value.name
+
+        name = declaration.name
         if self._cost_model_frames:
             return any(table == name for table, _ in self._cost_model_frames[-1][0].assigned)
         snapshot = self.freeze()
@@ -2661,11 +2639,13 @@ def ruleset(
     """
     Creates a ruleset with the following rules.
 
-    If no name is provided, try using the name of the funciton.
+    If no name is provided, try using the name of the function. Use
+    ``@ruleset(name="")`` to decorate a generator in the default group.
     """
     module: str | None
     if isinstance(rule_or_generator, FunctionType):
-        name = name or rule_or_generator.__name__
+        if name is None:
+            name = rule_or_generator.__name__
         module = rule_or_generator.__module__
     else:
         module = _get_module()
@@ -2893,6 +2873,11 @@ class Ruleset(Schedule):
         index = builder.add("rulesets", pb.RulesetBinding(name=str(self.__egg_ident__), value=pb.Ruleset()))
         self.__egg_ref__ = builder.publish().ref("rulesets", index)
 
+    def __call__(self, generator: RewriteOrRuleGenerator) -> Ruleset:
+        """Decorate a rule generator, retaining this collection's name and defining scope."""
+        self.register(generator, _increase_frame=True)
+        return self
+
     @property
     def __egg_decls__(self) -> Never:
         msg = "Canonical rulesets have no legacy declaration projection"
@@ -3071,7 +3056,7 @@ class Fact:
         Compare equality or inequality structurally, without querying an EGraph.
         """
         node: pb.Node = self.__egg_ref__.read()
-        if node.kind is not None and node.kind.field == "union" and len(node.kind.value.members) == 2:
+        if node.kind is not None and node.kind.field == "eq" and len(node.kind.value.members) == 2:
             left, right = node.kind.value.members
             return StructuralView(self.__egg_ref__.owner.ref("nodes", left)) == StructuralView(
                 self.__egg_ref__.owner.ref("nodes", right)
@@ -3435,9 +3420,9 @@ class _EqBuilder(Generic[BASE_EXPR]):
             "nodes",
             pb.Node(
                 sort_id=builder.import_ref(expr.__egg_ref__.owner.ref("sorts", node.sort_id)),
-                kind=Oneof[Literal["union"], pb.Union](
-                    "union",
-                    pb.Union(members=[builder.import_ref(expr.__egg_ref__), builder.import_ref(other.__egg_ref__)]),
+                kind=Oneof[Literal["eq"], pb.Eq](
+                    "eq",
+                    pb.Eq(members=[builder.import_ref(expr.__egg_ref__), builder.import_ref(other.__egg_ref__)]),
                 ),
             ),
         )
@@ -3496,11 +3481,13 @@ class _SetBuilder(Generic[BASE_EXPR]):
             raise TypeError(msg)
         call = node.kind.value
         declaration = _definition_at(lhs.__egg_ref__, "callable", call.func)
-        declared: pb.Declaration | pb.Primitive = declaration.read()
-        if not isinstance(declared, pb.Declaration) or declared.kind is None or declared.kind.field != "function":
+        declared: pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive | pb.Primitive = (
+            declaration.read()
+        )
+        if not isinstance(declared, pb.Function):
             msg = "Can only set table-backed Function calls"
             raise TypeError(msg)
-        rhs_expr = resolve_literal(declaration.owner.ref("sorts", declared.kind.value.output), rhs)
+        rhs_expr = resolve_literal(declaration.owner.ref("sorts", declared.output), rhs)
         builder = Builder()
         builder.import_ref(declaration)
         target = pb.Call(
@@ -3543,9 +3530,9 @@ class _UnionBuilder(Generic[EXPR]):
             "nodes",
             pb.Node(
                 sort_id=builder.import_ref(lhs.__egg_ref__.owner.ref("sorts", node.sort_id)),
-                kind=Oneof[Literal["union"], pb.Union](
-                    "union",
-                    pb.Union(members=[builder.import_ref(lhs.__egg_ref__), builder.import_ref(rhs_expr.__egg_ref__)]),
+                kind=Oneof[Literal["eq"], pb.Eq](
+                    "eq",
+                    pb.Eq(members=[builder.import_ref(lhs.__egg_ref__), builder.import_ref(rhs_expr.__egg_ref__)]),
                 ),
             ),
         )
@@ -3616,7 +3603,7 @@ class _RuleBuilder:
                 builder.import_ref(_definition_at(reference, namespace, name))
             dependencies.clear()
         record = pb.Rule(
-            kind=Oneof[Literal["rule"], pb.RuleBody]("rule", pb.RuleBody(query=query, head=head)),
+            kind=Oneof[Literal["rule"], pb.RuleBody]("rule", pb.RuleBody(query=query, actions=head)),
             eval_mode=modes[self.eval_mode],
             no_decomp=self.no_decomp,
         )
@@ -4070,18 +4057,14 @@ def get_callable_cost(fn: ExprCallable) -> int | None:
     Returns the cost of a callable, if it has one set. Otherwise returns None.
     """
     reference = resolve_callable(fn)
-    declaration: pb.Declaration | pb.Primitive = reference.read()
-    if (
-        not isinstance(declaration, pb.Declaration)
-        or declaration.kind is None
-        or declaration.kind.field != "constructor"
-    ):
+    declaration: pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive | pb.Primitive = reference.read()
+    if not isinstance(declaration, pb.Constructor):
         return 1
-    if not declaration.kind.value.has_field("cost"):
+    if not declaration.has_field("cost"):
         return None
     from .deconstruct import get_literal_value  # noqa: PLC0415
 
-    cost = get_literal_value(RuntimeExpr(reference.owner.ref("nodes", declaration.kind.value.cost)))
+    cost = get_literal_value(RuntimeExpr(reference.owner.ref("nodes", declaration.cost)))
     if not isinstance(cost, int):
         msg = "The constructor's Python cost must be an i64 literal"
         raise TypeError(msg)

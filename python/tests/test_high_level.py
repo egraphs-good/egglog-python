@@ -85,9 +85,10 @@ def _restore_snapshot(snapshot: pb.EGraphSnapshot, *, environment: tuple[Owner, 
         pack(
             roots=[
                 owner.ref(role, index)
-                for role in ("sorts", "nodes", "declarations")
+                for role in ("sorts", "nodes", "constructors", "functions", "relations", "user_defined_primitives")
                 for index, record in enumerate(getattr(snapshot.program, role))
-                if role == "declarations" or (record.kind is not None and record.kind.field in {"eq", "binding"})
+                if role in {"constructors", "functions", "relations", "user_defined_primitives"}
+                or (record.kind is not None and record.kind.field in {"eq", "binding"})
             ],
             commands=[owner.ref("commands", index) for index in range(len(snapshot.program.commands))],
         )
@@ -393,13 +394,9 @@ def test_saved_transcript_preserves_equality_head_name_in_rule_fact() -> None:
     assert recorded.function_size(claimed) == 1
     snapshot = pb.EGraphSnapshot.from_binary(recorded.freeze().to_binary())
     assert snapshot.program is not None
-    declaration = next(
-        declaration
-        for declaration in snapshot.program.declarations
-        if declaration.kind is not None and declaration.kind.field == "relation" and declaration.kind.value.name == "="
-    )
-    assert declaration.kind is not None
-    assert declaration.kind.value.name == resolve_callable(claimed).read().kind.value.name
+    declaration = next(declaration for declaration in snapshot.program.relations if declaration.name == "=")
+    assert isinstance(declaration, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive)
+    assert declaration.name == resolve_callable(claimed).read().name
     assert presentation(resolve_callable(claimed)).views[0].path == (*__name__.split("."), "equality_head_claimed")
     _replay_recorded_source(recorded.as_egglog_string)
 
@@ -736,7 +733,12 @@ def test_let_uses_global_binding_without_public_function(capfd: pytest.CaptureFi
     assert node.kind == Oneof("binding", "x")
     snapshot = egraph.freeze()
     assert snapshot.program is not None
-    assert snapshot.program.declarations == []
+    assert not (
+        *snapshot.program.constructors,
+        *snapshot.program.functions,
+        *snapshot.program.relations,
+        *snapshot.program.user_defined_primitives,
+    )
     assert any(node.kind == Oneof("binding", "x") for node in snapshot.program.nodes)
     assert sum(command.kind is not None and command.kind.field == "let" for command in snapshot.program.commands) == 1
     with pytest.raises(TypeError):
@@ -750,7 +752,12 @@ def test_named_let_actions_reconcile_across_independent_owners() -> None:
     first = let("shared", i64(1))
     second = let("shared", i64(2))
     packed = pack(commands=[first.__egg_ref__, second.__egg_ref__])
-    assert packed.program.declarations == []
+    assert not (
+        *packed.program.constructors,
+        *packed.program.functions,
+        *packed.program.relations,
+        *packed.program.user_defined_primitives,
+    )
     targets = []
     for command in packed.program.commands:
         assert command.kind is not None
@@ -782,7 +789,12 @@ def test_named_lets_preserve_exact_names_without_sanitization_collisions() -> No
     ]
     assert set(bindings) == set(names)
     assert len(bindings) == len(names)
-    assert snapshot.program.declarations == []
+    assert not (
+        *snapshot.program.constructors,
+        *snapshot.program.functions,
+        *snapshot.program.relations,
+        *snapshot.program.user_defined_primitives,
+    )
     _replay_recorded_source(graph.as_egglog_string)
 
 
@@ -1135,7 +1147,19 @@ def test_compatible_relation_aliases_share_semantics_and_keep_local_paths(*, sav
     assert str(explicit(i64(1))) == "late_explicit_relation(1)"
     snapshot = egraph.freeze()
     assert snapshot.program is not None
-    assert sum(d.kind is not None and d.kind.value.name == generated_name for d in snapshot.program.declarations) == 1
+    assert (
+        sum(
+            isinstance(d, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive)
+            and d.name == generated_name
+            for d in (
+                *snapshot.program.constructors,
+                *snapshot.program.functions,
+                *snapshot.program.relations,
+                *snapshot.program.user_defined_primitives,
+            )
+        )
+        == 1
+    )
     if save_egglog_string:
         _replay_recorded_source(egraph.as_egglog_string)
 
@@ -1420,25 +1444,21 @@ def test_saved_egglog_string_uses_qualified_generated_sort_and_function_names() 
     type_view = presentation(sort_definition).type_view
     assert type_view is not None
     assert type_view.path == (*__name__.split("."), "Num")
-    declaration = next(
-        declaration
-        for declaration in snapshot.program.declarations
-        if declaration.kind is not None and declaration.kind.field == "constructor"
-    )
+    declaration = next(declaration for declaration in snapshot.program.constructors)
     view = presentation(resolve_callable(Num.var)).views[0]
     assert view.kind == CallKind.CLASS_METHOD
     assert view.path == ("var",)
-    constructor_kind = declaration.kind
-    assert constructor_kind is not None
-    assert constructor_kind.field == "constructor"
-    constructor = constructor_kind.value
+    constructor_kind = declaration
+    assert isinstance(constructor_kind, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive)
+    assert isinstance(constructor_kind, pb.Constructor)
+    constructor = constructor_kind
     assert view.owner is not None
     assert view.owner.read().kind.value == sort.kind.value
     output = snapshot.program.sorts[constructor.output]
     assert output.kind is not None
     assert output.kind.field == "eq"
     assert output.kind.value == sort.kind.value
-    argument = snapshot.program.sorts[constructor.inputs[0].sort]
+    argument = snapshot.program.sorts[constructor.inputs[0]]
     assert argument.kind is not None
     assert argument.kind.field == "primitive"
     assert argument.kind.value.name == "String"
@@ -1666,8 +1686,13 @@ def test_freeze_omits_synthetic_let_bindings() -> None:
     snapshot = pb.EGraphSnapshot.from_binary(egraph.freeze().to_binary())
     assert snapshot.program is not None
     assert not any(
-        declaration.kind is not None and declaration.kind.field == "function"
-        for declaration in snapshot.program.declarations
+        isinstance(declaration, pb.Function)
+        for declaration in (
+            *snapshot.program.constructors,
+            *snapshot.program.functions,
+            *snapshot.program.relations,
+            *snapshot.program.user_defined_primitives,
+        )
     )
     pair_name = cast("RuntimeExpr", root).__egg_ref__.read().kind.value.func
     pairs = [
@@ -1842,7 +1867,7 @@ def test_generic_callback_prefix_conversion_is_not_speculative(monkeypatch, mode
             name="test.generic.capture",
             signature=pb.GenericSignature(
                 type_param_count=1,
-                inputs=[pb.Arg(sort=scalar), pb.Arg(sort=variable)],
+                inputs=[scalar, variable],
                 output=variable,
             ),
         ),
@@ -1903,7 +1928,7 @@ def test_polynomial_theory_authoring_snapshots_without_engine(monkeypatch, name:
     assert addition is not None
     assert len(addition.rules) == rule_count
     assert decoded.nodes
-    assert decoded.declarations
+    assert any((decoded.constructors, decoded.functions, decoded.relations, decoded.user_defined_primitives))
     restored = Builder.from_program(decoded).publish().ref("rulesets", 0).read()
     assert restored.value is not None
     assert len(restored.value.rules) == rule_count
@@ -2849,6 +2874,27 @@ def test_multiple_generics():
     assert str(egraph.extract(g())) == "Vec[String].empty()"
 
 
+@pytest.mark.parametrize("decorated", [False, True])
+def test_empty_ruleset_generator_name_preserves_default_group(decorated):
+    class Local(Expr):
+        def __init__(self, value: i64Like) -> None: ...
+
+    def fold(value: i64):
+        yield rewrite(Local(value)).to(Local(value + 1))
+
+    # A locally scoped declaration exercises the decorator's defining-frame lookup.
+    group = ruleset(name="")(fold) if decorated else ruleset(fold, name="")
+    graph = EGraph(Local(0), record_history=True)
+    graph.run(group)
+    graph.check(eq(Local(0)).to(Local(1)))
+    graph.run(run())
+    graph.check(eq(Local(0)).to(Local(2)))
+    snapshot = graph.freeze()
+    assert snapshot.program is not None
+    assert [binding.name for binding in snapshot.program.rulesets] == [""]
+    graph.close()
+
+
 def test_deferred_ruleset():
     @ruleset
     def rules(x: AA):
@@ -2916,7 +2962,7 @@ class TestDefaultReplacements:
 
         assert signature.has_field("output")
         assert len(signature.inputs) == 2
-        assert all(argument.sort == signature.output for argument in signature.inputs)
+        assert all(argument == signature.output for argument in signature.inputs)
         sort: pb.Sort = reference.owner.ref("sorts", signature.output).read()
         assert sort.kind is not None
         assert sort.kind.field == "primitive"
@@ -2939,7 +2985,12 @@ class TestDefaultReplacements:
         assert value.__egg_ref__.read().kind.value.func == primitive.name
         assert get_literal_value(f(1, 2)) is None
         packed = pack([value.__egg_ref__])
-        assert not packed.program.declarations
+        assert not (
+            *packed.program.constructors,
+            *packed.program.functions,
+            *packed.program.relations,
+            *packed.program.user_defined_primitives,
+        )
         decoded = Builder.from_program(pb.Program.from_binary(packed.program.to_binary())).publish()
         restored = RuntimeExpr(decoded.ref("nodes", packed.indices[0]))
         assert expr_parts(cast("BaseExpr", restored)) == expr_parts(f(1, 2))
@@ -2998,9 +3049,10 @@ class TestDefaultReplacements:
             pack(
                 roots=[
                     owner.ref(role, index)
-                    for role in ("sorts", "nodes", "declarations")
+                    for role in ("sorts", "nodes", "constructors", "functions", "relations", "user_defined_primitives")
                     for index, record in enumerate(getattr(snapshot.program, role))
-                    if role == "declarations" or (record.kind is not None and record.kind.field in {"eq", "binding"})
+                    if role in {"constructors", "functions", "relations", "user_defined_primitives"}
+                    or (record.kind is not None and record.kind.field in {"eq", "binding"})
                 ],
                 commands=[owner.ref("commands", index) for index in range(len(snapshot.program.commands))],
             )

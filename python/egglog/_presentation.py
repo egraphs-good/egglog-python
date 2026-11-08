@@ -138,12 +138,30 @@ def validate_default(root: Ref) -> None:
 def presentation(reference: Ref) -> Presentation:
     """Resolve canonical local ownership and derive a conservative type name."""
     reference = reference.owner.ref(reference.role, reference.index)
-    if reference.role not in {"sorts", "nodes", "declarations", "primitive_sorts", "primitives"}:
+    if reference.role not in {
+        "sorts",
+        "nodes",
+        "constructors",
+        "functions",
+        "relations",
+        "user_defined_primitives",
+        "primitive_sorts",
+        "primitives",
+    }:
         msg = "Python presentation requires a semantic declaration reference"
         raise TypeError(msg)
     from ._program import _definition_key  # noqa: PLC0415
 
-    record: pb.Sort | pb.Node | pb.Declaration | pb.PrimitiveSort | pb.Primitive = reference.read()
+    record: (
+        pb.Sort
+        | pb.Node
+        | pb.Constructor
+        | pb.Function
+        | pb.Relation
+        | pb.UserDefinedPrimitive
+        | pb.PrimitiveSort
+        | pb.Primitive
+    ) = reference.read()
     key = _definition_key(record)
     if key is None:
         msg = "Python presentation requires a named setup record"
@@ -151,11 +169,7 @@ def presentation(reference: Ref) -> Presentation:
     supplied = reference.owner._presentations.get(key)
     if supplied is not None:
         return supplied
-    if isinstance(record, pb.Declaration):
-        assert record.kind is not None
-        kind = record.kind.value
-    else:
-        kind = record
+    kind = record
     if isinstance(kind, pb.Sort):
         assert kind.kind is not None
         assert kind.kind.field == "eq"
@@ -170,14 +184,8 @@ def validate_view(reference: Ref, view: CallPresentation) -> None:  # noqa: C901
     from ._program import StructuralView  # noqa: PLC0415
     from .type_constraint_solver import TypeConstraintError, infer_sort  # noqa: PLC0415
 
-    record: pb.Declaration | pb.Primitive = reference.read()
-    if isinstance(record, pb.Declaration):
-        if record.kind is None:
-            msg = "Python callable declaration has no kind"
-            raise ValueError(msg)
-        kind = record.kind.value
-    else:
-        kind = record
+    record: pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive | pb.Primitive = reference.read()
+    kind = record
     if isinstance(kind, pb.Primitive):
         signature = kind.signature
         if signature is None:
@@ -235,7 +243,7 @@ def validate_view(reference: Ref, view: CallPresentation) -> None:  # noqa: C901
             )
             pending.extend(current.owner.ref("sorts", index) for index in children)
         if view.receiver is not None and StructuralView(view.owner) != StructuralView(
-            reference.owner.ref("sorts", patterns[view.receiver].sort)
+            reference.owner.ref("sorts", patterns[view.receiver])
         ):
             msg = "Python receiver input must match its owner"
             raise ValueError(msg)
@@ -261,7 +269,7 @@ def validate_view(reference: Ref, view: CallPresentation) -> None:  # noqa: C901
                 raise ValueError(msg)
             try:
                 infer_sort(
-                    reference.owner.ref("sorts", patterns[parameter.core_input].sort),
+                    reference.owner.ref("sorts", patterns[parameter.core_input]),
                     parameter.default.owner.ref("sorts", parameter.default.read().sort_id),
                     binder,
                     {},
@@ -278,7 +286,7 @@ def validate_view(reference: Ref, view: CallPresentation) -> None:  # noqa: C901
         or view.mutates >= len(inputs)
         or output is None
         or view.mutates not in slots
-        or StructuralView(reference.owner.ref("sorts", inputs[view.mutates].sort))
+        or StructuralView(reference.owner.ref("sorts", inputs[view.mutates]))
         != StructuralView(reference.owner.ref("sorts", output))
     ):
         msg = "Invalid mutated input"

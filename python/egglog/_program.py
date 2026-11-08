@@ -29,15 +29,13 @@ if TYPE_CHECKING:
 # address; '@' means a named definition dependency. Other fields are copied,
 # recursively for inline messages. Binder positions are deliberately NOT indices.
 _FIELDS = {
-    "Program": "nodes sorts declarations commands files rulesets",
-    "Node": "sort_id:sorts var binding primitive_value call apply union get_cost span",
-    "BuiltinCatalog": "sorts primitive_sorts primitives files",
-    "Sort": "eq primitive func var span doc",
+    "Program": "nodes sorts constructors functions relations user_defined_primitives commands rulesets",
+    "Node": "sort_id:sorts var binding primitive_value call apply eq get_cost",
+    "BuiltinCatalog": "sorts primitive_sorts primitives",
+    "Sort": "eq primitive func var doc",
     "PrimitiveSortRef": "name@primitive_sort args:sorts",
     "FuncSort": "params:sorts result:sorts",
-    "Span": "file:files start end",
-    "SourceFile": "name contents",
-    "Union": "members:nodes",
+    "Eq": "members:nodes",
     "Call": "func@callable args:nodes",
     "Apply": "function:nodes args:nodes",
     "Lambda": "captures:nodes body:nodes",
@@ -51,23 +49,21 @@ _FIELDS = {
     "MaybeValue": "value:nodes",
     "CustomValue": "payload args:nodes",
     "Unit": "",
-    "Action": "term:nodes set delete subsume panic set_cost span",
+    "Action": "term:nodes set delete subsume panic set_cost",
     "Set": "target value:nodes",
     "SetCost": "target cost:nodes",
-    "Declaration": "constructor function relation user_defined_primitive span doc public_alias default_name",
-    "Arg": "sort:sorts name",
-    "Constructor": "name inputs output:sorts cost:nodes unextractable hidden",
-    "Function": "name inputs output:sorts merge:nodes hidden",
-    "Relation": "name inputs",
-    "UserDefinedPrimitive": "name inputs output:sorts body:nodes",
-    "PrimitiveSort": "name arity span doc",
-    "Primitive": "name signature span doc",
-    "GenericSignature": "type_param_count inputs output:sorts varargs",
-    "Rule": "rule rewrite birewrite name eval_mode no_decomp include_subsumed span doc",
-    "RuleBody": "query:nodes head",
+    "Constructor": "name inputs:sorts output:sorts cost:nodes unextractable hidden doc public_alias default_name",
+    "Function": "name inputs:sorts output:sorts merge:nodes hidden doc public_alias default_name",
+    "Relation": "name inputs:sorts doc public_alias default_name",
+    "UserDefinedPrimitive": "name inputs:sorts output:sorts body:nodes doc",
+    "PrimitiveSort": "name arity doc",
+    "Primitive": "name signature doc",
+    "GenericSignature": "type_param_count inputs:sorts output:sorts varargs:sorts",
+    "Rule": "rule rewrite birewrite name eval_mode no_decomp include_subsumed doc",
+    "RuleBody": "query:nodes actions",
     "Rewrite": "lhs:nodes rhs:nodes conditions:nodes subsume",
     "BiRewrite": "lhs:nodes rhs:nodes conditions:nodes",
-    "Command": "action let check prove prove_exists run bind_scheduler keep_best extract freeze table_sizes table_rows table_stats loop fail stats explain span",
+    "Command": "action let check prove prove_exists run bind_scheduler keep_best extract freeze table_sizes table_rows table_stats loop fail stats explain",
     "Let": "binding:nodes value:nodes",
     "Check": "facts:nodes",
     "Prove": "facts:nodes",
@@ -90,16 +86,27 @@ _FIELDS = {
 _ROLES: dict[str, type[Message]] = {
     "nodes": pb.Node,
     "sorts": pb.Sort,
-    "declarations": pb.Declaration,
+    "constructors": pb.Constructor,
+    "functions": pb.Function,
+    "relations": pb.Relation,
+    "user_defined_primitives": pb.UserDefinedPrimitive,
     "rules": pb.Rule,
     "rulesets": pb.RulesetBinding,
-    "files": pb.SourceFile,
     "commands": pb.Command,
     "primitive_sorts": pb.PrimitiveSort,
     "primitives": pb.Primitive,
 }
-_PROGRAM_ROLES = ("nodes", "sorts", "declarations", "files", "rulesets", "commands")
-_BUILTIN_ROLES = ("sorts", "primitive_sorts", "primitives", "files")
+_PROGRAM_ROLES = (
+    "nodes",
+    "sorts",
+    "constructors",
+    "functions",
+    "relations",
+    "user_defined_primitives",
+    "rulesets",
+    "commands",
+)
+_BUILTIN_ROLES = ("sorts", "primitive_sorts", "primitives")
 _FIELD_ROLES = {
     name: dict(token.replace("@", ":@").partition(":")[::2] for token in fields.split())
     for name, fields in _FIELDS.items()
@@ -239,8 +246,7 @@ def _structural_parts(
     ref = reference.owner.ref(reference.role, reference.index)
     record = cast("Message", ref.owner._slots[ref.role][ref.index])
     if identity and (
-        ref.role == "rules"
-        or (isinstance(record, pb.Node) and record.kind is not None and record.kind.field == "union")
+        ref.role == "rules" or (isinstance(record, pb.Node) and record.kind is not None and record.kind.field == "eq")
     ):
         return (ref.role, ref), []
     shape: list[object] = [ref.role]
@@ -251,10 +257,8 @@ def _structural_parts(
         shape.extend((path, message.desc().type_name))
         inline = []
         for field in message.desc().fields:
-            if (
-                field.name == "span"
-                or (isinstance(message, pb.Sort) and field.name == "doc")
-                or (field.presence.name != "IMPLICIT" and field not in message)
+            if (isinstance(message, pb.Sort) and field.name == "doc") or (
+                field.presence.name != "IMPLICIT" and field not in message
             ):
                 continue
             value = message[field]
@@ -384,7 +388,7 @@ def action_equal(left: Ref, right: Ref) -> bool:  # noqa: C901
                 if ref.role == "rules" or (
                     isinstance(record, pb.Node)
                     and record.kind is not None
-                    and record.kind.field == "union"
+                    and record.kind.field == "eq"
                     and not record.kind.value.members
                 ):
                     return False
@@ -404,8 +408,8 @@ def _rule_key(root: Ref) -> tuple[object, ...]:  # noqa: C901
     """
     Derive comparison/hash tokens, preserving allocation topology per use unit.
 
-    Rule addresses remain occurrence identities everywhere else. Query Union
-    syntax is nonallocating; action/deferred-code Unions need a bijection, not
+    Rule addresses remain occurrence identities everywhere else. Query Eq
+    syntax is nonallocating; action/deferred-code Eq nodes need a bijection, not
     absolute owner indices. Named closure is exactly packing's dependency closure.
     """
     if root.role != "rules":
@@ -440,7 +444,7 @@ def _rule_key(root: Ref) -> tuple[object, ...]:  # noqa: C901
             raise ValueError(msg)
         shape, children = _structural_parts(reference, identity=False)
         record = reference.read()
-        if isinstance(record, pb.Node) and record.kind is not None and record.kind.field == "union" and not query:
+        if isinstance(record, pb.Node) and record.kind is not None and record.kind.field == "eq" and not query:
             allocations = unions.setdefault(domain, {})
             ordinal = allocations.setdefault(reference, len(allocations))
             shape = ("allocation", ordinal, shape)
@@ -457,13 +461,13 @@ def _rule_key(root: Ref) -> tuple[object, ...]:  # noqa: C901
                         child_query = path.startswith((f"/birewrite/0/{lhs}/", "/birewrite/0/conditions/"))
                         children_visits.append((
                             child.owner.ref(child.role, child.index),
-                            (direction, "query" if child_query else "head"),
+                            (direction, "query" if child_query else "actions"),
                             child_query,
                         ))
                     continue
                 child_query = path.startswith(("/rule/0/query/", "/rewrite/0/lhs/", "/rewrite/0/conditions/"))
-                child_domain = "query" if child_query else "head"
-            elif reference.role == "declarations":
+                child_domain = "query" if child_query else "actions"
+            elif reference.role in {"constructors", "functions", "relations", "user_defined_primitives"}:
                 # User primitive, merge and cost roots have independent binders.
                 child_domain = (reference, path)
                 child_query = False
@@ -532,7 +536,7 @@ class Owner:
         """Index immediate slots once, without copying transitive contexts or retaining self refs."""
         if self._definition_indices is None:
             indices: dict[tuple[str, str], list[tuple[str, int]]] = {}
-            for role in ("sorts", "nodes", "declarations"):
+            for role in ("sorts", "nodes", "constructors", "functions", "relations", "user_defined_primitives"):
                 for index in range(len(self._slots[role])):
                     ref = self.ref(role, index)
                     key = _definition_key(cast("Message", ref.owner._slots[ref.role][ref.index]))
@@ -707,7 +711,7 @@ def clone_nodes(roots: Iterable[Ref]) -> tuple[Ref, ...]:  # noqa: C901
     """
     Expand templates with fresh node identities and shared canonical definitions.
 
-    All roots share one relocation map. Sorts, files and declarations are
+    All roots share one relocation map. Sorts and declarations are
     immutable imports; only reachable nodes are copied. This does not evaluate
     defaults or merge the independent binders of lambda bodies and captures.
     """
@@ -760,11 +764,8 @@ def _definition_key(record: Message) -> tuple[str, str] | None:
         return "eq_sort", record.kind.value
     if isinstance(record, pb.Node) and record.kind is not None and record.kind.field == "binding":
         return "binding", record.kind.value
-    if isinstance(record, pb.Declaration):
-        if record.kind is None:
-            msg = "Declaration has no kind"
-            raise ValueError(msg)
-        return "callable", record.kind.value.name
+    if isinstance(record, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive):
+        return "callable", record.name
     return None
 
 
@@ -783,7 +784,7 @@ def pack(  # noqa: C901, PLR0912
     roots. Missing names require an explicit ambient declaration/provider set.
     Exact relocated definitions share one emission; differing semantic code
     still requires adapter-aware reconciliation. Literal bits and identity-bearing
-    Union/rule references are never guessed equivalent.
+    Eq/rule references are never guessed equivalent.
     """
     program = pb.Program()
     mapped: dict[Ref, int] = {}

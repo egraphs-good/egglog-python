@@ -31,20 +31,16 @@ from egglog import (
 from egglog._catalog import builtin_catalog
 from egglog._presentation import CallKind, CallPresentation, Parameter, Presentation, presentation
 from egglog._program import Builder, pack
-from egglog.egraph_state import EggSmolError, _decode_run_frames
+from egglog.egraph_state import EggSmolError, _decode_run_frames, _error_context_note
 from egglog.runtime import RuntimeFunction, create_callable, resolve_callable
 
 
-def output_frames(
-    output: pb.RunProgramOutput | None = None, *, files: list[pb.SourceFile] | None = None
-) -> list[bytes]:
+def output_frames(output: pb.RunProgramOutput | None = None) -> list[bytes]:
     """Encode owned success data followed by the required terminal acknowledgement."""
     frames = []
     if output is not None:
         frames.append(
-            pb.RunProgramResponse(
-                result=Oneof[Literal["output"], pb.RunProgramOutput]("output", output), files=files or []
-            ).to_binary()
+            pb.RunProgramResponse(result=Oneof[Literal["output"], pb.RunProgramOutput]("output", output)).to_binary()
         )
     frames.append(
         pb.RunProgramResponse(
@@ -209,7 +205,12 @@ def test_source_history_submits_freeze_with_installation(monkeypatch):
             assert request.program is not None
             assert request.program.commands[0].kind is not None
             assert request.program.commands[0].kind.field == "freeze"
-            assert request.program.declarations == []
+            assert not (
+                *request.program.constructors,
+                *request.program.functions,
+                *request.program.relations,
+                *request.program.user_defined_primitives,
+            )
             assert request.program.sorts == [pb.Sort(kind=Oneof("eq", "installed"))]
             submitted.append(request.program)
             return output_frames(), None
@@ -265,7 +266,7 @@ def test_freeze_retains_unused_nominal_sorts_and_unset_binding_slots():
     restored._state.run_program(
         roots=[
             restored_owner.ref(role, index)
-            for role in ("sorts", "nodes", "declarations")
+            for role in ("sorts", "nodes", "constructors", "functions", "relations", "user_defined_primitives")
             for index, record in enumerate(getattr(snapshot.program, role))
             if _definition_key(record) is not None
         ],
@@ -295,7 +296,8 @@ def test_source_producer_returns_only_program_bytes_and_scope_counts():
         if kind == "program":
             assert type(encoded) is bytes
             program = pb.Program.from_binary(encoded)
-            assert program.to_binary() == encoded
+            # Encoders may order distinct protobuf fields differently.
+            assert pb.Program.from_binary(program.to_binary()) == program
             assert count == 0
             commands.append([command.kind.field for command in program.commands if command.kind is not None])
             variables.update(
@@ -361,8 +363,7 @@ def test_source_producer_later_error_rejects_only_unsubmitted_block(barrier):
             state.destroy()
 
 
-@pytest.mark.parametrize("located", [False, True])
-def test_source_block_streams_outputs_before_runtime_failure(located):
+def test_source_block_streams_outputs_before_runtime_failure():
     graph = EGraph(record_history=True)
     source = bindings._ProtoEngine.source(
         "(function source_streamed () i64 :merge new) (set (source_streamed) 7)"
@@ -383,16 +384,6 @@ def test_source_block_streams_outputs_before_runtime_failure(located):
             "action",
             "action",
         ]
-        assert len(program.files) == 1
-        original_file = pb.SourceFile.from_binary(program.files[0].to_binary())
-        program.files.insert(0, pb.SourceFile(name="unrelated.egg", contents="private unrelated source"))
-        for record in _nested_messages(program):
-            if isinstance(record, pb.Span):
-                record.file += 1
-            elif not located and any(field.name == "span" for field in record.desc().fields):
-                record.span = None
-        panic_span = program.commands[2].span
-        assert (panic_span is not None) is located
         rule = program.rulesets[0].value.rules[0]
         rule.doc = "retained rule documentation"
         program.commands.insert(2, pb.Command(kind=Oneof("freeze", pb.Freeze())))
@@ -408,7 +399,11 @@ def test_source_block_streams_outputs_before_runtime_failure(located):
             if chunk.result.field == "error":
                 events.append("error")
                 return False
-            assert all(not isinstance(record, pb.Span | pb.SourceFile) for record in _nested_messages(chunk))
+            assert all(
+                field.name not in {"span", "files"}
+                for record in _nested_messages(chunk)
+                for field in record.desc().fields
+            )
             events.extend(output.kind.field for output in chunk.result.value.outputs if output.kind is not None)
             return True
 
@@ -423,21 +418,20 @@ def test_source_block_streams_outputs_before_runtime_failure(located):
         assert failure.location == pb.CommandLocation(path=[3])
         assert "source stream marker" in failure.message
         assert encoded_chunks[-1] == terminal
-        if located:
-            assert panic_span is not None
-            assert failure.span == pb.Span(file=0, start=panic_span.start, end=panic_span.end)
-            assert chunks[-1].files == [original_file]
-        else:
-            assert failure.span is None
-            assert chunks[-1].files == []
+        assert failure.context is not None
+        assert failure.site is not None
+        assert len(failure.context.commands) == 1
+        assert failure.context.commands[0] == program.commands[3]
+        assert all(
+            field.name not in {"span", "files"}
+            for record in _nested_messages(chunks[-1])
+            for field in record.desc().fields
+        )
         frozen = _required_data(chunks, "snapshot").outputs[0].kind.value
         assert frozen.program is not None
         assert frozen.program.rulesets[0].value.rules[0].doc == rule.doc
         assert frozen.program.rulesets[0].value.rules[0].name == rule.name
         history = graph.history()
-        if located:
-            assert original_file in history.files
-            assert any(isinstance(record, pb.Span) for record in _nested_messages(history))
         assert history.rulesets[0].value.rules[0].doc == rule.doc
         sizes = _required_data(chunks, "sizes")
         assert sizes.outputs[0].kind == Oneof(
@@ -686,7 +680,7 @@ def test_shared_snapshot_restores_logical_state_over_bytes(state):
         pack(
             roots=[
                 owner.ref(role, index)
-                for role in ("sorts", "nodes", "declarations")
+                for role in ("sorts", "nodes", "constructors", "functions", "relations", "user_defined_primitives")
                 for index, record in enumerate(getattr(snapshot.program, role))
                 if _definition_key(record) is not None
             ],
@@ -779,7 +773,6 @@ def _callback_program(tag, callback=_observed_pyerr_callback):
             )
             for name in ("PyObject", "i64", "Unit")
         ],
-        files=catalog.files,
     )
     sort = 0
     first = len(program.nodes)
@@ -1260,23 +1253,15 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
             ),
         )
     )
-    program.declarations.extend([
-        pb.Declaration(
-            kind=Oneof[Literal["function"], pb.Function](
-                "function", pb.Function(name="handoff_mark", inputs=[pb.Arg(sort=integer)], output=integer)
-            )
-        ),
-        pb.Declaration(
-            kind=Oneof[Literal["function"], pb.Function](
-                "function", pb.Function(name="handoff_seed", inputs=[pb.Arg(sort=pyobject)], output=unit)
-            )
-        ),
+    program.functions.extend([
+        pb.Function(name="handoff_mark", inputs=[integer], output=integer),
+        pb.Function(name="handoff_seed", inputs=[pyobject], output=unit),
     ])
     authored_rules = []
     for name, call in (("handoff_first", query_call), ("handoff_later", later_call)):
         query = len(program.nodes)
         program.nodes.append(
-            pb.Node(sort_id=pyobject, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[y, call])))
+            pb.Node(sort_id=pyobject, kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq(members=[y, call])))
         )
         authored_rules.append(
             pb.Rule(
@@ -1286,7 +1271,7 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
                     "rule",
                     pb.RuleBody(
                         query=[seed, query],
-                        head=[
+                        actions=[
                             pb.Action(
                                 kind=Oneof[Literal["set"], pb.Set](
                                     "set",
@@ -1506,7 +1491,15 @@ def test_function_sizes_native_bytes_register_and_filter_unmapped(table_transpor
 
     assert graph.function_size(known) == 0
     assert len(requests) == 1
-    assert any(decl.kind.value.name == "z-known" for decl in requests[0].program.declarations)
+    assert any(
+        decl.name == "z-known"
+        for decl in (
+            *requests[0].program.constructors,
+            *requests[0].program.functions,
+            *requests[0].program.relations,
+            *requests[0].program.user_defined_primitives,
+        )
+    )
     assert requests[0].program.commands[0].kind == Oneof("table_sizes", pb.GetTableSizes(tables=["z-known"]))
     observed = _required_data(responses[0], "sizes")
     assert observed.outputs[0].location == pb.CommandLocation(path=[0])
@@ -1516,7 +1509,12 @@ def test_function_sizes_native_bytes_register_and_filter_unmapped(table_transpor
     # Keep the native row, but remove only its canonical language lookup entry.
     del graph._state.definitions["callable", "a-unmapped"]
     assert graph.all_function_sizes() == [(known, 1)]
-    assert requests[-1].program.declarations == []
+    assert not (
+        *requests[-1].program.constructors,
+        *requests[-1].program.functions,
+        *requests[-1].program.relations,
+        *requests[-1].program.user_defined_primitives,
+    )
     assert requests[-1].program.commands[0].kind == Oneof("table_sizes", pb.GetTableSizes())
     observed = _required_data(responses[-1], "sizes")
     table_sizes = _required_oneof(observed.outputs[0].kind, "sizes", pb.TableSizes)
@@ -1532,14 +1530,7 @@ def test_function_sizes_include_unavailable_and_subsumed_native_bytes(table_tran
             ),
             pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "CountedHidden")),
         ],
-        declarations=[
-            pb.Declaration(
-                kind=Oneof[Literal["constructor"], pb.Constructor](
-                    "constructor",
-                    pb.Constructor(name="hidden-count", inputs=[pb.Arg(sort=0)], output=1, unextractable=True),
-                )
-            ),
-        ],
+        constructors=[pb.Constructor(name="hidden-count", inputs=[0], output=1, unextractable=True)],
         nodes=[
             pb.Node(
                 sort_id=0,
@@ -1574,7 +1565,7 @@ def test_function_sizes_include_unavailable_and_subsumed_native_bytes(table_tran
     )
     owner = Builder.from_program(program).publish()
     graph._state.run_program([owner.ref("commands", n) for n in range(3)])
-    target = RuntimeFunction(owner.ref("declarations", 0))
+    target = RuntimeFunction(owner.ref("constructors", 0))
     assert graph.function_size(target) == 2
     assert graph.all_function_sizes() == [(target, 2)]
     with pytest.raises(ValueError, match="has no extractable representative"):
@@ -1589,13 +1580,7 @@ def test_table_callable_projection_keeps_first_view_without_invocation(monkeypat
                     kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))
                 )
             ],
-            declarations=[
-                pb.Declaration(
-                    kind=Oneof[Literal["function"], pb.Function](
-                        "function", pb.Function(name="two-views", inputs=[pb.Arg(sort=0)], output=0)
-                    ),
-                )
-            ],
+            functions=[pb.Function(name="two-views", inputs=[0], output=0)],
         )
     )
     builder.presentations["callable", "two-views"] = Presentation(
@@ -1610,7 +1595,7 @@ def test_table_callable_projection_keeps_first_view_without_invocation(monkeypat
         pytest.fail("Callable projection invoked a Python callable")
 
     monkeypatch.setattr(RuntimeFunction, "__call__", forbidden)
-    reference = owner.ref("declarations", 0)
+    reference = owner.ref("functions", 0)
     projected = create_callable(reference)
     assert projected == RuntimeFunction(reference, 0)
     assert hash(projected) == hash(RuntimeFunction(reference, 0))
@@ -1688,7 +1673,7 @@ def test_function_values_native_bytes_and_shared_terms(table_transport):
     assert len(requests) == 2
     command = requests[-1].program.commands[0].kind
     assert command.field == "table_rows"
-    assert command.value.table == resolve_callable(repeated).read().kind.value.name
+    assert command.value.table == resolve_callable(repeated).read().name
     assert not command.value.has_field("max_rows")
     observed = _required_data(responses[-1], "table_rows")
     output = observed.outputs[0]
@@ -1725,7 +1710,15 @@ def test_function_values_installs_before_index_conversion_native_bytes(table_tra
             calls.append(len(requests))
             assert len(requests) == 1
             assert requests[0].program.commands == []
-            assert any(decl.kind.field == "function" for decl in requests[0].program.declarations)
+            assert any(
+                isinstance(decl, pb.Function)
+                for decl in (
+                    *requests[0].program.constructors,
+                    *requests[0].program.functions,
+                    *requests[0].program.relations,
+                    *requests[0].program.user_defined_primitives,
+                )
+            )
             assert all(frame.result is not None and frame.result.field == "output" for frame in responses[0])
             return value
 
@@ -1785,28 +1778,15 @@ def test_function_values_unavailable_cells_raise_from_native_bytes(table_transpo
         pb.Node(sort_id=1, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="Hidden", args=[0]))),
         pb.Node(sort_id=1, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="Visible"))),
     ])
-    inputs = [pb.Arg(sort=0), pb.Arg(sort=1)] if unavailable == "argument 1" else [pb.Arg(sort=0)]
+    inputs = [0, 1] if unavailable == "argument 1" else [0]
     program = pb.Program(
         sorts=sorts,
         nodes=nodes,
-        declarations=[
-            pb.Declaration(
-                kind=Oneof[Literal["constructor"], pb.Constructor](
-                    "constructor", pb.Constructor(name="Hidden", inputs=[pb.Arg(sort=0)], output=1, unextractable=True)
-                )
-            ),
-            pb.Declaration(
-                kind=Oneof[Literal["constructor"], pb.Constructor](
-                    "constructor", pb.Constructor(name="Visible", output=1)
-                )
-            ),
-            pb.Declaration(
-                kind=Oneof[Literal["function"], pb.Function](
-                    "function",
-                    pb.Function(name="inspected", inputs=inputs, output=0 if unavailable == "argument 1" else 1),
-                )
-            ),
+        constructors=[
+            pb.Constructor(name="Hidden", inputs=[0], output=1, unextractable=True),
+            pb.Constructor(name="Visible", output=1),
         ],
+        functions=[pb.Function(name="inspected", inputs=inputs, output=0 if unavailable == "argument 1" else 1)],
         commands=[
             pb.Command(
                 kind=Oneof[Literal["action"], pb.Action](
@@ -1829,7 +1809,7 @@ def test_function_values_unavailable_cells_raise_from_native_bytes(table_transpo
     )
     owner = Builder.from_program(program).publish()
     graph._state.run_program([owner.ref("commands", n) for n in range(2)])
-    target = RuntimeFunction(owner.ref("declarations", 2))
+    target = RuntimeFunction(owner.ref("functions", 0))
     with pytest.raises(ValueError, match=f"Table 'inspected' row 1 {unavailable} has no extractable representative"):
         graph.function_values(target)
     observed = _required_data(responses[-1], "table_rows")
@@ -1955,16 +1935,10 @@ def test_function_values_rejects_primitives_without_table_request(table_transpor
                     ),
                 )
             ],
-            declarations=[
-                pb.Declaration(
-                    kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
-                        "user_defined_primitive", pb.UserDefinedPrimitive(name="eager", output=0, body=0)
-                    )
-                )
-            ],
+            user_defined_primitives=[pb.UserDefinedPrimitive(name="eager", output=0, body=0)],
         )
     ).publish()
-    for target in (i64.__add__, RuntimeFunction(owner.ref("declarations", 0))):
+    for target in (i64.__add__, RuntimeFunction(owner.ref("user_defined_primitives", 0))):
         with pytest.raises(ValueError, match="table-backed"):
             graph.function_values(target)
         with pytest.raises(ValueError, match="table-backed"):
@@ -2269,7 +2243,7 @@ def test_native_public_union_occurrence_boundary(tmp_path, reuse):
         root_kind = submitted_program.nodes[root_index].kind
         assert root_kind is not None
         root_kinds.append(root_kind)
-    assert all(kind.field == "union" for kind in root_kinds)
+    assert all(kind.field == "eq" for kind in root_kinds)
 
 
 def test_ruleset_append_preserves_native_cursor(tmp_path):
@@ -2367,12 +2341,17 @@ def test_native_class_default_rewrite_and_unregistered_closure(tmp_path, seeded)
     declared = set()
     for request in requests:
         assert request.program is not None
-        for declaration in request.program.declarations:
-            declaration_kind = declaration.kind
-            assert declaration_kind is not None
-            declared.add(declaration_kind.value.name)
-    assert resolve_callable(Source.wrapped).read().kind.value.name in declared
-    assert resolve_callable(Result).read().kind.value.name in declared
+        for declaration in (
+            *request.program.constructors,
+            *request.program.functions,
+            *request.program.relations,
+            *request.program.user_defined_primitives,
+        ):
+            declaration_kind = declaration
+            assert isinstance(declaration_kind, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive)
+            declared.add(declaration_kind.name)
+    assert resolve_callable(Source.wrapped).read().name in declared
+    assert resolve_callable(Result).read().name in declared
 
 
 @pytest.mark.parametrize(("seeded", "subsume_body"), [(False, False), (True, False), (True, True)])
@@ -2409,11 +2388,18 @@ def test_native_free_ruleset_body_is_deferred_with_complete_closure(table_transp
     table = _required_oneof(output.kind, "table_rows", pb.TableRows)
     assert [row.subsumed for row in table.rows] == ([subsume_body] if seeded else [])
     declarations = {
-        declaration.kind.value.name: declaration for request in requests for declaration in request.program.declarations
+        declaration.name: declaration
+        for request in requests
+        for declaration in (
+            *request.program.constructors,
+            *request.program.functions,
+            *request.program.relations,
+            *request.program.user_defined_primitives,
+        )
     }
-    name = resolve_callable(delayed).read().kind.value.name
-    assert declarations[name].kind.field == "constructor"
-    assert resolve_callable(FreeDefaultBox).read().kind.value.name in declarations
+    name = resolve_callable(delayed).read().name
+    assert isinstance(declarations[name], pb.Constructor)
+    assert resolve_callable(FreeDefaultBox).read().name in declarations
     authored = [rule for request in requests for rule in _program_rules(request.program)]
     assert authored
     for rule in authored:
@@ -2716,7 +2702,7 @@ def test_check_fail_authors_one_canonical_nested_command(monkeypatch):
     fact = program.nodes[check_kind.value.facts[0]]
     fact_kind = fact.kind
     assert fact_kind is not None
-    assert fact_kind.field == "union"
+    assert fact_kind.field == "eq"
     member_values = []
     for node_index in fact_kind.value.members:
         member_kind = program.nodes[node_index].kind
@@ -2850,7 +2836,7 @@ def test_execution_error_retains_only_confirmed_declaration_refs(monkeypatch, lo
     expected = {
         _definition_key(reference.read()): reference
         for reference in pack(commands=[action.__egg_ref__]).definitions
-        if reference.role == "declarations"
+        if reference.role in {"constructors", "functions", "relations", "user_defined_primitives"}
     }
     before = graph._state.definitions.copy()
     with pytest.raises(EggSmolError):
@@ -2937,17 +2923,22 @@ def test_constant_actions_submit_one_ordered_binary_program(monkeypatch):
     assert second_call.field == "call"
     assert second_call.value.func == second.target.func
     definitions = {}
-    for declaration in program.declarations:
-        declaration_kind = declaration.kind
-        assert declaration_kind is not None
-        definitions[declaration_kind.value.name] = declaration
-    first_definition = definitions[first.target.func].kind
+    for declaration in (
+        *program.constructors,
+        *program.functions,
+        *program.relations,
+        *program.user_defined_primitives,
+    ):
+        declaration_kind = declaration
+        assert isinstance(declaration_kind, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive)
+        definitions[declaration_kind.name] = declaration
+    first_definition = definitions[first.target.func]
     assert first_definition is not None
-    assert first_definition.field == "function"
+    assert isinstance(first_definition, pb.Function)
     assert presentation(resolve_callable(later)).views[0].kind == CallKind.CONSTANT
-    second_definition = definitions[second.target.func].kind
+    second_definition = definitions[second.target.func]
     assert second_definition is not None
-    assert second_definition.value.name == resolve_callable(later).read().kind.value.name
+    assert second_definition.name == resolve_callable(later).read().name
     rhs_kind = program.nodes[second.value].kind
     assert rhs_kind is not None
     assert rhs_kind.field == "call"
@@ -2977,7 +2968,7 @@ def test_constant_actions_submit_one_ordered_binary_program(monkeypatch):
     union = program.nodes[term_kind.value]
     union_kind = union.kind
     assert union_kind is not None
-    assert union_kind.field == "union"
+    assert union_kind.field == "eq"
     member_values = []
     for node_index in union_kind.value.members:
         member_kind = program.nodes[node_index].kind
@@ -3141,11 +3132,16 @@ def test_public_bytes_requests_and_response_ownership(monkeypatch: pytest.Monkey
         assert argument_value.field == "i64"
         argument_values.append(argument_value.value)
     assert argument_values == [1, 2]
-    declarations: dict[str, pb.Declaration] = {}
-    for declaration in program.declarations:
-        declaration_kind = declaration.kind
-        assert declaration_kind is not None
-        declarations.setdefault(declaration_kind.value.name, declaration)
+    declarations: dict[str, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive] = {}
+    for declaration in (
+        *program.constructors,
+        *program.functions,
+        *program.relations,
+        *program.user_defined_primitives,
+    ):
+        declaration_kind = declaration
+        assert isinstance(declaration_kind, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive)
+        declarations.setdefault(declaration_kind.name, declaration)
     assert not declarations
     assert presentation(builtin_catalog().definitions["callable", "egglog.core.i64.add"]).views[0].path == ("__add__",)
     local_type = presentation(builtin_catalog().definitions["primitive_sort", "i64"]).type_view
@@ -3312,3 +3308,133 @@ def test_creation_requires_positive_effective_thread_count(resource_transport):
     resource_transport.actual_threads = 0
     with pytest.raises(ValueError, match="actual thread count"):
         EGraph()
+
+
+@pytest.mark.parametrize("owner", ["rule", "merge"])
+def test_error_context_note_renders_owned_code_without_engine(monkeypatch, owner):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Diagnostic inspection accessed an engine or custom decoder")
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    nodes = [
+        pb.Node(sort_id=0, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("i64", 1)))),
+        pb.Node(sort_id=0, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("i64", 0)))),
+        pb.Node(sort_id=0, kind=Oneof("call", pb.Call(func="/", args=[0, 1]))),
+    ]
+    action = pb.Action(kind=Oneof("set", pb.Set(target=pb.Call(func="authored_result"), value=2)))
+    rule = pb.Rule(
+        name="actual authored setter",
+        eval_mode=pb.RuleEvalMode.SEMINAIVE,
+        kind=Oneof("rule", pb.RuleBody(actions=[pb.Action(kind=Oneof("panic", "other action")), action])),
+    )
+    context = pb.Program(
+        sorts=[pb.Sort(kind=Oneof("primitive", pb.PrimitiveSortRef(name="i64")))],
+        nodes=nodes,
+        functions=[pb.Function(name="authored_result", output=0, merge=2)],
+        rulesets=[pb.RulesetBinding(name="previous request", value=pb.Ruleset(rules=[rule]))],
+    )
+    # The context's local fields and ordinals are independent of the request.
+    site = pb.ErrorSite(path=[7, 0, 2, 1, 0, 1, 3, 1] if owner == "rule" else [8, 0], node_id=2)
+    failure = pb.Error(code=pb.ErrorCode.RUNTIME_FAILURE, message="engine wording", context=context, site=site)
+    encoded = failure.to_binary()
+    note = _error_context_note(pb.Error.from_binary(encoded))
+    assert note is not None
+    program_text, site_text = note.removeprefix("Authored egglog Program:\n").split("\nError site:\n")
+    assert pb.Program.from_json(program_text) == context
+    assert pb.ErrorSite.from_json(site_text) == site
+    displayed = json.loads(program_text)
+    assert displayed["functions"][0]["name"] == "authored_result"
+    assert displayed["rulesets"][0]["value"]["rules"][0]["name"] == "actual authored setter"
+    assert displayed["nodes"][2]["call"] == {"func": "/", "args": [0, 1]}
+    assert failure.to_binary() == encoded
+
+
+def test_error_context_note_keeps_opaque_custom_values_inert(monkeypatch):
+    import cloudpickle  # noqa: PLC0415
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Diagnostic inspection decoded a custom value or accessed an engine")
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    monkeypatch.setattr(cloudpickle, "loads", forbidden)
+    context = pb.Program(
+        sorts=[pb.Sort(kind=Oneof("primitive", pb.PrimitiveSortRef(name="PyObject")))],
+        nodes=[
+            pb.Node(
+                sort_id=0,
+                kind=Oneof(
+                    "primitive_value",
+                    pb.PrimitiveValue(value=Oneof("custom", pb.CustomValue(payload=b"opaque payload"))),
+                ),
+            )
+        ],
+        commands=[pb.Command(kind=Oneof("action", pb.Action(kind=Oneof("term", 0))))],
+    )
+    note = _error_context_note(
+        pb.Error(
+            code=pb.ErrorCode.RUNTIME_FAILURE,
+            message="opaque failure",
+            context=context,
+            site=pb.ErrorSite(path=[5, 0, 1], node_id=0),
+        )
+    )
+    assert note is not None
+    program_text, site_text = note.removeprefix("Authored egglog Program:\n").split("\nError site:\n")
+    assert pb.Program.from_json(program_text) == context
+    assert pb.ErrorSite.from_json(site_text) == pb.ErrorSite(path=[5, 0, 1], node_id=0)
+
+
+def test_error_context_note_absence_and_serialization_failure(monkeypatch):
+    assert _error_context_note(pb.Error(code=pb.ErrorCode.INVALID_PROGRAM, message="malformed")) is None
+
+    def unformattable(*args, **kwargs):
+        msg = "invalid diagnostic data"
+        raise ValueError(msg)
+
+    monkeypatch.setattr(pb.Program, "to_json", unformattable)
+    failure = pb.Error(code=pb.ErrorCode.RUNTIME_FAILURE, message="retained", context=pb.Program())
+    assert _error_context_note(failure) is None
+    assert failure.message == "retained"
+
+
+def test_runtime_error_adds_context_note_without_changing_message_or_host_exception(monkeypatch):
+    context = pb.Program(commands=[pb.Command(kind=Oneof("action", pb.Action(kind=Oneof("panic", "authored marker"))))])
+    failure = pb.Error(
+        code=pb.ErrorCode.RUNTIME_FAILURE,
+        message="engine message",
+        context=context,
+        site=pb.ErrorSite(path=[5, 0, 1]),
+        location=pb.CommandLocation(path=[0]),
+    )
+    host_error = None
+
+    class InertTransport:
+        def create(self, encoded):
+            return pb.CreateEGraphResponse(egraph_id=1, threads=1).to_binary()
+
+        def run(self, encoded):
+            return [pb.RunProgramResponse(result=Oneof("error", failure)).to_binary()], host_error
+
+        def destroy(self, encoded):
+            return pb.DestroyEGraphResponse().to_binary()
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
+    graph = EGraph()
+    command = Builder.from_program(context).publish().ref("commands", 0)
+    with pytest.raises(EggSmolError) as caught:
+        graph._state.run_program([command])
+    assert caught.value.args == ("engine message",)
+    assert str(caught.value) == "engine message"
+    assert caught.value.__dict__["_egglog_proto_error"] == failure
+    assert len(caught.value.__notes__) == 1
+    program_text, site_text = (
+        caught.value.__notes__[0].removeprefix("Authored egglog Program:\n").split("\nError site:\n")
+    )
+    assert pb.Program.from_json(program_text) == context
+    assert pb.ErrorSite.from_json(site_text) == failure.site
+    original = ValueError("original host failure")
+    host_error = original
+    with pytest.raises(ValueError, match="original host failure") as caught:
+        graph._state.run_program([command])
+    assert caught.value is original
+    assert not hasattr(original, "__notes__")

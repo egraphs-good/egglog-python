@@ -78,7 +78,12 @@ def test_get_let_name():
     assert node.kind is not None
     assert node.kind.field == "binding"
     assert node.kind.value == "l"
-    assert packed.program.declarations == []
+    assert not (
+        *packed.program.constructors,
+        *packed.program.functions,
+        *packed.program.relations,
+        *packed.program.user_defined_primitives,
+    )
     owner = Builder.from_program(packed.program).publish()
     detached = RuntimeExpr(owner.ref("nodes", packed.indices[0]))
     assert get_let_name(detached) == "l"

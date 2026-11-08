@@ -685,9 +685,11 @@ def test_symbolic_getattr_corrupt_bytes_reject_before_execution(monkeypatch: pyt
     graph.register(A())
     # Install the callable without inserting any of its rows.
     assert graph.function_size(A.__getattr__) == 0
-    callee_record: pb.Declaration = resolve_callable(A.__getattr__).read()
-    assert callee_record.kind is not None
-    callee = callee_record.kind.value.name
+    callee_record: pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive = resolve_callable(
+        A.__getattr__
+    ).read()
+    assert isinstance(callee_record, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive)
+    callee = callee_record.name
     transport = graph._state.transport
     rejected = []
 
@@ -1805,10 +1807,9 @@ def test_multiset_union_values_requires_exact_eq_action_and_keeps_multiplicity(
         return values.union_values()
 
     declaration = cast("RuntimeFunction", via_union).__egg_ref__
-    primitive = declaration.read().kind
-    assert primitive is not None
-    assert primitive.field == "user_defined_primitive"
-    body = declaration.owner.ref("nodes", primitive.value.body).read()
+    primitive = declaration.read()
+    assert isinstance(primitive, pb.UserDefinedPrimitive)
+    body = declaration.owner.ref("nodes", primitive.body).read()
     assert body.kind is not None
     assert body.kind.field == "call"
     assert body.kind.value.func == "egglog.core.multiset.union_values"
@@ -1858,10 +1859,13 @@ def test_multiset_union_values_requires_exact_eq_action_and_keeps_multiplicity(
         ] == ["action", "check", "action"]
         if label == "body-query":
             assert any(
-                (item.kind.field == "user_defined_primitive" and item.kind.value.name == primitive.value.name)
-                if item.kind is not None
-                else pytest.fail("Missing declaration kind")
-                for item in program.declarations
+                isinstance(item, pb.UserDefinedPrimitive) and item.name == primitive.name
+                for item in (
+                    *program.constructors,
+                    *program.functions,
+                    *program.relations,
+                    *program.user_defined_primitives,
+                )
             )
         result = responses[label][-1].result
         assert result is not None

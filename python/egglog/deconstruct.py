@@ -88,16 +88,14 @@ def get_literal_value(x: object) -> object:  # noqa: C901, PLR0912 -- payload va
             reference = x.__egg_ref__
             function_sort = reference.owner.ref("sorts", node.sort_id)
             declaration = _definition_at(reference, "callable", value.value.func)
-            record: pb.Declaration | pb.Primitive = declaration.read()
+            record: pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive | pb.Primitive = (
+                declaration.read()
+            )
             captures = tuple(RuntimeExpr(reference.owner.ref("nodes", index)) for index in value.value.args)
             if sort.kind is None or sort.kind.field != "func":
                 msg = "Named function value requires a Func sort"
                 raise TypeError(msg)
-            if isinstance(record, pb.Declaration):
-                assert record.kind is not None
-                kind = record.kind.value
-            else:
-                kind = record
+            kind = record
             signature = kind.signature if isinstance(kind, pb.Primitive) and kind.signature is not None else None
             fixed = (
                 len(signature.inputs)
@@ -240,13 +238,9 @@ def _deconstruct_call(x: RuntimeExpr) -> tuple[RuntimeClass | RuntimeFunction, t
         return None
     call = node.kind.value
     declaration = _definition_at(x.__egg_ref__, "callable", call.func)
-    record: pb.Declaration | pb.Primitive = declaration.read()
+    record: pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive | pb.Primitive = declaration.read()
     arguments = tuple(RuntimeExpr(x.__egg_ref__.owner.ref("nodes", index)) for index in call.args)
-    if isinstance(record, pb.Declaration):
-        assert record.kind is not None
-        kind = record.kind.value
-    else:
-        kind = record
+    kind = record
     signature = kind.signature if isinstance(kind, pb.Primitive) and kind.signature is not None else None
     bindings: tuple[tuple[int, Ref], ...] = ()
     type_bindings = ()

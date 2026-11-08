@@ -322,7 +322,7 @@ def test_method_result_binding_preserves_independent_input_polymorphism(monkeypa
     declaration.name = "test.method_result_pair"
     signature = declaration.signature
     assert signature is not None
-    first_var, second_var = [arg.sort for arg in signature.inputs]
+    first_var, second_var = signature.inputs
     third_var = len(program.sorts)
     program.sorts.append(pb.Sort(kind=Oneof[Literal["var"], int]("var", 2)))
     receiver_sort = len(program.sorts)
@@ -334,7 +334,7 @@ def test_method_result_binding_preserves_independent_input_polymorphism(monkeypa
         )
     )
     signature.type_param_count += 1
-    signature.inputs = [pb.Arg(sort=receiver_sort), pb.Arg(sort=third_var)]
+    signature.inputs = [receiver_sort, third_var]
     signature.output = len(program.sorts)
     program.sorts.append(
         pb.Sort(

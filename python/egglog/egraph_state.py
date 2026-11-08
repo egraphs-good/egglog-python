@@ -28,6 +28,20 @@ class EggSmolError(Exception):
     """An engine error returned by the encoded protocol."""
 
 
+def _error_context_note(failure: pb.Error) -> str | None:
+    """Inspect the returned protocol context without executing authored code."""
+    if failure.context is None:
+        return None
+    try:
+        note = f"Authored egglog Program:\n{failure.context.to_json()}"
+        if failure.site is not None:
+            note += f"\nError site:\n{failure.site.to_json()}"
+    except Exception:
+        # Unformattable diagnostic data must not replace the engine error.
+        return None
+    return note
+
+
 def _decode_run_frames(encoded: Iterable[bytes]) -> list[pb.RunProgramResponse]:
     """Require an exclusive frame sequence with a terminal acknowledgement."""
     frames = [pb.RunProgramResponse.from_binary(frame) for frame in encoded]
@@ -228,9 +242,7 @@ class EGraphState:
                             self.definitions[key] = reference
                 if frame.result.field == "output":
                     output = frame.result.value
-                    owner = self._adopt_value_records(
-                        pb.Program(nodes=output.nodes, sorts=output.sorts, files=frame.files)
-                    )
+                    owner = self._adopt_value_records(pb.Program(nodes=output.nodes, sorts=output.sorts))
                     results.append((output, owner))
         except BaseException as error:
             if host_error is not None and error is not host_error:
@@ -257,6 +269,8 @@ class EGraphState:
             # Keep the actual generated record with this Python exception.
             error.__dict__["_egglog_proto_error"] = failure
             error.__dict__["_egglog_proto_frame"] = frames[-1]
+            if (note := _error_context_note(failure)) is not None:
+                error.add_note(note)
             raise error
         return results
 
@@ -289,7 +303,14 @@ class EGraphState:
         definitions = self.definitions.copy()
         observed = {
             _definition_key(record)
-            for records in (program.sorts, program.nodes, program.declarations)
+            for records in (
+                program.sorts,
+                program.nodes,
+                program.constructors,
+                program.functions,
+                program.relations,
+                program.user_defined_primitives,
+            )
             for record in records
         }
         # Native observation starts after installation but before its response
@@ -302,17 +323,17 @@ class EGraphState:
             pb.Program(
                 nodes=program.nodes,
                 sorts=program.sorts,
-                files=program.files,
             ),
             environment=(reference.owner for reference in definitions.values()),
         )
-        for declaration in program.declarations:
-            if _definition_key(declaration) not in definitions:
-                # Native-only records have no original Python class context;
-                # their arena references already address the owned values.
-                builder.add("declarations", declaration)
+        for role in ("constructors", "functions", "relations", "user_defined_primitives"):
+            for declaration in getattr(program, role):
+                if _definition_key(declaration) not in definitions:
+                    # Native-only records have no original Python class context;
+                    # their arena references already address the owned values.
+                    builder.add(role, declaration)
         for reference in definitions.values():
-            if reference.role == "declarations":
+            if reference.role in {"constructors", "functions", "relations", "user_defined_primitives"}:
                 builder.import_ref(reference)
         return builder.publish()
 
@@ -362,12 +383,15 @@ class _CostModelObservation:
         self.program = program
         self.owner = state._adopt_value_records(program, pending=state._active_definitions)
         self.registered = frozenset(
-            key for declaration in program.declarations if (key := _definition_key(declaration)) is not None
+            key
+            for records in (program.constructors, program.functions, program.relations, program.user_defined_primitives)
+            for declaration in records
+            if (key := _definition_key(declaration)) is not None
         )
         self.table_backed = frozenset(
-            declaration.kind.value.name
-            for declaration in program.declarations
-            if declaration.kind is not None and declaration.kind.field in {"constructor", "function", "relation"}
+            declaration.name
+            for records in (program.constructors, program.functions, program.relations)
+            for declaration in records
         )
         self.rows: dict[tuple[str, tuple[int, ...]], int] = {}
         self.assigned: dict[tuple[str, tuple[int, ...]], int] = {}
@@ -377,7 +401,7 @@ class _CostModelObservation:
             if node.kind is not None and node.kind.field == "binding"
         }
         for node_index, node in enumerate(program.nodes):
-            if node.kind is not None and node.kind.field == "union":
+            if node.kind is not None and node.kind.field == "eq":
                 for member in node.kind.value.members:
                     alternative = program.nodes[member]
                     if alternative.kind is not None and alternative.kind.field == "call":
@@ -413,7 +437,7 @@ class _CostModelObservation:
                 continue
             result.add(reference)
             record = reference.read()
-            if record.kind is not None and record.kind.field == "union":
+            if record.kind is not None and record.kind.field == "eq":
                 continue
 
             def visit(role: str, child: int) -> int:

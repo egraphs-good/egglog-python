@@ -49,7 +49,7 @@ def test_history_choice_rejects_nonbooleans_before_creation(monkeypatch: pytest.
 
 def test_history_getter_uses_current_handle_and_preserves_owned_result(monkeypatch: pytest.MonkeyPatch) -> None:
     requests: list[pb.GetHistoryRequest] = []
-    expected = pb.Program(files=[pb.SourceFile(name="input.egg")])
+    expected = pb.Program(sorts=[pb.Sort(kind=Oneof("eq", "Owned"), doc="retained documentation")])
 
     class Transport:
         def create(self, encoded: bytes) -> bytes:
@@ -67,7 +67,7 @@ def test_history_getter_uses_current_handle_and_preserves_owned_result(monkeypat
     result = graph.history()
     assert requests == [pb.GetHistoryRequest(egraph_id=19)]
     assert result == expected
-    result.files[0].name = "changed.egg"
+    result.sorts[0].doc = "changed documentation"
     assert graph.history() == expected
     graph._state._native_running = True
     try:

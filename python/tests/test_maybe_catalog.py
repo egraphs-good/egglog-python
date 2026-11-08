@@ -305,7 +305,6 @@ def test_maybe_stub_joins_actual_signatures_and_local_presentation(python_presen
             _copy_record(primitive, relocate=lambda role, index: remap[index] if role == "sorts" else index)
             for primitive in reversed(program.primitives)
         ],
-        files=program.files,
     )
     reordered = render(relocated, mapping=python_presentation_mapping)
     for line in renamed.splitlines():

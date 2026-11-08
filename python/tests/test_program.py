@@ -37,12 +37,17 @@ def literal(value: int):
     return builder.publish().ref("nodes", index)
 
 
-def _required_named_declaration(program: pb.Program, name: str) -> pb.Declaration:
-    """Require populated declaration arms while retaining first-match lookup semantics."""
-    for declaration in program.declarations:
-        kind = declaration.kind
-        assert isinstance(kind, Oneof)
-        if kind.value.name == name:
+def _required_named_declaration(
+    program: pb.Program, name: str
+) -> pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive:
+    """Find a concrete callable definition by its exact name."""
+    for declaration in (
+        *program.constructors,
+        *program.functions,
+        *program.relations,
+        *program.user_defined_primitives,
+    ):
+        if declaration.name == name:
             return declaration
     raise StopIteration
 
@@ -116,7 +121,7 @@ def test_print_function_limit_presence_survives_copy_and_pack_without_engine(mon
     assert len(set(views)) == len(set(encodings)) == 3
 
 
-def test_schedule_composition_relocates_owned_inline_spans_without_engine(monkeypatch):
+def test_schedule_composition_preserves_owned_inline_commands_without_engine(monkeypatch):
     from egglog import Schedule, seq  # noqa: PLC0415
 
     def forbidden(*args, **kwargs):
@@ -124,8 +129,6 @@ def test_schedule_composition_relocates_owned_inline_spans_without_engine(monkey
 
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
     builder = Builder()
-    builder.add("files", pb.SourceFile(name="unused"))
-    file = builder.add("files", pb.SourceFile(name="schedule.py", contents="run()"))
     index = builder.add(
         "commands",
         pb.Command(
@@ -133,25 +136,23 @@ def test_schedule_composition_relocates_owned_inline_spans_without_engine(monkey
                 "run",
                 pb.Run(rulesets=[pb.RulesetSelection(kind=Oneof[Literal["name"], str]("name", ""))]),
             ),
-            span=pb.Span(file=file, start=0, end=5),
         ),
     )
     original = Schedule(builder.publish().ref("commands", index), {})
     combined = seq(original, original.saturate() * 2)
     program = pack(commands=[combined._resolve(None)], ambient={("ruleset", "")}).program
-    assert [file.name for file in program.files] == ["schedule.py"]
     sequence_kind = program.commands[0].kind
     assert sequence_kind is not None
     assert sequence_kind.field == "loop"
     first, second = sequence_kind.value.body
-    assert first.span == pb.Span(file=0, start=0, end=5)
+    assert first.kind == original._resolve(None).read().kind
     repeated_kind = second.kind
     assert repeated_kind is not None
     assert repeated_kind.field == "loop"
     saturated_kind = repeated_kind.value.body[0].kind
     assert saturated_kind is not None
     assert saturated_kind.field == "loop"
-    assert saturated_kind.value.body[0].span == first.span
+    assert saturated_kind.value.body[0] == first
     assert pb.Program.from_binary(program.to_binary()) == program
 
 
@@ -174,7 +175,7 @@ def test_direct_rule_option_presence_and_empty_head(monkeypatch, mode, expected)
     assert not record.has_field("name")
     assert not record.no_decomp
     assert not record.include_subsumed
-    assert record.kind.value.query == record.kind.value.head == []
+    assert record.kind.value.query == record.kind.value.actions == []
     expected_str = "rule().then()" if mode == "seminaive" else f"rule(eval_mode={mode!r}).then()"
     assert str(authored) == expected_str
     with pytest.raises(TypeError, match="Rules must be embedded in Ruleset collections"):
@@ -227,20 +228,16 @@ def test_direct_rule_option_presence_and_empty_head(monkeypatch, mode, expected)
     assert not destination.deferred_rule_gens
 
 
-def test_nested_fail_pack_relocates_child_facts_and_all_spans():
+def test_nested_fail_pack_relocates_child_facts():
     builder = Builder()
     builder.import_ref(literal(99))
     value = builder.import_ref(literal(7))
-    builder.add("files", pb.SourceFile(name="unused"))
-    file = builder.add("files", pb.SourceFile(name="fail.egg", contents="(fail (fail (check 7)))"))
     command = pb.Command(
         kind=Oneof[Literal["check"], pb.Check]("check", pb.Check(facts=[value])),
-        span=pb.Span(file=file, start=12, end=21),
     )
-    for start, end in [(6, 22), (0, 23)]:
+    for _ in range(2):
         command = pb.Command(
             kind=Oneof[Literal["fail"], pb.Command]("fail", command),
-            span=pb.Span(file=file, start=start, end=end),
         )
     index = builder.add("commands", command)
     reference = builder.publish().ref("commands", index)
@@ -248,10 +245,8 @@ def test_nested_fail_pack_relocates_child_facts_and_all_spans():
     decoded = pb.Program.from_binary(packed.to_binary())
     assert decoded == packed
     assert len(decoded.nodes) == 1
-    assert len(decoded.files) == 1
     child = decoded.commands[0]
-    for start, end in [(0, 23), (6, 22), (12, 21)]:
-        assert child.span == pb.Span(file=0, start=start, end=end)
+    for _ in range(3):
         assert child.kind is not None
         if child.kind.field == "fail":
             child = child.kind.value
@@ -265,7 +260,7 @@ def test_nested_fail_pack_relocates_child_facts_and_all_spans():
     assert scalar_value is not None
     assert scalar_value.field == "i64"
     assert scalar_value.value == 7
-    assert reference.read().kind.value.kind.value.span.file == file
+    assert reference.read().kind.value.kind.value.kind.value.facts == [value]
 
 
 @pytest.mark.parametrize(
@@ -325,12 +320,7 @@ def action_program():
             for value in (1, 2)
         ]
         + [pb.Node(sort_id=0, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func=name))) for name in ("g", "f")],
-        declarations=[
-            pb.Declaration(
-                kind=Oneof[Literal["function"], pb.Function]("function", pb.Function(name=name, output=0, merge=merge))
-            )
-            for name, merge in (("f", 2), ("g", 3))
-        ],
+        functions=[pb.Function(name=name, output=0, merge=merge) for name, merge in (("f", 2), ("g", 3))],
         commands=[
             pb.Command(
                 kind=Oneof[Literal["action"], pb.Action](
@@ -355,7 +345,7 @@ def test_action_equality_ignores_unrelated_records_and_arena_layout(action_progr
         role: {
             index: len(getattr(action_program, role)) - index - 1 for index in range(len(getattr(action_program, role)))
         }
-        for role in ("nodes", "sorts", "declarations", "commands")
+        for role in ("nodes", "sorts", "constructors", "functions", "relations", "user_defined_primitives", "commands")
     }
     for role in mappings:
         original = list(getattr(action_program, role))
@@ -379,26 +369,28 @@ def test_action_equality_observes_referenced_declaration_closure(action_program,
     )
     # g is reached only through f's merge; checking the action root or f alone
     # would miss these changes to the recursive referenced declaration closure.
-    declaration = action_program.declarations[1]
+    declaration = (
+        *action_program.constructors,
+        *action_program.functions,
+        *action_program.relations,
+        *action_program.user_defined_primitives,
+    )[1]
     if change == "doc":
         declaration.doc = "different"
     elif change == "hidden":
-        declaration.kind.value.hidden = True
-        visible = first.__egg_ref__.owner.ref("declarations", 1)
+        declaration.hidden = True
+        visible = first.__egg_ref__.owner.ref("functions", 1)
         hidden = (
-            Builder
-            .from_program(action_program, environment=(builtin_catalog().owner,))
-            .publish()
-            .ref("declarations", 1)
+            Builder.from_program(action_program, environment=(builtin_catalog().owner,)).publish().ref("functions", 1)
         )
-        assert visible.read().kind.value.hidden is False
-        assert hidden.read().kind.value.hidden is True
+        assert visible.read().hidden is False
+        assert hidden.read().hidden is True
         assert StructuralView(visible) != StructuralView(hidden)
         assert len({StructuralView(visible), StructuralView(hidden)}) == 2
         with pytest.raises(ValueError, match="same-name"):
             pack([visible, hidden])
     elif change == "merge":
-        declaration.kind.value.merge = 1
+        declaration.merge = 1
     elif change == "sort":
         action_program.sorts[0].kind = Oneof[Literal["primitive"], pb.PrimitiveSortRef](
             "primitive", pb.PrimitiveSortRef(name="f64")
@@ -417,12 +409,17 @@ def test_action_equality_compares_union_syntax_in_declaration_closure(action_pro
     action_program.nodes.append(
         pb.Node(
             sort_id=0,
-            kind=Oneof[Literal["union"], pb.Union](
-                "union", pb.Union(members=[0, 1] if kind == "ordinary" else [4] if kind == "cycle" else [])
+            kind=Oneof[Literal["eq"], pb.Eq](
+                "eq", pb.Eq(members=[0, 1] if kind == "ordinary" else [4] if kind == "cycle" else [])
             ),
         )
     )
-    action_program.declarations[0].kind.value.merge = 4
+    (
+        *action_program.constructors,
+        *action_program.functions,
+        *action_program.relations,
+        *action_program.user_defined_primitives,
+    )[0].merge = 4
     owner = Builder.from_program(action_program, environment=(builtin_catalog().owner,)).publish()
     first = Action(owner.ref("commands", 0))
     assert first == Action(owner.ref("commands", 0))
@@ -437,12 +434,8 @@ def test_action_equality_compares_union_syntax_in_declaration_closure(action_pro
 def union_action_graph():
     return pb.Program(
         sorts=[pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "E"))],
-        declarations=[
-            pb.Declaration(
-                kind=Oneof[Literal["constructor"], pb.Constructor](
-                    "constructor", pb.Constructor(name=name, inputs=[pb.Arg(sort=0) for _ in range(arity)], output=0)
-                )
-            )
+        constructors=[
+            pb.Constructor(name=name, inputs=[0 for _ in range(arity)], output=0)
             for name, arity in (("F", 1), ("Pair", 2), ("C", 0), ("D", 0))
         ],
     )
@@ -450,7 +443,7 @@ def union_action_graph():
 
 def test_action_equality_has_finite_shared_cycle_proofs(union_action_graph):
     union_action_graph.nodes = [
-        pb.Node(kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[1]))),
+        pb.Node(kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq(members=[1]))),
         pb.Node(kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="F", args=[0]))),
     ]
     union_action_graph.commands = [
@@ -468,15 +461,11 @@ def test_action_equality_has_finite_shared_cycle_proofs(union_action_graph):
     g0 = builder.add(
         "nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="F", args=[u])))
     )
-    v = builder.add(
-        "nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[f])))
-    )
+    v = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq(members=[f]))))
     g = builder.add(
         "nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="F", args=[v])))
     )
-    w = builder.add(
-        "nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[g])))
-    )
+    w = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq(members=[g]))))
     for index in (u, f, g0, v, g, w):
         builder.add(
             "commands",
@@ -519,12 +508,8 @@ def test_action_equality_has_finite_shared_cycle_proofs(union_action_graph):
         output = declaration.import_ref(source.ref("sorts", 0))
         merge_index = declaration.import_ref(owner.ref("nodes", merge))
         declaration.add(
-            "declarations",
-            pb.Declaration(
-                kind=Oneof[Literal["function"], pb.Function](
-                    "function", pb.Function(name="slot", output=output, merge=merge_index)
-                )
-            ),
+            "functions",
+            pb.Function(name="slot", output=output, merge=merge_index),
         )
         root = declaration.add(
             "nodes", pb.Node(sort_id=output, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="slot")))
@@ -545,9 +530,9 @@ def test_action_equality_has_finite_shared_cycle_proofs(union_action_graph):
 
 
 def test_action_equality_keeps_empty_anchors_under_structural_parents(union_action_graph):
-    union_action_graph.nodes = [
-        pb.Node(kind=Oneof[Literal["union"], pb.Union]("union", pb.Union())) for _ in range(2)
-    ] + [pb.Node(kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="F", args=[index]))) for index in (0, 1, 0)]
+    union_action_graph.nodes = [pb.Node(kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq())) for _ in range(2)] + [
+        pb.Node(kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="F", args=[index]))) for index in (0, 1, 0)
+    ]
     union_action_graph.commands = [
         pb.Command(
             kind=Oneof[Literal["action"], pb.Action](
@@ -634,9 +619,7 @@ def test_action_equality_is_iterative_and_dag_safe(union_action_graph, monkeypat
 @pytest.mark.parametrize("reverse", [False, True])
 def test_nominal_family_callable_names_keep_independent_closure(reverse):
     declarations = [
-        pb.Declaration(
-            kind=Oneof[Literal["constructor"], pb.Constructor]("constructor", pb.Constructor(name="Pair", output=0))
-        ),
+        pb.Constructor(name="Pair", output=0),
     ]
     owner = Builder.from_program(
         pb.Program(
@@ -648,7 +631,7 @@ def test_nominal_family_callable_names_keep_independent_closure(reverse):
                     )
                 ),
             ],
-            declarations=declarations[::-1] if reverse else declarations,
+            constructors=declarations[::-1] if reverse else declarations,
             nodes=[
                 pb.Node(sort_id=0, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="Pair"))),
                 pb.Node(
@@ -702,7 +685,12 @@ def test_primitive_sort_dependency_never_falls_back_to_nominal_kind(local):
     reference = builder.publish().ref("sorts", sort)
     with pytest.raises(ValueError, match="missing definitions"):
         pack([reference], ambient=() if local else {("eq_sort", "Pair")})
-    assert not pack([reference], ambient={("primitive_sort", "Pair")}).program.declarations
+    assert not (
+        *pack([reference], ambient={("primitive_sort", "Pair")}).program.constructors,
+        *pack([reference], ambient={("primitive_sort", "Pair")}).program.functions,
+        *pack([reference], ambient={("primitive_sort", "Pair")}).program.relations,
+        *pack([reference], ambient={("primitive_sort", "Pair")}).program.user_defined_primitives,
+    )
 
 
 def test_same_kind_sort_definitions_reconcile_metadata_and_reject_primitive_conflicts():
@@ -720,7 +708,12 @@ def test_same_kind_sort_definitions_reconcile_metadata_and_reject_primitive_conf
     assert packed.indices == (0, 0)
     assert len(packed.program.sorts) == 1
     assert packed.program.sorts[0].doc == "0"
-    assert packed.program.declarations == []
+    assert not (
+        *packed.program.constructors,
+        *packed.program.functions,
+        *packed.program.relations,
+        *packed.program.user_defined_primitives,
+    )
 
 
 @pytest.mark.parametrize("name", ["", "same", "has space", "é"])
@@ -736,7 +729,12 @@ def test_named_binding_roots_reconcile_exact_sorts_and_keep_unset_slots(name):
     assert packed.indices == (0, 0)
     assert packed.program.nodes == [pb.Node(sort_id=0, kind=Oneof("binding", name))]
     assert packed.program.commands == []
-    assert packed.program.declarations == []
+    assert not (
+        *packed.program.constructors,
+        *packed.program.functions,
+        *packed.program.relations,
+        *packed.program.user_defined_primitives,
+    )
     assert {_program._definition_key(ref.read()) for ref in packed.definitions} == {("binding", name)}
     assert clone_nodes([references[0]]) == (references[0],)
     with pytest.raises(ValueError, match="same-name definitions"):
@@ -748,11 +746,9 @@ def test_global_binding_nominal_callable_and_lexical_names_are_independent():
     sort = builder.add("sorts", pb.Sort(kind=Oneof("eq", "same")))
     binding = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof("binding", "same")))
     variable = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof("var", "same")))
-    callable_ = builder.add(
-        "declarations", pb.Declaration(kind=Oneof("constructor", pb.Constructor(name="same", output=sort)))
-    )
+    callable_ = builder.add("constructors", pb.Constructor(name="same", output=sort))
     owner = builder.publish()
-    packed = pack([owner.ref("nodes", binding), owner.ref("nodes", variable), owner.ref("declarations", callable_)])
+    packed = pack([owner.ref("nodes", binding), owner.ref("nodes", variable), owner.ref("constructors", callable_)])
     assert {_program._definition_key(ref.read()) for ref in packed.definitions} == {
         ("eq_sort", "same"),
         ("binding", "same"),
@@ -787,12 +783,8 @@ def test_pack_reconciles_independent_compatible_definitions(monkeypatch, root_ki
         )
         builder.add("primitive_sorts", pb.PrimitiveSort(name="i64"))
         definition = builder.add(
-            "declarations",
-            pb.Declaration(
-                kind=Oneof[Literal["function"], pb.Function](
-                    "function", pb.Function(name="composed", inputs=[pb.Arg(sort=scalar)], output=scalar)
-                )
-            ),
+            "functions",
+            pb.Function(name="composed", inputs=[scalar], output=scalar),
         )
         value = builder.add(
             "nodes",
@@ -810,7 +802,7 @@ def test_pack_reconciles_independent_compatible_definitions(monkeypatch, root_ki
             ),
         )
         owner = builder.publish()
-        producers.append((owner.ref("sorts", scalar), owner.ref("declarations", definition), owner.ref("nodes", call)))
+        producers.append((owner.ref("sorts", scalar), owner.ref("functions", definition), owner.ref("nodes", call)))
     left, right = producers
     assert left[1] != right[1]
     assert left[1].read().to_binary() != right[1].read().to_binary()  # Arena IDs differ.
@@ -823,26 +815,26 @@ def test_pack_reconciles_independent_compatible_definitions(monkeypatch, root_ki
     else:
         builder = Builder()
         wrapper = builder.add(
-            "declarations",
-            pb.Declaration(
-                kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
-                    "user_defined_primitive",
-                    pb.UserDefinedPrimitive(
-                        name="wrapper",
-                        output=builder.import_ref(left[0]),
-                        body=builder.import_ref(right[2]),
-                    ),
-                )
+            "user_defined_primitives",
+            pb.UserDefinedPrimitive(
+                name="wrapper",
+                output=builder.import_ref(left[0]),
+                body=builder.import_ref(right[2]),
             ),
         )
-        roots = [builder.publish().ref("declarations", wrapper), left[1]]
+        roots = [builder.publish().ref("user_defined_primitives", wrapper), left[1]]
     packed = pack(roots)
     declaration_kinds = []
-    for declaration in packed.program.declarations:
-        declaration_kind = declaration.kind
-        assert declaration_kind is not None
+    for declaration in (
+        *packed.program.constructors,
+        *packed.program.functions,
+        *packed.program.relations,
+        *packed.program.user_defined_primitives,
+    ):
+        declaration_kind = declaration
+        assert isinstance(declaration_kind, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive)
         declaration_kinds.append(declaration_kind)
-    assert sum(kind.value.name == "composed" for kind in declaration_kinds) == 1
+    assert sum(kind.name == "composed" for kind in declaration_kinds) == 1
     assert [reference.read().to_binary() for _, reference, _ in producers] == before
     if root_kind == "definitions":
         assert packed.indices[0] == packed.indices[1]
@@ -852,9 +844,11 @@ def test_pack_reconciles_independent_compatible_definitions(monkeypatch, root_ki
     restored = Builder.from_program(
         pb.Program.from_binary(packed.program.to_binary()), environment=(builtin_catalog().owner,)
     ).publish()
-    role = "nodes" if root_kind == "calls" else "declarations"
     assert (
-        pack([restored.ref(role, index) for index in packed.indices]).program.to_binary() == packed.program.to_binary()
+        pack([
+            restored.ref(root.role, index) for root, index in zip(roots, packed.indices, strict=True)
+        ]).program.to_binary()
+        == packed.program.to_binary()
     )
 
 
@@ -880,12 +874,8 @@ def test_compatible_definition_does_not_hide_conflicting_named_dependency(foreig
             ),
         )
         builder.add(
-            "declarations",
-            pb.Declaration(
-                kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
-                    "user_defined_primitive", pb.UserDefinedPrimitive(name="dependency", output=scalar, body=literal)
-                )
-            ),
+            "user_defined_primitives",
+            pb.UserDefinedPrimitive(name="dependency", output=scalar, body=literal),
         )
         call = builder.add(
             "nodes", pb.Node(sort_id=scalar, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="dependency")))
@@ -896,14 +886,10 @@ def test_compatible_definition_does_not_hide_conflicting_named_dependency(foreig
             scalar = builder.import_ref(foreign.ref("sorts", scalar))
             call = builder.import_ref(foreign.ref("nodes", call))
         wrapper = builder.add(
-            "declarations",
-            pb.Declaration(
-                kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
-                    "user_defined_primitive", pb.UserDefinedPrimitive(name="wrapper", output=scalar, body=call)
-                )
-            ),
+            "user_defined_primitives",
+            pb.UserDefinedPrimitive(name="wrapper", output=scalar, body=call),
         )
-        roots.append(builder.publish().ref("declarations", wrapper))
+        roots.append(builder.publish().ref("user_defined_primitives", wrapper))
     assert StructuralView(roots[0]) == StructuralView(roots[1])
     for ordered in (roots, list(reversed(roots))):
         with pytest.raises(ValueError, match=r"same-name.*dependency"):
@@ -928,17 +914,13 @@ def test_definition_reconciliation_preserves_literal_bits_and_union_identity(bod
             )
         else:
             scalar = builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "E")))
-            kind = Oneof[Literal["union"], pb.Union]("union", pb.Union())
+            kind = Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq())
         body = builder.add("nodes", pb.Node(sort_id=scalar, kind=kind))
         definition = builder.add(
-            "declarations",
-            pb.Declaration(
-                kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
-                    "user_defined_primitive", pb.UserDefinedPrimitive(name="body", output=scalar, body=body)
-                )
-            ),
+            "user_defined_primitives",
+            pb.UserDefinedPrimitive(name="body", output=scalar, body=body),
         )
-        roots.append(builder.publish().ref("declarations", definition))
+        roots.append(builder.publish().ref("user_defined_primitives", definition))
     if body_kind == "signed_zero":
         assert StructuralView(roots[0]) == StructuralView(roots[1])
     else:
@@ -967,12 +949,8 @@ def test_reconciliation_does_not_discover_unreachable_foreign_bodies():
             ),
         )
         foreign.add(
-            "declarations",
-            pb.Declaration(
-                kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
-                    "user_defined_primitive", pb.UserDefinedPrimitive(name="dependency", output=scalar, body=body)
-                )
-            ),
+            "user_defined_primitives",
+            pb.UserDefinedPrimitive(name="dependency", output=scalar, body=body),
         )
         call = foreign.add(
             "nodes", pb.Node(sort_id=scalar, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="dependency")))
@@ -987,16 +965,11 @@ def test_reconciliation_does_not_discover_unreachable_foreign_bodies():
         )
         builder.add("primitive_sorts", pb.PrimitiveSort(name="i64"))
         builder.add(
-            "declarations",
-            pb.Declaration(
-                kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
-                    "user_defined_primitive",
-                    pb.UserDefinedPrimitive(
-                        name="unused",
-                        output=scalar,
-                        body=builder.import_ref(foreign_owner.ref("nodes", call)),
-                    ),
-                )
+            "user_defined_primitives",
+            pb.UserDefinedPrimitive(
+                name="unused",
+                output=scalar,
+                body=builder.import_ref(foreign_owner.ref("nodes", call)),
             ),
         )
         literal = builder.add(
@@ -1011,10 +984,15 @@ def test_reconciliation_does_not_discover_unreachable_foreign_bodies():
         roots.append(builder.publish().ref("nodes", literal))
     packed = pack(roots)
     names = []
-    for declaration in packed.program.declarations:
-        kind = declaration.kind
-        assert kind is not None
-        names.append(kind.value.name)
+    for declaration in (
+        *packed.program.constructors,
+        *packed.program.functions,
+        *packed.program.relations,
+        *packed.program.user_defined_primitives,
+    ):
+        kind = declaration
+        assert isinstance(kind, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive)
+        names.append(kind.name)
     assert names == []
     assert len(packed.program.nodes) == 2
 
@@ -1037,12 +1015,8 @@ def test_late_definition_conflict_is_checked_before_dirty_demand_clears(monkeypa
         ),
     )
     foreign.add(
-        "declarations",
-        pb.Declaration(
-            kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
-                "user_defined_primitive", pb.UserDefinedPrimitive(name="f", output=scalar, body=nine)
-            )
-        ),
+        "user_defined_primitives",
+        pb.UserDefinedPrimitive(name="f", output=scalar, body=nine),
     )
     call = foreign.add(
         "nodes", pb.Node(sort_id=scalar, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="f")))
@@ -1064,28 +1038,19 @@ def test_late_definition_conflict_is_checked_before_dirty_demand_clears(monkeypa
         ),
     )
     first = builder.add(
-        "declarations",
-        pb.Declaration(
-            kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
-                "user_defined_primitive", pb.UserDefinedPrimitive(name="f", output=scalar, body=four)
-            )
-        ),
+        "user_defined_primitives",
+        pb.UserDefinedPrimitive(name="f", output=scalar, body=four),
     )
     wrapper = builder.add(
-        "declarations",
-        pb.Declaration(
-            kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
-                "user_defined_primitive",
-                pb.UserDefinedPrimitive(
-                    name="wrapper",
-                    output=scalar,
-                    body=builder.import_ref(foreign_owner.ref("nodes", call)),
-                ),
-            )
+        "user_defined_primitives",
+        pb.UserDefinedPrimitive(
+            name="wrapper",
+            output=scalar,
+            body=builder.import_ref(foreign_owner.ref("nodes", call)),
         ),
     )
     owner = builder.publish()
-    emitted = owner.ref("declarations", first)
+    emitted = owner.ref("user_defined_primitives", first)
 
     def candidate_order(values):
         # Both legal set iteration orders must reject, including the mapped
@@ -1094,20 +1059,18 @@ def test_late_definition_conflict_is_checked_before_dirty_demand_clears(monkeypa
 
     monkeypatch.setattr(_program, "iter", candidate_order, raising=False)
     with pytest.raises(ValueError, match=r"same-name.*'f'"):
-        pack([owner.ref("declarations", wrapper), emitted])
+        pack([owner.ref("user_defined_primitives", wrapper), emitted])
 
 
 def test_template_expansion_freshens_nodes_not_definition_identity():
     builder = Builder()
     builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Box")))
     declaration = builder.add(
-        "declarations",
-        pb.Declaration(
-            kind=Oneof[Literal["constructor"], pb.Constructor]("constructor", pb.Constructor(name="box", output=0))
-        ),
+        "constructors",
+        pb.Constructor(name="box", output=0),
     )
     call = builder.add("nodes", pb.Node(kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="box"))))
-    group = builder.add("nodes", pb.Node(kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[call]))))
+    group = builder.add("nodes", pb.Node(kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq(members=[call]))))
     owner = builder.publish()
     first, alias = clone_nodes([owner.ref("nodes", group), owner.ref("nodes", group)])
     (second,) = clone_nodes([owner.ref("nodes", group)])
@@ -1116,10 +1079,18 @@ def test_template_expansion_freshens_nodes_not_definition_identity():
     assert first != owner.ref("nodes", group)
     cloned_call = first.owner.ref("nodes", first.read().kind.value.members[0])
     assert cloned_call != owner.ref("nodes", call)
-    assert first.owner.ref("declarations", 0) == owner.ref("declarations", declaration)
+    assert first.owner.ref("constructors", 0) == owner.ref("constructors", declaration)
     combined = pack([first, second, owner.ref("nodes", call)])
-    assert len(combined.program.declarations) == 1
-    assert sum(node.kind is not None and node.kind.field == "union" for node in combined.program.nodes) == 2
+    assert (
+        len((
+            *combined.program.constructors,
+            *combined.program.functions,
+            *combined.program.relations,
+            *combined.program.user_defined_primitives,
+        ))
+        == 1
+    )
+    assert sum(node.kind is not None and node.kind.field == "eq" for node in combined.program.nodes) == 2
 
 
 @pytest.fixture(autouse=True)
@@ -1202,9 +1173,9 @@ def test_diamonds_distinct_equal_unions_and_cycles():
     child = builder.add(
         "nodes", pb.Node(kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="cycle", args=[first])))
     )
-    builder.fill("nodes", first, pb.Node(kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[child]))))
-    fresh = builder.add("nodes", pb.Node(kind=Oneof[Literal["union"], pb.Union]("union", pb.Union())))
-    other = builder.add("nodes", pb.Node(kind=Oneof[Literal["union"], pb.Union]("union", pb.Union())))
+    builder.fill("nodes", first, pb.Node(kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq(members=[child]))))
+    fresh = builder.add("nodes", pb.Node(kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq())))
+    other = builder.add("nodes", pb.Node(kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq())))
     source = builder.publish()
     branches = []
     for _ in range(2):
@@ -1219,7 +1190,7 @@ def test_diamonds_distinct_equal_unions_and_cycles():
     assert result.indices[2] != result.indices[3]
     union = result.program.nodes[result.indices[0]]
     assert union.kind is not None
-    assert union.kind.field == "union"
+    assert union.kind.field == "eq"
     call = result.program.nodes[union.kind.value.members[0]]
     assert call.kind is not None
     assert call.kind.field == "call"
@@ -1239,34 +1210,45 @@ def test_named_recursive_definition_closure_and_missing_names():
     builder.add("primitive_sorts", pb.PrimitiveSort(name="i64"))
     for name, body in [("f", 2), ("g", 1), ("unreachable", 0)]:
         builder.add(
-            "declarations",
-            pb.Declaration(
-                kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
-                    "user_defined_primitive",
-                    pb.UserDefinedPrimitive(name=name, inputs=[pb.Arg(sort=0)], output=0, body=body),
-                )
-            ),
+            "user_defined_primitives",
+            pb.UserDefinedPrimitive(name=name, inputs=[0], output=0, body=body),
         )
     owner = builder.publish()
     result = pack([owner.ref("nodes", 1)])
-    assert all(d.kind is not None for d in result.program.declarations)
-    assert {d.kind.value.name for d in result.program.declarations if d.kind is not None} == {"f", "g"}
+    assert all(
+        isinstance(d, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive)
+        for d in (
+            *result.program.constructors,
+            *result.program.functions,
+            *result.program.relations,
+            *result.program.user_defined_primitives,
+        )
+    )
+    assert {
+        d.name
+        for d in (
+            *result.program.constructors,
+            *result.program.functions,
+            *result.program.relations,
+            *result.program.user_defined_primitives,
+        )
+        if True
+    } == {"f", "g"}
     assert len(result.program.nodes) == 3
     with pytest.raises(ValueError, match=r"missing.*i64"):
         pack([literal(1)])
 
 
-def test_rules_rulesets_commands_files_and_command_multiplicity():
+def test_rules_rulesets_commands_and_command_multiplicity():
     builder = Builder()
-    builder.add("files", pb.SourceFile(name="source", contents="x"))
     builder.add(
         "sorts",
         pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64"))),
     )
-    builder.add("nodes", pb.Node(kind=Oneof[Literal["var"], str]("var", "x"), span=pb.Span(file=0, end=1)))
+    builder.add("nodes", pb.Node(kind=Oneof[Literal["var"], str]("var", "x")))
     rule = pb.Rule(
         kind=Oneof[Literal["rule"], pb.RuleBody](
-            "rule", pb.RuleBody(query=[0], head=[pb.Action(kind=Oneof[Literal["term"], int]("term", 0))])
+            "rule", pb.RuleBody(query=[0], actions=[pb.Action(kind=Oneof[Literal["term"], int]("term", 0))])
         ),
         eval_mode=pb.RuleEvalMode.NAIVE,
     )
@@ -1324,9 +1306,7 @@ def test_rules_rulesets_commands_files_and_command_multiplicity():
     rules = addition.rules
     assert len(rules) == 3
     assert rules[0] == rules[1] == rules[2]
-    assert result.program.files[0].name == "source"
-    assert result.program.nodes[0].span is not None
-    assert result.program.nodes[0].span.file == 0
+    assert result.program.nodes[0].kind == Oneof("var", "x")
 
 
 @pytest.mark.parametrize(("available", "repetitions"), [(32, 64), (64, 128)])
@@ -1340,8 +1320,8 @@ def test_inline_rules_import_shared_context_once_and_pack_only_demanded_definiti
     )
     for index in range(available):
         source.add(
-            "declarations",
-            pb.Declaration(kind=Oneof[Literal["relation"], pb.Relation]("relation", pb.Relation(name=f"r{index}"))),
+            "relations",
+            pb.Relation(name=f"r{index}"),
         )
     query = source.add("nodes", pb.Node(sort_id=unit, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="r0"))))
     rule_index = source.add(
@@ -1372,7 +1352,7 @@ def test_inline_rules_import_shared_context_once_and_pack_only_demanded_definiti
             name="g", value=pb.Ruleset(rules=[destination.import_rule(reference) for _ in range(repetitions)])
         ),
     )
-    assert visits.count("declarations") == available
+    assert visits.count("relations") == available
     assert len(visits) <= available + 2 * repetitions
     assert copies == repetitions
     program = pack([destination.publish().ref("rulesets", command)]).program
@@ -1387,7 +1367,11 @@ def test_inline_rules_import_shared_context_once_and_pack_only_demanded_definiti
     assert program.sorts == [
         pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="Unit")))
     ]
-    assert [d.kind.value.name for d in program.declarations if d.kind is not None] == ["r0"]
+    assert [
+        d.name
+        for d in (*program.constructors, *program.functions, *program.relations, *program.user_defined_primitives)
+        if True
+    ] == ["r0"]
 
 
 def test_binders_defaults_and_payloads_are_not_reinterpreted():
@@ -1400,27 +1384,33 @@ def test_binders_defaults_and_payloads_are_not_reinterpreted():
     body = builder.add("nodes", pb.Node(sort_id=scalar, kind=Oneof[Literal["var"], str]("var", "_0")))
     for name in ("left", "right"):
         builder.add(
-            "declarations",
-            pb.Declaration(
-                kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
-                    "user_defined_primitive",
-                    pb.UserDefinedPrimitive(
-                        name=name, inputs=[pb.Arg(sort=scalar, name="label")], output=scalar, body=body
-                    ),
-                )
-            ),
+            "user_defined_primitives",
+            pb.UserDefinedPrimitive(name=name, inputs=[scalar], output=scalar, body=body),
         )
     owner = builder.publish()
-    result = pack([owner.ref("declarations", 1), owner.ref("declarations", 0)])
+    result = pack([owner.ref("user_defined_primitives", 1), owner.ref("user_defined_primitives", 0)])
     assert result.program.sorts[0].kind == Oneof("primitive", pb.PrimitiveSortRef(name="i64"))
     assert result.program.nodes[0].kind == Oneof[Literal["var"], str]("var", "_0")
-    assert len(result.program.declarations) == 2
-    for declaration in result.program.declarations:
-        assert declaration.kind is not None
-        assert declaration.kind.field == "user_defined_primitive"
-        assert declaration.kind.value.inputs == [pb.Arg(sort=0, name="label")]
-        assert declaration.kind.value.output == 0
-        assert declaration.kind.value.body == 0
+    assert (
+        len((
+            *result.program.constructors,
+            *result.program.functions,
+            *result.program.relations,
+            *result.program.user_defined_primitives,
+        ))
+        == 2
+    )
+    for declaration in (
+        *result.program.constructors,
+        *result.program.functions,
+        *result.program.relations,
+        *result.program.user_defined_primitives,
+    ):
+        assert isinstance(declaration, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive)
+        assert isinstance(declaration, pb.UserDefinedPrimitive)
+        assert declaration.inputs == [0]
+        assert declaration.output == 0
+        assert declaration.body == 0
     with pytest.raises(ValueError, match="free variable"):
         Parameter(core_input=0, name="x", default=owner.ref("nodes", body))
 
@@ -1509,7 +1499,7 @@ def test_scalar_view_presence_stays_local_through_owned_closure_and_relocation(r
     packed = pack([cloned]).program
     reencoded = pb.Program.from_binary(packed.to_binary())
     assert reencoded == packed
-    assert not reencoded.declarations
+    assert not (*reencoded.constructors, *reencoded.functions, *reencoded.relations, *reencoded.user_defined_primitives)
     detached_owner = Builder.from_program(reencoded).publish()
     with pytest.raises(LookupError, match="owned canonical definition"):
         _definition_at(detached_owner.ref("nodes", 0), "callable", "egglog.core.string.concat")
@@ -1574,10 +1564,8 @@ def test_proof_command_relocation_and_constructor_closure():
     fact = builder.import_ref(literal(7))
     builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Box")))
     builder.add(
-        "declarations",
-        pb.Declaration(
-            kind=Oneof[Literal["constructor"], pb.Constructor]("constructor", pb.Constructor(name="box", output=0))
-        ),
+        "constructors",
+        pb.Constructor(name="box", output=0),
     )
     prove = builder.add(
         "commands", pb.Command(kind=Oneof[Literal["prove"], pb.Prove]("prove", pb.Prove(facts=[fact, fact])))
@@ -1614,10 +1602,10 @@ def test_proof_command_relocation_and_constructor_closure():
     assert exists_kind.field == "prove_exists"
     assert exists_kind.value.constructor == "box"
     names = set()
-    for declaration in result.declarations:
-        kind = declaration.kind
-        assert kind is not None
-        names.add(kind.value.name)
+    for declaration in (*result.constructors, *result.functions, *result.relations, *result.user_defined_primitives):
+        kind = declaration
+        assert isinstance(kind, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive)
+        names.add(kind.name)
     assert names == {"box"}
     assert any(sort.kind == Oneof("eq", "Box") for sort in result.sorts)
     assert pb.Program.from_binary(result.to_binary()) == result
@@ -1669,7 +1657,7 @@ def test_rejects_invalid_records_slots_and_inline_cycles():
 def test_detached_default_expansions_preserve_internal_identity():
     default = Builder()
     default.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "E")))
-    default.add("nodes", pb.Node(kind=Oneof[Literal["union"], pb.Union]("union", pb.Union())))
+    default.add("nodes", pb.Node(kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq())))
     root = default.add("nodes", pb.Node(kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="f", args=[0, 0]))))
     owner = default.publish()
     packet = pack([owner.ref("nodes", root)], ambient={*AMBIENT, ("eq_sort", "E")})
@@ -1731,8 +1719,8 @@ def test_late_discovered_definition_conflict_is_not_hidden():
     )
     foreign.add("nodes", pb.Node(kind=Oneof[Literal["var"], str]("var", "_0")))
     foreign.add(
-        "declarations",
-        pb.Declaration(kind=Oneof[Literal["function"], pb.Function]("function", pb.Function(name="f", output=0))),
+        "functions",
+        pb.Function(name="f", output=0),
     )
     foreign_owner = foreign.publish()
     local = Builder()
@@ -1743,12 +1731,8 @@ def test_late_discovered_definition_conflict_is_not_hidden():
     body = local.import_ref(foreign_owner.ref("nodes", 0))
     root = local.add("nodes", pb.Node(kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="f"))))
     local.add(
-        "declarations",
-        pb.Declaration(
-            kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
-                "user_defined_primitive", pb.UserDefinedPrimitive(name="f", output=0, body=body)
-            )
-        ),
+        "user_defined_primitives",
+        pb.UserDefinedPrimitive(name="f", output=0, body=body),
     )
     with pytest.raises(ValueError, match="same-name"):
         pack([local.publish().ref("nodes", root)], ambient=AMBIENT)
@@ -1887,7 +1871,7 @@ def test_structural_view_ignores_addresses_and_preserves_identity():
     builder = Builder()
     builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "E")))
     for _ in range(2):
-        builder.add("nodes", pb.Node(kind=Oneof[Literal["union"], pb.Union]("union", pb.Union())))
+        builder.add("nodes", pb.Node(kind=Oneof[Literal["eq"], pb.Eq]("eq", pb.Eq())))
     owner = builder.publish()
     assert StructuralView(owner.ref("nodes", 0)) == StructuralView(owner.ref("nodes", 0))
     assert StructuralView(owner.ref("nodes", 0)) != StructuralView(owner.ref("nodes", 1))
@@ -1954,3 +1938,56 @@ def test_structural_view_deep_hash_cache_is_erasable_and_does_not_retain_owners(
     del root
     gc.collect()
     assert all(owner() is None for owner in owners)
+
+
+@pytest.mark.parametrize(
+    ("role", "message"),
+    [
+        ("constructors", pb.Constructor),
+        ("functions", pb.Function),
+        ("relations", pb.Relation),
+        ("user_defined_primitives", pb.UserDefinedPrimitive),
+    ],
+)
+@pytest.mark.parametrize("doc", [None, "", "retained documentation"])
+def test_flat_callable_roles_relocate_input_sorts_and_owned_metadata(role, message, doc):
+    builder = Builder()
+    builder.add("sorts", pb.Sort(kind=Oneof("eq", "unused")))
+    sort = builder.add("sorts", pb.Sort(kind=Oneof("eq", "Owned")))
+    body = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof("var", "_0")))
+    definition = message(name="flat", inputs=[sort], doc=doc)
+    if isinstance(definition, pb.Constructor | pb.Function | pb.UserDefinedPrimitive):
+        definition.output = sort
+    if isinstance(definition, pb.Function):
+        definition.merge = body
+    elif isinstance(definition, pb.UserDefinedPrimitive):
+        definition.body = body
+    if isinstance(definition, pb.Constructor | pb.Function | pb.Relation):
+        definition.table_name = Oneof("public_alias", "")
+    index = builder.add(role, definition)
+    owner = builder.publish()
+    packed = pack([owner.ref(role, index)])
+    assert packed.indices == (0,)
+    record = getattr(packed.program, role)[0]
+    assert record.inputs == [0]
+    assert record.has_field("doc") == (doc is not None)
+    assert record.doc == (doc if doc is not None else "")
+    if isinstance(record, pb.Constructor | pb.Function | pb.UserDefinedPrimitive):
+        assert record.output == 0
+    if isinstance(record, pb.Function):
+        assert packed.program.nodes[record.merge].kind == Oneof("var", "_0")
+    elif isinstance(record, pb.UserDefinedPrimitive):
+        assert packed.program.nodes[record.body].kind == Oneof("var", "_0")
+    if isinstance(record, pb.Constructor | pb.Function | pb.Relation):
+        assert record.table_name == Oneof("public_alias", "")
+    assert pb.Program.from_binary(packed.program.to_binary()) == packed.program
+
+
+def test_flat_callable_lists_share_one_definition_namespace():
+    builder = Builder()
+    sort = builder.add("sorts", pb.Sort(kind=Oneof("eq", "Owned")))
+    constructor = builder.add("constructors", pb.Constructor(name="shared", output=sort))
+    function = builder.add("functions", pb.Function(name="shared", output=sort))
+    owner = builder.publish()
+    with pytest.raises(ValueError, match="same-name"):
+        pack([owner.ref("constructors", constructor), owner.ref("functions", function)])

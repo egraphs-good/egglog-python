@@ -56,8 +56,8 @@ def _relocate_builtins(source: pb.BuiltinCatalog) -> pb.BuiltinCatalog:
     for primitive in result.primitives:
         signature = primitive.signature
         assert signature is not None
-        for argument in [*signature.inputs, *signature.varargs]:
-            argument.sort = remap[argument.sort]
+        signature.inputs = [remap[index] for index in signature.inputs]
+        signature.varargs = [remap[index] for index in signature.varargs]
         assert signature.has_field("output")
         signature.output = remap[signature.output]
     result.primitives.reverse()
@@ -468,16 +468,16 @@ def test_vec_map_view_and_static_signature_come_from_actual_catalog():
     assert view["form"] == "METHOD"
     assert resolved.path == ("map",)
     assert resolved.receiver == 1
-    assert [(p.core_input, p.name) for p in resolved.params] == [(0, signature.inputs[0].name)]
+    assert [(p.core_input, p.name) for p in resolved.params] == [(0, view["params"][0]["name"])]
     assert "mutates" not in view
     assert "default" not in view["params"][0]
-    callback_kind = program.sorts[signature.inputs[0].sort].kind
+    callback_kind = program.sorts[signature.inputs[0]].kind
     assert callback_kind is not None
     assert callback_kind.field == "func"
     assert "owner" in view
     local_owner = resolved.owner
     assert local_owner is not None
-    assert StructuralView(owner.ref("sorts", signature.inputs[1].sort)) == StructuralView(local_owner)
+    assert StructuralView(owner.ref("sorts", signature.inputs[1])) == StructuralView(local_owner)
     render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
     stub = render(program, mapping=mapping)
     assert "def map(self, f: Callable[[_Vec_T_0], _Vec_map_T1]) -> Vec[_Vec_map_T1]:" in stub
@@ -498,7 +498,7 @@ def test_vec_static_tail_rejects_unrepresentable_or_invalid_views(vec_catalog_pr
     signature = _primitive_signature(of)
     view = mapping["callables"][of.name][0]
     if mutation == "grouped":
-        signature.varargs.append(pb.Arg(sort=signature.varargs[0].sort))
+        signature.varargs.append(signature.varargs[0])
     elif mutation == "default":
         view["params"][0]["default"] = 0
     elif mutation == "missing":
@@ -506,7 +506,7 @@ def test_vec_static_tail_rejects_unrepresentable_or_invalid_views(vec_catalog_pr
     elif mutation == "duplicate":
         view["params"].append({"coreInput": 0, "name": "again"})
     elif mutation == "nonfinal":
-        signature.inputs.append(pb.Arg(sort=signature.varargs[0].sort))
+        signature.inputs.append(signature.varargs[0])
         view["params"][0]["coreInput"] = 1
         view["params"].append({"coreInput": 0, "name": "first"})
     elif mutation == "receiver":
@@ -534,7 +534,7 @@ def test_uniform_tail_can_follow_fixed_inputs(vec_catalog_program):
     of = next(d for d in vec_catalog_program.primitives if d.name == "egglog.core.vec.of")
     signature = _primitive_signature(of)
     view = mapping["callables"][of.name][0]
-    signature.inputs.append(pb.Arg(sort=signature.varargs[0].sort, name="first"))
+    signature.inputs.append(signature.varargs[0])
     view["params"][0]["coreInput"] = 1
     view["params"].insert(0, {"coreInput": 0, "name": "first"})
     assert "def __init__(self, first: _Vec_T_0, *args: _Vec_T_0) -> None:" in renderer(
@@ -564,7 +564,7 @@ def test_classmethod_pretty_infers_owner_from_uniform_tail(
     view["path"] = ["count"]
     view["params"] = [{"coreInput": int(fixed), "name": "items"}]
     if fixed:
-        signature.inputs.append(pb.Arg(sort=signature.varargs[0].sort, name="first"))
+        signature.inputs.append(signature.varargs[0])
         view["params"].insert(0, {"coreInput": 0, "name": "first"})
     vec_catalog_program.primitives.append(count)
     renderer = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
@@ -675,7 +675,7 @@ def test_function_sort_annotations_recurse_through_canonical_records():
     declarations = {d.name: d for d in program.primitives}
     signatures = {d.name: d.signature for d in program.primitives if d.signature is not None}
     signature = signatures["egglog.core.pair.first"]
-    left, right = (arg.sort for arg in signatures["egglog.core.pair.make"].inputs)
+    left, right = signatures["egglog.core.pair.make"].inputs
     index = len(program.sorts)
     program.sorts.extend([
         pb.Sort(kind=Oneof[Literal["func"], pb.FuncSort]("func", pb.FuncSort(params=[left], result=right))),
@@ -699,7 +699,7 @@ def test_function_sort_annotations_recurse_through_canonical_records():
     kind.value.result = i64_sort
     join = declarations["egglog.core.string.concat"]
     mapping["callables"][join.name] = [mapping["callables"][join.name][0]]
-    signatures["egglog.core.string.concat"].varargs[0].sort = index
+    signatures["egglog.core.string.concat"].varargs[0] = index
     assert "def join(*strings: Callable[[i64], i64]) -> String:" in render(program, mapping=mapping)
     kind.value.params.clear()
     assert "def join(*strings: Callable[[], i64]) -> String:" in render(program, mapping=mapping)
@@ -756,7 +756,7 @@ def test_pair_stub_rejects_invalid_or_unadmitted_generic_views(pair_catalog_prog
     first = declarations["egglog.core.pair.first"]
     signature = _primitive_signature(make)
     if mutation == "output":
-        signature.output = signature.inputs[0].sort
+        signature.output = signature.inputs[0]
     elif mutation == "receiver":
         mapping["callables"][first.name][0]["receiver"] = None
     elif mutation == "params":
@@ -804,7 +804,7 @@ def test_pair_stub_uses_sort_structure_after_relocation(pair_catalog_program):
             assert line in after
     first = declarations["egglog.core.pair.first"]
     first_signature = _primitive_signature(first)
-    first_signature.output = signature.inputs[1].sort
+    first_signature.output = signature.inputs[1]
     assert "def left(self) -> _Pair_R_1:" in renderer(pair_catalog_program, mapping=mapping)
 
 
@@ -824,8 +824,8 @@ def test_pair_stub_rejects_specialized_owner_as_universal_class_view(pair_catalo
         for i, s in enumerate(pair_catalog_program.sorts)
         if s.kind.field == "primitive" and s.kind.value.name == "i64"
     )
-    signature.inputs[0].sort = i64_sort
-    signature.inputs[1].sort = i64_sort
+    signature.inputs[0] = i64_sort
+    signature.inputs[1] = i64_sort
     pair_catalog_program.sorts[signature.output].kind.value.args = [i64_sort, i64_sort]
     view = mapping["callables"][make.name][0]
     local_i64 = next(
@@ -860,7 +860,7 @@ def test_stub_generation_rejects_invalid_or_unmigrated_shapes(mutation, message)
         view["receiver"] = 1
         view["params"][0]["coreInput"] = 1
     elif mutation == "tail":
-        signature.varargs = [pb.Arg(sort=1), pb.Arg(sort=0)]
+        signature.varargs = [1, 0]
         view["params"].append({"coreInput": len(signature.inputs), "name": "rest"})
     elif mutation == "collision":
         mapping["callables"][addition.name].append(copy.deepcopy(view))
@@ -895,7 +895,7 @@ def test_numeric_forward_signature_does_not_imply_reflection(method, argument, o
         for i, s in enumerate(program.sorts)
         if s.kind is not None and isinstance(s.kind.value, pb.PrimitiveSortRef)
     }
-    signature.inputs[1].sort = sorts[argument]
+    signature.inputs[1] = sorts[argument]
     signature.output = sorts[output]
     for key, views in mapping["callables"].items():
         if key != addition.name:
@@ -1022,7 +1022,7 @@ def catalog_fixture():
         primitives=[
             pb.Primitive(
                 name="example.number.add",
-                signature=pb.GenericSignature(inputs=[pb.Arg(sort=0), pb.Arg(sort=0)], output=0),
+                signature=pb.GenericSignature(inputs=[0, 0], output=0),
             )
         ],
     )
@@ -1059,7 +1059,7 @@ def test_catalog_indexes_records_without_evaluating_or_retyping(monkeypatch):
     assert primitive.read().name == "example.number.add"
     assert view == 0
     source.primitives.clear()
-    assert _primitive_signature(primitive.read()).inputs[0].sort == 0
+    assert _primitive_signature(primitive.read()).inputs[0] == 0
     catalog.reindex()
     assert catalog.members[("primitive_sort", "Number"), "__add__"] == (primitive, view)
 
@@ -1071,7 +1071,7 @@ def test_builtin_descriptors_and_local_views_never_enter_input_programs():
     with pytest.raises(TypeError, match="Builtin descriptors are ambient references, not Program roots"):
         pack(catalog.roots)
     packed = pack([(i64(1) + i64(2)).__egg_ref__]).program
-    assert not packed.declarations
+    assert not (*packed.constructors, *packed.functions, *packed.relations, *packed.user_defined_primitives)
     assert packed.nodes
     assert not packed.commands
     assert source.to_binary() == encoded
@@ -1096,7 +1096,7 @@ def test_local_scope_indexes_canonical_refs_without_adopting_them_again():
 def test_nominal_and_primitive_sort_member_owners_recover_independently(generic):
     descriptors, mapping = catalog_fixture()
     signature = _primitive_signature(descriptors.primitives[0])
-    signature.inputs = [pb.Arg(sort=0)]
+    signature.inputs = [0]
     mapping["callables"]["example.number.add"][0].update(path=["tag"], params=[])
     if generic:
         descriptors.primitive_sorts[0].arity = 1
@@ -1119,13 +1119,7 @@ def test_nominal_and_primitive_sort_member_owners_recover_independently(generic)
             pb.Node(sort_id=0, kind=Oneof[Literal["var"], str]("var", "host")),
             pb.Node(sort_id=1, kind=Oneof[Literal["var"], str]("var", "nominal")),
         ],
-        declarations=[
-            pb.Declaration(
-                kind=Oneof[Literal["constructor"], pb.Constructor](
-                    "constructor", pb.Constructor(name="nominal.tag", inputs=[pb.Arg(sort=1)], output=1)
-                )
-            ),
-        ],
+        constructors=[pb.Constructor(name="nominal.tag", inputs=[1], output=1)],
     )
 
     def views(owner):
@@ -1137,7 +1131,7 @@ def test_nominal_and_primitive_sort_member_owners_recover_independently(generic)
         }
 
     owner = Builder.from_program(source, environment=(ambient,)).publish(presentation_factory=views)
-    catalog = Catalog.from_refs([*Catalog(ambient).roots, owner.ref("sorts", 1), owner.ref("declarations", 0)])
+    catalog = Catalog.from_refs([*Catalog(ambient).roots, owner.ref("sorts", 1), owner.ref("constructors", 0)])
     host = _class_for_sort(owner.ref("sorts", 0))
     nominal = _class_for_sort(owner.ref("sorts", 1))
     assert host != nominal
@@ -1150,9 +1144,7 @@ def test_nominal_and_primitive_sort_member_owners_recover_independently(generic)
         tagged = tag()
         assert isinstance(tagged, RuntimeExpr)
         assert tagged.__egg_ref__.read().kind.value.func == expected
-        assert (
-            reference.read().name if reference.role == "primitives" else reference.read().kind.value.name
-        ) == expected
+        assert (reference.read().name) == expected
     catalog.members.clear()
     catalog.reindex()
     host.__egg_attr_cache__.clear()
@@ -1170,7 +1162,7 @@ def test_nominal_and_primitive_sort_member_owners_recover_independently(generic)
 
     colliding = Builder.from_program(source, environment=(ambient,)).publish(presentation_factory=colliding_views)
     with pytest.raises(ValueError, match="Python binding collision"):
-        Catalog.from_refs([*Catalog(ambient).roots, colliding.ref("sorts", 1), colliding.ref("declarations", 0)])
+        Catalog.from_refs([*Catalog(ambient).roots, colliding.ref("sorts", 1), colliding.ref("constructors", 0)])
 
 
 @pytest.mark.parametrize("nominal", [False, True])
@@ -1261,14 +1253,7 @@ def test_runtime_free_function_names_preserve_exact_callee_and_core_order(monkey
         sorts=[
             pb.Sort(kind=Oneof[Literal["primitive"], pb.PrimitiveSortRef]("primitive", pb.PrimitiveSortRef(name="i64")))
         ],
-        declarations=[
-            pb.Declaration(
-                kind=Oneof[Literal["function"], pb.Function](
-                    "function",
-                    pb.Function(name="exact.declared.table", inputs=[pb.Arg(sort=0), pb.Arg(sort=0)], output=0),
-                )
-            )
-        ],
+        functions=[pb.Function(name="exact.declared.table", inputs=[0, 0], output=0)],
     )
     surface = Presentation(
         views=(
@@ -1282,7 +1267,7 @@ def test_runtime_free_function_names_preserve_exact_callee_and_core_order(monkey
     builder = Builder.from_program(source, environment=(ambient,))
     builder.presentations["callable", "exact.declared.table"] = surface
     owner = builder.publish()
-    catalog = Catalog.from_refs([owner.ref("declarations", 0)])
+    catalog = Catalog.from_refs([owner.ref("functions", 0)])
     reference, view = catalog.functions["example", name]
     result = RuntimeFunction(reference, view)(i64(9), left=i64(4))
     assert isinstance(result, RuntimeExpr)
@@ -1299,10 +1284,9 @@ def test_runtime_free_function_names_preserve_exact_callee_and_core_order(monkey
     restored.functions.clear()
     restored.reindex()
     assert restored.functions["example", name] == (restored_reference, restored_view)
-    duplicate = pb.Declaration.from_binary(source.declarations[0].to_binary())
-    assert duplicate.kind is not None
-    duplicate.kind.value.name = "different.declared.table"
-    source.declarations.append(duplicate)
+    duplicate = pb.Function.from_binary(source.functions[0].to_binary())
+    duplicate.name = "different.declared.table"
+    source.functions.append(duplicate)
     builder = Builder.from_program(source, environment=(ambient,))
     for key in ("exact.declared.table", "different.declared.table"):
         builder.presentations["callable", key] = surface
@@ -1360,22 +1344,18 @@ def test_constant_presentation_accepts_each_concrete_nullary_callable(kind):
         owner = builder.publish()
         reference = owner.ref("primitives", 0)
     else:
-        kinds: dict[
-            str,
-            Oneof[Literal["constructor"], pb.Constructor]
-            | Oneof[Literal["function"], pb.Function]
-            | Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive]
-            | Oneof[Literal["relation"], pb.Relation],
-        ] = {
-            "constructor": Oneof[Literal["constructor"], pb.Constructor](
-                "constructor", pb.Constructor(name="c", output=1)
-            ),
-            "function": Oneof[Literal["function"], pb.Function]("function", pb.Function(name="c", output=0)),
-            "user_defined_primitive": Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
-                "user_defined_primitive", pb.UserDefinedPrimitive(name="c", output=0, body=0)
-            ),
-            "relation": Oneof[Literal["relation"], pb.Relation]("relation", pb.Relation(name="c")),
+        kinds = {
+            "constructor": pb.Constructor(name="c", output=1),
+            "function": pb.Function(name="c", output=0),
+            "user_defined_primitive": pb.UserDefinedPrimitive(name="c", output=0, body=0),
+            "relation": pb.Relation(name="c"),
         }
+        role = {
+            "constructor": "constructors",
+            "function": "functions",
+            "user_defined_primitive": "user_defined_primitives",
+            "relation": "relations",
+        }[kind]
         source = pb.Program(
             sorts=[
                 pb.Sort(
@@ -1390,18 +1370,15 @@ def test_constant_presentation_accepts_each_concrete_nullary_callable(kind):
                     )
                 )
             ],
-            declarations=[
-                pb.Declaration(kind=kinds[kind]),
-            ],
         )
+        getattr(source, role).append(kinds[kind])
         builder = Builder.from_program(source)
         builder.presentations["callable", "c"] = surface
         owner = builder.publish()
-        reference = owner.ref("declarations", 0)
+        reference = owner.ref(role, 0)
     catalog = Catalog.from_refs([reference])
-    assert (reference.read().name if kind == "primitive" else reference.read().kind.field) == (
-        "c" if kind == "primitive" else kind
-    )
+    assert reference.read().name == "c"
+    assert isinstance(reference.read(), pb.Primitive if kind == "primitive" else type(kinds[kind]))
     assert catalog.constants["example", "c"] == (reference, 0)
     catalog.constants.clear()
     catalog.reindex()
@@ -1419,11 +1396,11 @@ def test_constant_presentation_rejects_nonconstant_shapes(invalid):
     view = mapping["callables"]["example.number.add"][0]
     match invalid:
         case "input":
-            signature.inputs.append(pb.Arg(sort=0))
+            signature.inputs.append(0)
         case "generic":
             signature.type_param_count += 1
         case "tail":
-            signature.varargs.append(pb.Arg(sort=0))
+            signature.varargs.append(0)
         case "receiver":
             view["receiver"] = 0
         case "owner":
@@ -1549,7 +1526,7 @@ def test_multiset_generic_free_static_guards(corruption, message):
     if corruption == "unused":
         signature.type_param_count += 1
     elif corruption == "unbound":
-        signature.inputs[0].sort = len(program.sorts)
+        signature.inputs[0] = len(program.sorts)
         program.sorts.append(pb.Sort(kind=Oneof[Literal["var"], int]("var", 1)))
     elif corruption == "default":
         mapping["callables"][declaration.name][0]["params"][0]["default"] = len(mapping["fragment"]["nodes"])
@@ -1584,7 +1561,7 @@ def test_multiset_method_local_binders_from_actual_catalog():
     assert owner["name"] == "MultiSet"
     assert len(owner["args"]) == 1
     assert mapping["fragment"]["sorts"][owner["args"][0]] == {"var": 0}
-    callback = program.sorts[signature.inputs[0].sort]
+    callback = program.sorts[signature.inputs[0]]
     assert callback.kind is not None
     assert callback.kind.field == "func"
     assert len(callback.kind.value.params) == 1
@@ -1630,8 +1607,7 @@ def test_multiset_method_local_binders_from_actual_catalog():
             return indices[index]
 
         bound = _primitive_signature(selected)
-        for argument in bound.inputs:
-            argument.sort = sort(argument.sort)
+        bound.inputs = [sort(argument) for argument in bound.inputs]
         bound.output = sort(bound.output)
         return result, _permute_local_owner(mapping, selected.name, order)
 
@@ -1644,8 +1620,8 @@ def test_multiset_method_local_binders_from_actual_catalog():
     nested, nested_mapping = relocated((0, 1))
     selected = next(d for d in nested.primitives if d.name == "egglog.core.multiset.map")
     bound = _primitive_signature(selected)
-    function = nested.sorts[bound.inputs[0].sort].kind.value
-    nested.sorts.append(pb.Sort.from_binary(nested.sorts[bound.inputs[0].sort].to_binary()))
+    function = nested.sorts[bound.inputs[0]].kind.value
+    nested.sorts.append(pb.Sort.from_binary(nested.sorts[bound.inputs[0]].to_binary()))
     nested_function = len(nested.sorts) - 1
     function.result = nested_function
     nested.sorts[bound.output].kind.value.args = [nested_function]
