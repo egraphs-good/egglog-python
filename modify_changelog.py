@@ -30,7 +30,7 @@ From https://chat.openai.com/share/6b08906d-23a3-4193-9f4e-87076ce56ddb
 """
 
 import argparse
-import datetime
+import datetime as dt
 import re
 import sys
 from pathlib import Path
@@ -77,7 +77,7 @@ def find_unreleased_section(lines):
 
 def update_changelog_version(file_path: Path, new_version: str) -> None:
     """Update changelog for version bump - replaces UNRELEASED with versioned section."""
-    today = datetime.datetime.now(tz=datetime.UTC).strftime("%Y-%m-%d")
+    today = dt.datetime.now(tz=dt.UTC).strftime("%Y-%m-%d")
     content = file_path.read_text()
     new_section = f"## UNRELEASED\n\n## {new_version} ({today})"
     content = content.replace("## UNRELEASED", new_section, 1)
